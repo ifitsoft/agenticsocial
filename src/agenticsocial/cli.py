@@ -195,15 +195,16 @@ def post(
         typer.echo(f"would post {len(tweets)} tweets:\n")
         typer.echo(format_review(tweets))
         return
-    if v.status is Status.FAILED and not resume:
+    if v.status in (Status.FAILED, Status.PUBLISHING) and not resume:
         raise _fail(
-            f"{src.id} previously failed after {len(v.meta.get('posted_ids') or [])} tweets — "
+            f"{src.id} was interrupted after {len(v.meta.get('posted_ids') or [])} tweets — "
             "rerun with --resume to continue the thread"
         )
-    try:
-        assert_transition(v.status, Status.PUBLISHING)  # gate check BEFORE touching the keyring
-    except TransitionError as e:
-        raise _fail(str(e))
+    if v.status is not Status.PUBLISHING:  # resume case is already mid-publish
+        try:
+            assert_transition(v.status, Status.PUBLISHING)  # gate check BEFORE touching the keyring
+        except TransitionError as e:
+            raise _fail(str(e))
     token = x_auth.load_token()
     if not token:
         raise _fail("no X token — connect first with `agsoc auth x`")

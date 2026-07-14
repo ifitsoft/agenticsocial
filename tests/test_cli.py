@@ -191,6 +191,16 @@ def test_post_publishes_and_prints_url(approved, monkeypatch):
     assert ws.load_variant(src, "x").status == Status.PUBLISHED
 
 
+def test_post_stuck_publishing_requires_resume(approved, monkeypatch):
+    ws, src = approved
+    v = ws.load_variant(src, "x")
+    v.status = Status.PUBLISHING
+    ws.save_variant(v)
+    result = runner.invoke(app, ["post", "ready"])
+    assert result.exit_code == 1
+    assert "--resume" in result.output
+
+
 def test_post_unapproved_fails_loudly(ws):
     src = ws.create_source("Unready", created="2026-07-13")
     ws.create_variant(src, "x", body="hi")

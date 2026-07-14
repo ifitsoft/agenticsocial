@@ -42,7 +42,8 @@ def publish_variant(ws: Workspace, variant: Variant, client) -> str:
     last posted id.
     """
     tweets = validate_thread(variant.body)
-    ws.set_status(variant, Status.PUBLISHING)  # gate: only approved/failed may enter
+    if variant.status is not Status.PUBLISHING:
+        ws.set_status(variant, Status.PUBLISHING)  # gate: only approved/failed may enter
     posted: list[str] = list(variant.meta.get("posted_ids") or [])
     try:
         for text in tweets[len(posted):]:

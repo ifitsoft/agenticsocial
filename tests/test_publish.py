@@ -86,6 +86,19 @@ def test_publish_resume_skips_already_posted(approved_variant):
     assert ws.load_variant(src, "x").status == Status.PUBLISHED
 
 
+def test_publish_resumes_from_stuck_publishing(approved_variant):
+    ws, src, v = approved_variant
+    with pytest.raises(XApiError):
+        publish_variant(ws, v, FakeClient(fail_at=3))
+    stuck = ws.load_variant(src, "x")
+    stuck.status = Status.PUBLISHING          # simulate hard-kill before FAILED was written
+    ws.save_variant(stuck)
+    client = FakeClient()
+    publish_variant(ws, ws.load_variant(src, "x"), client)
+    assert client.posted == [("Three", "id2")]
+    assert ws.load_variant(src, "x").status == Status.PUBLISHED
+
+
 def test_publish_refuses_unapproved(tmp_path):
     ws = Workspace.init(tmp_path / "ws")
     src = ws.create_source("Nope", created="2026-07-13")
