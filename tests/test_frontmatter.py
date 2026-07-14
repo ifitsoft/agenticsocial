@@ -32,3 +32,13 @@ def test_roundtrip_preserves_meta_and_body():
 def test_dump_preserves_key_order():
     meta = {"z": 1, "a": 2}
     assert frontmatter.dump(meta, "").index("z:") < frontmatter.dump(meta, "").index("a:")
+
+
+def test_parse_malformed_yaml_degrades_to_body():
+    text = "---\nstatus: [draft\n---\nbody\n"
+    assert frontmatter.parse(text) == ({}, text)
+
+
+def test_parse_non_dict_yaml_degrades_to_body():
+    text = "---\n- a\n- b\n---\nbody\n"
+    assert frontmatter.parse(text) == ({}, text)

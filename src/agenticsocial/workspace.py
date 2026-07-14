@@ -126,10 +126,11 @@ class Workspace:
 
     def _read_source(self, d: Path) -> Source:
         meta, _ = frontmatter.parse((d / "source.md").read_text(encoding="utf-8"))
+        sid = meta.get("id", d.name)
         return Source(
-            id=meta["id"],
+            id=sid,
             type=meta.get("type", "idea"),
-            title=meta.get("title", meta["id"]),
+            title=meta.get("title", sid),
             dir=d,
             origin_url=meta.get("origin_url"),
             created=str(meta.get("created", "")),
@@ -175,9 +176,16 @@ class Workspace:
             raise WorkspaceError(f"no {platform} variant for {source.id}")
         meta, body = frontmatter.parse(path.read_text(encoding="utf-8"))
         meta.setdefault("posted_ids", [])
+        raw = meta.get("status", "draft")
+        try:
+            status = Status(raw)
+        except ValueError:
+            raise WorkspaceError(
+                f"{path}: invalid status '{raw}' — one of: {', '.join(s.value for s in Status)}"
+            )
         return Variant(
             platform=platform,
-            status=Status(meta.get("status", "draft")),
+            status=status,
             meta=meta,
             body=body,
             path=path,

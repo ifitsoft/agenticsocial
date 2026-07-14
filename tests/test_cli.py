@@ -79,6 +79,16 @@ def test_list_rejects_unknown_status(ws):
     assert "unknown status" in result.output
 
 
+def test_list_with_corrupt_variant_fails_cleanly(ws):
+    src = ws.create_source("Corrupt", created="2026-07-13")
+    ws.create_variant(src, "x", body="hi")
+    path = src.dir / "x.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("status: draft", "status: bogus"), encoding="utf-8")
+    result = runner.invoke(app, ["list"])
+    assert result.exit_code == 1
+    assert "invalid status" in result.output
+
+
 def test_new_with_missing_file_fails_cleanly(ws):
     result = runner.invoke(app, ["new", "T", "--file", "/nonexistent/x.txt"])
     assert result.exit_code == 1

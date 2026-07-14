@@ -123,3 +123,17 @@ def test_save_variant_roundtrips_body_edits(ws, src):
     v.body = "new body"
     ws.save_variant(v)
     assert ws.load_variant(src, "x").body == "new body"
+
+
+def test_load_variant_invalid_status_raises_workspace_error(ws, src):
+    ws.create_variant(src, "x", body="hi")
+    path = src.dir / "x.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("status: draft", "status: aproved"), encoding="utf-8")
+    with pytest.raises(WorkspaceError, match="invalid status 'aproved'"):
+        ws.load_variant(src, "x")
+
+
+def test_source_md_without_id_falls_back_to_dirname(ws):
+    src = ws.create_source("Has id", created="2026-07-13")
+    (src.dir / "source.md").write_text("---\ntitle: Has id\n---\n", encoding="utf-8")
+    assert ws.list_sources()[0].id == src.dir.name

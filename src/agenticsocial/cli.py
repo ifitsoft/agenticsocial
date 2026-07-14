@@ -90,7 +90,10 @@ def list_(
         except ValueError:
             raise _fail(f"unknown status '{status}' — one of: {', '.join(s.value for s in Status)}")
     for src in ws.list_sources():
-        variants = ws.variants(src)
+        try:
+            variants = ws.variants(src)
+        except WorkspaceError as e:
+            raise _fail(str(e))
         if wanted and not any(v.status is wanted for v in variants):
             continue
         pills = " ".join(f"{v.platform}:{v.status.value}" for v in variants) or "(no variants)"
@@ -103,7 +106,11 @@ def status() -> None:
     ws = _workspace()
     counts: dict[str, int] = {}
     for src in ws.list_sources():
-        for v in ws.variants(src):
+        try:
+            variants = ws.variants(src)
+        except WorkspaceError as e:
+            raise _fail(str(e))
+        for v in variants:
             counts[v.status.value] = counts.get(v.status.value, 0) + 1
     if not counts:
         typer.echo("workspace is empty — create a source with `agsoc new`")

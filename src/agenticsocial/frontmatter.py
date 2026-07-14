@@ -14,7 +14,12 @@ def parse(text: str) -> tuple[dict, str]:
     end = text.find("\n---\n", 4)
     if end == -1:
         return {}, text
-    meta = yaml.safe_load(text[4:end]) or {}
+    try:
+        meta = yaml.safe_load(text[4:end])
+    except yaml.YAMLError:
+        return {}, text
+    if not isinstance(meta, dict):
+        return {}, text
     return meta, text[end + 5 :]
 
 
