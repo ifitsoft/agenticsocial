@@ -202,3 +202,34 @@ def test_research_writes_brief(ws, monkeypatch):
     brief = (src.dir / "brief.md").read_text(encoding="utf-8")
     assert "https://ex.com/a" in brief
     assert "brief.md" in result.output
+
+
+def test_research_search_failure_fails_cleanly(ws, monkeypatch):
+    ws.create_source("Net down", created="2026-07-13")
+    import agenticsocial.cli as cli_mod
+
+    def boom(query, max_results=8):
+        raise RuntimeError("dns exploded")
+
+    monkeypatch.setattr(cli_mod.research, "search", boom)
+    result = runner.invoke(app, ["research", "net-down"])
+    assert result.exit_code == 1
+    assert "search failed" in result.output
+
+
+def test_research_extract_failure_degrades_to_warning(ws, monkeypatch):
+    src = ws.create_source("Half up", type="url", origin_url="https://ex.com/p", created="2026-07-13")
+    import agenticsocial.cli as cli_mod
+    monkeypatch.setattr(
+        cli_mod.research, "search",
+        lambda query, max_results=8: [{"title": "T", "href": "https://ex.com/a", "body": "s"}],
+    )
+
+    def boom(url):
+        raise RuntimeError("timeout")
+
+    monkeypatch.setattr(cli_mod.research, "extract", boom)
+    result = runner.invoke(app, ["research", "half-up"])
+    assert result.exit_code == 0
+    assert "warning: could not extract" in result.output
+    assert (src.dir / "brief.md").exists()

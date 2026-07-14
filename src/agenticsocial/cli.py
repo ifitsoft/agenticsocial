@@ -228,10 +228,17 @@ def research_cmd(
     except WorkspaceError as e:
         raise _fail(str(e))
     q = query or src.title
-    results = research.search(q, max_results=max_results)
+    try:
+        results = research.search(q, max_results=max_results)
+    except Exception as e:
+        raise _fail(f"search failed: {e} — check your connection and retry")
     extracts: dict[str, str] = {}
     if src.origin_url:
-        text = research.extract(src.origin_url)
+        try:
+            text = research.extract(src.origin_url)
+        except Exception as e:
+            typer.echo(f"warning: could not extract {src.origin_url}: {e}")
+            text = None
         if text:
             extracts[src.origin_url] = text
     brief = research.build_brief(src.title, q, results, extracts)
