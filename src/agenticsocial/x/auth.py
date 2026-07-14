@@ -56,6 +56,8 @@ def _exchange(data: dict) -> dict:
 
 
 def refresh(client_id: str, token: dict) -> dict:
+    if "refresh_token" not in token:
+        raise AuthError("stored token has no refresh_token — reconnect with `agsoc auth x`")
     return _exchange(
         {
             "grant_type": "refresh_token",
@@ -65,12 +67,22 @@ def refresh(client_id: str, token: dict) -> dict:
     )
 
 
+def _parse_callback(path: str, expected_state: str) -> str:
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
+    state = (params.get("state") or [None])[0]
+    if state != expected_state:
+        raise AuthError("state mismatch in OAuth callback — rejecting; run `agsoc auth x` again")
+    code = (params.get("code") or [None])[0]
+    if not code:
+        raise AuthError("no authorization code in callback — denied or cancelled; run `agsoc auth x` again")
+    return code
+
+
 class _CallbackHandler(BaseHTTPRequestHandler):
-    code: str | None = None
+    received_path: str | None = None
 
     def do_GET(self):  # noqa: N802 (http.server API)
-        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        _CallbackHandler.code = (params.get("code") or [None])[0]
+        _CallbackHandler.received_path = self.path
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.end_headers()
@@ -97,14 +109,16 @@ def authorize(client_id: str) -> dict:
     server = HTTPServer(("localhost", REDIRECT_PORT), _CallbackHandler)
     print(f"opening browser to authorize (or visit):\n{url}")
     webbrowser.open(url)
+    _CallbackHandler.received_path = None
     server.handle_request()  # blocks for exactly one callback
     server.server_close()
-    if not _CallbackHandler.code:
-        raise AuthError("no authorization code received — flow cancelled?")
+    if _CallbackHandler.received_path is None:
+        raise AuthError("no callback received — flow cancelled? run `agsoc auth x` again")
+    code = _parse_callback(_CallbackHandler.received_path, state)
     return _exchange(
         {
             "grant_type": "authorization_code",
-            "code": _CallbackHandler.code,
+            "code": code,
             "client_id": client_id,
             "redirect_uri": REDIRECT_URI,
             "code_verifier": verifier,

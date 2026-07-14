@@ -53,3 +53,22 @@ def test_refresh_failure_raises_autherror(fake_keyring):
     respx.post(auth.TOKEN_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
     with pytest.raises(auth.AuthError, match="agsoc auth x"):
         auth.refresh("client123", {"refresh_token": "r1"})
+
+
+def test_parse_callback_returns_code_on_state_match():
+    assert auth._parse_callback("/callback?code=abc&state=s1", "s1") == "abc"
+
+
+def test_parse_callback_rejects_state_mismatch():
+    with pytest.raises(auth.AuthError, match="state mismatch"):
+        auth._parse_callback("/callback?code=abc&state=evil", "s1")
+
+
+def test_parse_callback_rejects_missing_code():
+    with pytest.raises(auth.AuthError, match="agsoc auth x"):
+        auth._parse_callback("/callback?state=s1", "s1")
+
+
+def test_refresh_without_refresh_token_raises(fake_keyring):
+    with pytest.raises(auth.AuthError, match="agsoc auth x"):
+        auth.refresh("client123", {"access_token": "only"})
