@@ -187,3 +187,18 @@ def test_post_unapproved_fails_loudly(ws):
     result = runner.invoke(app, ["post", "unready"])
     assert result.exit_code == 1
     assert "allowed next" in result.output
+
+
+def test_research_writes_brief(ws, monkeypatch):
+    src = ws.create_source("Kill staging", created="2026-07-13")
+    import agenticsocial.cli as cli_mod
+    monkeypatch.setattr(
+        cli_mod.research, "search",
+        lambda query, max_results=8: [{"title": "T1", "href": "https://ex.com/a", "body": "snippet"}],
+    )
+    monkeypatch.setattr(cli_mod.research, "extract", lambda url: "article text")
+    result = runner.invoke(app, ["research", "staging"])
+    assert result.exit_code == 0
+    brief = (src.dir / "brief.md").read_text(encoding="utf-8")
+    assert "https://ex.com/a" in brief
+    assert "brief.md" in result.output

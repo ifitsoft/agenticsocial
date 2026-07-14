@@ -6,10 +6,10 @@ from typing import Optional
 
 import typer
 
-from . import __version__
+from . import __version__, research
 from .models import Status, TransitionError, assert_transition
 from .textutils import split_thread
-from .workspace import Workspace, WorkspaceError, load_config
+from .workspace import Workspace, WorkspaceError, atomic_write, load_config
 from .x import auth as x_auth
 from .x.client import XApiError, XClient
 from .x.publish import ValidationError, format_review, publish_variant, validate_thread
@@ -213,3 +213,27 @@ def post(
     except XApiError as e:
         raise _fail(f"posting failed mid-thread: {e}\nresume with: agsoc post {src.id} --resume")
     typer.echo(f"published: {url}")
+
+
+@app.command("research")
+def research_cmd(
+    source: str,
+    query: Optional[str] = typer.Option(None, "--query", help="search query (default: source title)"),
+    max_results: int = typer.Option(8, "--max-results"),
+) -> None:
+    """Fetch search results (and the origin article, if any) into brief.md."""
+    ws = _workspace()
+    try:
+        src = ws.resolve_source(source)
+    except WorkspaceError as e:
+        raise _fail(str(e))
+    q = query or src.title
+    results = research.search(q, max_results=max_results)
+    extracts: dict[str, str] = {}
+    if src.origin_url:
+        text = research.extract(src.origin_url)
+        if text:
+            extracts[src.origin_url] = text
+    brief = research.build_brief(src.title, q, results, extracts)
+    atomic_write(src.dir / "brief.md", brief)
+    typer.echo(f"wrote {src.dir / 'brief.md'} ({len(results)} results, {len(extracts)} extractions)")
