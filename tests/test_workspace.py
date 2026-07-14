@@ -1,0 +1,72 @@
+import pytest
+
+from agenticsocial.workspace import Workspace, WorkspaceError, load_config
+
+
+@pytest.fixture()
+def ws(tmp_path):
+    return Workspace.init(tmp_path / "workspace")
+
+
+def test_init_scaffolds_workspace(tmp_path):
+    ws = Workspace.init(tmp_path / "workspace")
+    assert ws.sources_dir.is_dir()
+    assert (ws.root / "voice.md").exists()
+    assert (ws.root / "config.toml").exists()
+    assert load_config(ws) == {"x": {"client_id": ""}}
+
+
+def test_init_is_idempotent_and_preserves_edits(tmp_path):
+    ws = Workspace.init(tmp_path / "workspace")
+    (ws.root / "voice.md").write_text("MY VOICE", encoding="utf-8")
+    Workspace.init(tmp_path / "workspace")
+    assert (ws.root / "voice.md").read_text(encoding="utf-8") == "MY VOICE"
+
+
+def test_locate_uses_env_var(tmp_path, monkeypatch):
+    Workspace.init(tmp_path / "elsewhere")
+    monkeypatch.setenv("AGSOC_WORKSPACE", str(tmp_path / "elsewhere"))
+    assert Workspace.locate().root == tmp_path / "elsewhere"
+
+
+def test_locate_missing_workspace_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGSOC_WORKSPACE", str(tmp_path / "nope"))
+    with pytest.raises(WorkspaceError, match="agsoc init"):
+        Workspace.locate()
+
+
+def test_create_source_writes_source_md(ws):
+    src = ws.create_source("Kill Staging!", type="idea", created="2026-07-13")
+    assert src.id == "2026-07-13-kill-staging"
+    assert (ws.sources_dir / src.id / "source.md").exists()
+
+
+def test_create_source_rejects_duplicate(ws):
+    ws.create_source("Same title", created="2026-07-13")
+    with pytest.raises(WorkspaceError, match="already exists"):
+        ws.create_source("Same title", created="2026-07-13")
+
+
+def test_list_sources_roundtrip(ws):
+    ws.create_source("B idea", created="2026-07-14")
+    ws.create_source("A idea", type="url", origin_url="https://ex.com/a", created="2026-07-13")
+    sources = ws.list_sources()
+    assert [s.id for s in sources] == ["2026-07-13-a-idea", "2026-07-14-b-idea"]
+    assert sources[0].origin_url == "https://ex.com/a"
+    assert sources[0].type == "url"
+    assert sources[0].title == "A idea"
+
+
+def test_resolve_source_by_substring(ws):
+    ws.create_source("Kill staging", created="2026-07-13")
+    ws.create_source("Queues gotchas", created="2026-07-13")
+    assert ws.resolve_source("staging").id == "2026-07-13-kill-staging"
+
+
+def test_resolve_source_ambiguous_or_missing(ws):
+    ws.create_source("Idea one", created="2026-07-13")
+    ws.create_source("Idea two", created="2026-07-13")
+    with pytest.raises(WorkspaceError, match="matches multiple"):
+        ws.resolve_source("idea")
+    with pytest.raises(WorkspaceError, match="no source"):
+        ws.resolve_source("zzz")
