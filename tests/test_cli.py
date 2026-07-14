@@ -73,6 +73,18 @@ def test_list_filters_by_status(ws):
     assert "aaa" not in result.output
 
 
+def test_list_rejects_unknown_status(ws):
+    result = runner.invoke(app, ["list", "--status", "bogus"])
+    assert result.exit_code == 1
+    assert "unknown status" in result.output
+
+
+def test_new_with_missing_file_fails_cleanly(ws):
+    result = runner.invoke(app, ["new", "T", "--file", "/nonexistent/x.txt"])
+    assert result.exit_code == 1
+    assert "cannot read" in result.output
+
+
 def test_status_overview(ws):
     src = ws.create_source("Kill staging", created="2026-07-13")
     v = ws.create_variant(src, "x", body="hi")

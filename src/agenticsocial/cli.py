@@ -62,7 +62,10 @@ def new(
         inferred = "url"
     if file:
         inferred = "transcript"
-        body = file.read_text(encoding="utf-8")
+        try:
+            body = file.read_text(encoding="utf-8")
+        except OSError as e:
+            raise _fail(f"cannot read --file {file}: {e}")
     try:
         src = ws.create_source(title, type=type or inferred, origin_url=url, body=body)
     except WorkspaceError as e:
@@ -76,7 +79,12 @@ def list_(
 ) -> None:
     """List sources and their variant statuses."""
     ws = _workspace()
-    wanted = Status(status) if status else None
+    wanted = None
+    if status:
+        try:
+            wanted = Status(status)
+        except ValueError:
+            raise _fail(f"unknown status '{status}' — one of: {', '.join(s.value for s in Status)}")
     for src in ws.list_sources():
         variants = ws.variants(src)
         if wanted and not any(v.status is wanted for v in variants):
