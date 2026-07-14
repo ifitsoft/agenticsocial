@@ -9,7 +9,8 @@ import typer
 from . import __version__
 from .models import Status, TransitionError
 from .textutils import split_thread
-from .workspace import Workspace, WorkspaceError
+from .workspace import Workspace, WorkspaceError, load_config
+from .x import auth as x_auth
 from .x.publish import ValidationError, format_review, validate_thread
 
 app = typer.Typer(
@@ -148,3 +149,19 @@ def approve(
     except (ValidationError, TransitionError) as e:
         raise _fail(str(e))
     typer.echo(f"approved {src.id} ({platform}) — post with: agsoc post {src.id}")
+
+
+@app.command()
+def auth(platform: str = typer.Argument("x")) -> None:
+    """Connect a platform account (v1: x). One-time browser OAuth flow."""
+    if platform != "x":
+        raise _fail(f"unsupported platform '{platform}' — v1 supports: x")
+    ws = _workspace()
+    client_id = load_config(ws).get("x", {}).get("client_id", "")
+    if not client_id:
+        raise _fail(f"set [x] client_id in {ws.root / 'config.toml'} first (see README)")
+    try:
+        x_auth.authorize(client_id)
+    except x_auth.AuthError as e:
+        raise _fail(str(e))
+    typer.echo("X account connected — token stored in your OS keychain")
