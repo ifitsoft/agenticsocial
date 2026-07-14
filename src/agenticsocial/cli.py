@@ -7,8 +7,10 @@ from typing import Optional
 import typer
 
 from . import __version__
-from .models import Status
+from .models import Status, TransitionError
+from .textutils import split_thread
 from .workspace import Workspace, WorkspaceError
+from .x.publish import ValidationError, format_review, validate_thread
 
 app = typer.Typer(
     help="Capture sources, research, review drafts, and post to X. The agent drafts; you approve.",
@@ -107,3 +109,42 @@ def status() -> None:
     for s in Status:
         if s.value in counts:
             typer.echo(f"{s.value:12} {counts[s.value]}")
+
+
+def _load(ws: Workspace, source_query: str, platform: str):
+    try:
+        src = ws.resolve_source(source_query)
+        return src, ws.load_variant(src, platform)
+    except WorkspaceError as e:
+        raise _fail(str(e))
+
+
+@app.command()
+def review(
+    source: str,
+    platform: str = typer.Option("x", "--platform"),
+) -> None:
+    """Render a variant for human review: per-tweet character counts and content."""
+    ws = _workspace()
+    src, v = _load(ws, source, platform)
+    typer.echo(f"{src.id} · {platform} · status: {v.status.value}\n")
+    typer.echo(format_review(split_thread(v.body)))
+    if v.status is Status.IN_REVIEW:
+        typer.echo(f"approve with: agsoc approve {src.id}")
+
+
+@app.command()
+def approve(
+    source: str,
+    platform: str = typer.Option("x", "--platform"),
+) -> None:
+    """Approve a variant for publishing (the human gate — agents must not run this)."""
+    ws = _workspace()
+    src, v = _load(ws, source, platform)
+    try:
+        if platform == "x":
+            validate_thread(v.body)
+        ws.set_status(v, Status.APPROVED)
+    except (ValidationError, TransitionError) as e:
+        raise _fail(str(e))
+    typer.echo(f"approved {src.id} ({platform}) — post with: agsoc post {src.id}")

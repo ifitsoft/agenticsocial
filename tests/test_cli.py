@@ -93,3 +93,44 @@ def test_status_overview(ws):
     assert result.exit_code == 0
     assert "in_review" in result.output
     assert "1" in result.output
+
+
+@pytest.fixture()
+def reviewable(ws):
+    src = ws.create_source("Kill staging", created="2026-07-13")
+    v = ws.create_variant(src, "x", body="Tweet one\n\n---tweet---\n\nTweet two")
+    ws.set_status(v, Status.IN_REVIEW)
+    return ws, src
+
+
+def test_review_renders_thread_with_counts(reviewable):
+    result = runner.invoke(app, ["review", "staging"])
+    assert result.exit_code == 0
+    assert "tweet 1/2" in result.output
+    assert "Tweet two" in result.output
+    assert "in_review" in result.output
+
+
+def test_approve_moves_status(reviewable):
+    ws, src = reviewable
+    result = runner.invoke(app, ["approve", "staging"])
+    assert result.exit_code == 0
+    assert ws.load_variant(src, "x").status == Status.APPROVED
+
+
+def test_approve_rejects_overlong_tweet(ws):
+    src = ws.create_source("Long one", created="2026-07-13")
+    v = ws.create_variant(src, "x", body="y" * 300)
+    ws.set_status(v, Status.IN_REVIEW)
+    result = runner.invoke(app, ["approve", "long"])
+    assert result.exit_code == 1
+    assert "300" in result.output
+    assert ws.load_variant(src, "x").status == Status.IN_REVIEW
+
+
+def test_approve_from_draft_fails_with_transition_message(ws):
+    src = ws.create_source("Draft one", created="2026-07-13")
+    ws.create_variant(src, "x", body="hi")
+    result = runner.invoke(app, ["approve", "draft-one"])
+    assert result.exit_code == 1
+    assert "allowed next" in result.output
