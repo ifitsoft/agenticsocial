@@ -1,5 +1,6 @@
 import pytest
 
+from agenticsocial.models import Status, TransitionError
 from agenticsocial.workspace import Workspace, WorkspaceError, load_config
 
 
@@ -70,3 +71,55 @@ def test_resolve_source_ambiguous_or_missing(ws):
         ws.resolve_source("idea")
     with pytest.raises(WorkspaceError, match="no source"):
         ws.resolve_source("zzz")
+
+
+@pytest.fixture()
+def src(ws):
+    return ws.create_source("Kill staging", created="2026-07-13")
+
+
+def test_create_and_load_variant(ws, src):
+    ws.create_variant(src, "x", body="Tweet one\n\n---tweet---\n\nTweet two\n")
+    v = ws.load_variant(src, "x")
+    assert v.platform == "x"
+    assert v.status == Status.DRAFT
+    assert v.meta["posted_ids"] == []
+    assert "Tweet two" in v.body
+    assert v.path == src.dir / "x.md"
+
+
+def test_load_missing_variant_raises(ws, src):
+    with pytest.raises(WorkspaceError, match="no x variant"):
+        ws.load_variant(src, "x")
+
+
+def test_variants_lists_only_platform_files(ws, src):
+    ws.create_variant(src, "x")
+    (src.dir / "brief.md").write_text("notes", encoding="utf-8")
+    assert [v.platform for v in ws.variants(src)] == ["x"]
+
+
+def test_set_status_persists_and_stamps_approved_at(ws, src):
+    ws.create_variant(src, "x", body="hi")
+    v = ws.load_variant(src, "x")
+    ws.set_status(v, Status.IN_REVIEW)
+    ws.set_status(v, Status.APPROVED)
+    v2 = ws.load_variant(src, "x")
+    assert v2.status == Status.APPROVED
+    assert v2.meta["approved_at"]  # stamped
+
+
+def test_set_status_enforces_gate(ws, src):
+    ws.create_variant(src, "x", body="hi")
+    v = ws.load_variant(src, "x")
+    with pytest.raises(TransitionError):
+        ws.set_status(v, Status.APPROVED)  # draft -> approved is forbidden
+    assert ws.load_variant(src, "x").status == Status.DRAFT  # nothing saved
+
+
+def test_save_variant_roundtrips_body_edits(ws, src):
+    ws.create_variant(src, "x", body="old")
+    v = ws.load_variant(src, "x")
+    v.body = "new body"
+    ws.save_variant(v)
+    assert ws.load_variant(src, "x").body == "new body"

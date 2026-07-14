@@ -13,12 +13,14 @@ from __future__ import annotations
 import os
 import tempfile
 import tomllib
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from . import frontmatter
-from .models import Source
+from .models import Source, Status, Variant, assert_transition
 from .textutils import slugify
+
+PLATFORMS = ("x", "linkedin", "youtube")
 
 VOICE_TEMPLATE = """\
 # Voice profile
@@ -149,3 +151,55 @@ class Workspace:
         if not matches:
             raise WorkspaceError(f"no source matching '{query}' — see `agsoc list`")
         return matches[0]
+
+    # -- variants ----------------------------------------------------------
+
+    def create_variant(self, source: Source, platform: str, body: str = "") -> Variant:
+        path = source.dir / f"{platform}.md"
+        if path.exists():
+            raise WorkspaceError(f"{platform} variant already exists for {source.id}")
+        meta = {
+            "platform": platform,
+            "status": Status.DRAFT.value,
+            "approved_at": None,
+            "posted_url": None,
+            "posted_at": None,
+            "posted_ids": [],
+        }
+        atomic_write(path, frontmatter.dump(meta, body))
+        return Variant(platform=platform, status=Status.DRAFT, meta=meta, body=body, path=path)
+
+    def load_variant(self, source: Source, platform: str) -> Variant:
+        path = source.dir / f"{platform}.md"
+        if not path.exists():
+            raise WorkspaceError(f"no {platform} variant for {source.id}")
+        meta, body = frontmatter.parse(path.read_text(encoding="utf-8"))
+        meta.setdefault("posted_ids", [])
+        return Variant(
+            platform=platform,
+            status=Status(meta.get("status", "draft")),
+            meta=meta,
+            body=body,
+            path=path,
+        )
+
+    def variants(self, source: Source) -> list[Variant]:
+        return [
+            self.load_variant(source, p)
+            for p in PLATFORMS
+            if (source.dir / f"{p}.md").exists()
+        ]
+
+    def save_variant(self, v: Variant) -> None:
+        v.meta["status"] = v.status.value
+        atomic_write(v.path, frontmatter.dump(v.meta, v.body))
+
+    def set_status(self, v: Variant, target: Status) -> None:
+        assert_transition(v.status, target)
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        if target is Status.APPROVED:
+            v.meta["approved_at"] = now
+        if target is Status.PUBLISHED:
+            v.meta["posted_at"] = now
+        v.status = target
+        self.save_variant(v)
