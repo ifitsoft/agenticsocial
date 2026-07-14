@@ -134,3 +134,56 @@ def test_approve_from_draft_fails_with_transition_message(ws):
     result = runner.invoke(app, ["approve", "draft-one"])
     assert result.exit_code == 1
     assert "allowed next" in result.output
+
+
+@pytest.fixture()
+def approved(ws):
+    src = ws.create_source("Ready", created="2026-07-13")
+    v = ws.create_variant(src, "x", body="One\n\n---tweet---\n\nTwo")
+    ws.set_status(v, Status.IN_REVIEW)
+    ws.set_status(v, Status.APPROVED)
+    return ws, src
+
+
+def test_post_dry_run_prints_without_posting(approved):
+    ws, src = approved
+    result = runner.invoke(app, ["post", "ready", "--dry-run"])
+    assert result.exit_code == 0
+    assert "would post 2 tweets" in result.output
+    assert ws.load_variant(src, "x").status == Status.APPROVED  # unchanged
+
+
+def test_post_requires_auth_token(approved, monkeypatch):
+    from agenticsocial.x import auth as x_auth
+    monkeypatch.setattr(x_auth, "load_token", lambda: None)
+    result = runner.invoke(app, ["post", "ready"])
+    assert result.exit_code == 1
+    assert "agsoc auth x" in result.output
+
+
+def test_post_publishes_and_prints_url(approved, monkeypatch):
+    ws, src = approved
+    from agenticsocial.x import auth as x_auth
+    monkeypatch.setattr(x_auth, "load_token", lambda: {"access_token": "tok", "refresh_token": "r"})
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.n = 0
+        def post_tweet(self, text, in_reply_to=None):
+            self.n += 1
+            return f"id{self.n}"
+
+    import agenticsocial.cli as cli_mod
+    monkeypatch.setattr(cli_mod, "XClient", FakeClient)
+    result = runner.invoke(app, ["post", "ready"])
+    assert result.exit_code == 0
+    assert "https://x.com/i/web/status/id1" in result.output
+    assert ws.load_variant(src, "x").status == Status.PUBLISHED
+
+
+def test_post_unapproved_fails_loudly(ws):
+    src = ws.create_source("Unready", created="2026-07-13")
+    ws.create_variant(src, "x", body="hi")
+    result = runner.invoke(app, ["post", "unready"])
+    assert result.exit_code == 1
+    assert "allowed next" in result.output

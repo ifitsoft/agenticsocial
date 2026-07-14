@@ -7,11 +7,12 @@ from typing import Optional
 import typer
 
 from . import __version__
-from .models import Status, TransitionError
+from .models import Status, TransitionError, assert_transition
 from .textutils import split_thread
 from .workspace import Workspace, WorkspaceError, load_config
 from .x import auth as x_auth
-from .x.publish import ValidationError, format_review, validate_thread
+from .x.client import XApiError, XClient
+from .x.publish import ValidationError, format_review, publish_variant, validate_thread
 
 app = typer.Typer(
     help="Capture sources, research, review drafts, and post to X. The agent drafts; you approve.",
@@ -165,3 +166,50 @@ def auth(platform: str = typer.Argument("x")) -> None:
     except x_auth.AuthError as e:
         raise _fail(str(e))
     typer.echo("X account connected — token stored in your OS keychain")
+
+
+@app.command()
+def post(
+    source: str,
+    platform: str = typer.Option("x", "--platform"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="validate and print; no network, no status change"),
+    resume: bool = typer.Option(False, "--resume", help="continue a failed thread from where it stopped"),
+) -> None:
+    """Publish an approved variant to X. Threads post tweet-by-tweet, resumably."""
+    if platform != "x":
+        raise _fail(f"unsupported platform '{platform}' — v1 posts to: x")
+    ws = _workspace()
+    src, v = _load(ws, source, platform)
+    try:
+        tweets = validate_thread(v.body)
+    except ValidationError as e:
+        raise _fail(str(e))
+    if dry_run:
+        typer.echo(f"would post {len(tweets)} tweets:\n")
+        typer.echo(format_review(tweets))
+        return
+    if v.status is Status.FAILED and not resume:
+        raise _fail(
+            f"{src.id} previously failed after {len(v.meta.get('posted_ids') or [])} tweets — "
+            "rerun with --resume to continue the thread"
+        )
+    try:
+        assert_transition(v.status, Status.PUBLISHING)  # gate check BEFORE touching the keyring
+    except TransitionError as e:
+        raise _fail(str(e))
+    token = x_auth.load_token()
+    if not token:
+        raise _fail("no X token — connect first with `agsoc auth x`")
+    client_id = load_config(ws).get("x", {}).get("client_id", "")
+    if client_id and token.get("refresh_token"):
+        try:
+            token = x_auth.refresh(client_id, token)
+        except x_auth.AuthError as e:
+            raise _fail(str(e))
+    try:
+        url = publish_variant(ws, v, XClient(token["access_token"]))
+    except TransitionError as e:
+        raise _fail(str(e))
+    except XApiError as e:
+        raise _fail(f"posting failed mid-thread: {e}\nresume with: agsoc post {src.id} --resume")
+    typer.echo(f"published: {url}")
