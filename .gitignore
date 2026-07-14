@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# agenticsocial content workspace (personal content, not part of the repo)
+workspace/
