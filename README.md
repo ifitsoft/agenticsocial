@@ -4,6 +4,7 @@ Local-first, agent-driven content pipeline. Your agent (Claude Code or any
 agentic CLI) gathers research and drafts posts in your voice; a deliberately
 dumb CLI (`agsoc`) owns storage, the human approval gate, and publishing to X.
 Nothing goes live without you running `agsoc approve`.
+Note: approval is per-status, not per-content — if you (or an agent) edit a draft after approving it, run agsoc review and agsoc approve again before posting.
 
 **v1 publishes to X/Twitter.** LinkedIn and YouTube variants are structured-for
 and land next.
