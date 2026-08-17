@@ -1629,3 +1629,77 @@ Its own sweep caught S5 surviving: `assert "act_label" in src` is satisfied by
 `scene(b.act || b.act_label || '')`, which prints the bare id and ignores the
 label — the defect the resolution exists to prevent. Same weak-assertion class as
 the falsy-value problem, in a string.
+
+## D-078 · phase 4 / task 1 · the divergence is closed. 1068 tests, 23/23.
+Leader-verified in a real render:
+
+```
+on screen : "The model is <thinking> about it & bold too"    bold tag: true
+```
+
+The word survives, `&` stays one character, `**bold**` became a real `<b>`.
+Escape-then-convert, in that order — the reverse escapes the tag it just made.
+
+**Two of its own mutants survived the first sweep**, both real: a *greedy*
+`**…**` regex, so `**A** and **B**` becomes one bold run that swallows the
+connective; and `P()` left in the shared kicker helper, invisible because only
+`statement` built its own kicker. Both now pinned.
+
+**And its browser check had two holes it found and fixed itself.** It read
+`#stage`, whose chrome carries the brand chip and date — so a title card that
+rendered **nothing** still passed. And its fixture used `pace: 1`, which makes a
+pace-leak mutant invisible. Now `#scenes` and `pace: 1.293`. A verification
+harness that includes the chrome is measuring the frame, not the beat.
+
+## D-079 · phase 4 / task 1 · CSS judgement worth keeping
+No new CSS classes. `quote` is a composition of `.lede` + `.rule blue` +
+`.kicker`. Two rejections with real reasons:
+
+- **`.byline` for the attribution** — `seek()` does
+  `SC.querySelector('.byline')` to suppress the corner byline, so a quote beat
+  using that class would have **silently hidden the episode's author**.
+- **`.para`** — it is the *watermark* motif's class in `2026-08-12.js`. Machine
+  text, wrong connotation for a person's words.
+
+That is design reasoning from the existing system rather than from taste, and it
+caught a real interaction a new class would have introduced.
+
+Known consequence: `.kicker` is `text-transform: uppercase`, so attributions
+render `GOOGLE DEEPMIND`.
+
+## D-080 · SPEC · the markup vocabulary widens by exactly one token
+Asked whether `**bold**` alone is enough, the implementer counted **49 committed
+scenes** rather than guessing:
+
+| Markup | Count | Verdict |
+|---|---|---|
+| `<b>` | 20 | covered by `**bold**` |
+| `<br>` | 4 | **all** inside `.big-title` on cards the engine now builds itself — a script never needs it |
+| `<em>` + `<span class="warm-t">` | 3 | **not covered** |
+
+> Those three are one thing: a second emphasis that speaks in **colour** rather
+> than weight, used exactly where each episode pivots.
+
+**Adopted: `*accent*` → `<em>`.** One token, CSS already exists, one line and two
+tests. Not `<br>` (the engine owns the cards that used it), and not `warm-t`,
+which belongs to `[structure] warm_acts` rather than to prose.
+
+Widening deliberately now, on counted evidence, beats having it smuggled in the
+first time a storyboard needs emphasis — which is how a closed surface quietly
+reopens.
+
+## D-081 · carried to Phase 5 · two places byte comparison will legitimately disagree
+From the same report, and both are Phase 5's problem rather than Phase 4's:
+
+1. **`jumpChart.shown` is a documented HTML override** (`<s>34.4</s> &rarr; 43.6`).
+   It is the one field where the frame and the script *should* differ. Phase 5
+   needs an explicit exemption or tag-stripped comparison.
+2. **CSS `text-transform: uppercase` on `.kicker`/`.byline`** means a verifier
+   reading `innerText` without case-folding will false-positive on **every
+   kicker in the series**. §8.2.1's fold already case-folds — this is why that
+   requirement is load-bearing rather than cosmetic.
+
+Two out-of-scope defects the render surfaced, recorded not fixed: **`date_long`
+never reaches the screen** (the title card shows `2026-08-17`, not
+`Monday, 17 August 2026` — `script.py` does not read it), and **`warm_acts` is
+dropped on the floor** by `planbuild.js`.
