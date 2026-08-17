@@ -32,6 +32,7 @@ from .models import Episode, EpisodeError, Series
 SUBDIRS = ("sources", "out", "probe")
 
 EPISODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
+MAX_ID_LEN = 64
 
 _DOC_START_RE = re.compile(r"\A---[ \t]*(\r\n|\r|\n)")
 _SEP_RE = re.compile(r"(\r\n|\r|\n)---[ \t]*(\r\n|\r|\n)")
@@ -104,6 +105,10 @@ def _compose(meta: dict, beats_text: str | None, nl: str = "\n") -> str:
 
 
 def create_episode(series: Series, ep_id: str) -> Episode:
+    if len(ep_id) > MAX_ID_LEN:
+        raise EpisodeError(
+            f"episode id is too long ({len(ep_id)} characters, limit {MAX_ID_LEN})"
+        )
     if not EPISODE_ID_RE.match(ep_id):
         raise EpisodeError(
             f"invalid episode id {ep_id!r} — use lowercase letters, digits, dots "

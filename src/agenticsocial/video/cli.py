@@ -60,6 +60,8 @@ def series_new(
         s = scaffold_series(ws, slug, name=name)
     except SeriesError as e:
         raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot create series {slug!r}: {e}")
     typer.echo(f"created series {s.slug} at {s.dir}/")
     typer.echo(f"next: edit {s.dir / 'series.toml'} (palette, byline, acts, runtime)")
 
@@ -68,7 +70,10 @@ def series_new(
 def series_list() -> None:
     """List series and their key settings. Reports broken ones rather than dying."""
     ws = _workspace()
-    slugs = series_slugs(ws)
+    try:
+        slugs = series_slugs(ws)
+    except SeriesError as e:
+        raise _fail(str(e))
     if not slugs:
         typer.echo("no series yet — create one with `agsoc series new <slug>`")
         return
@@ -79,9 +84,9 @@ def series_list() -> None:
             typer.secho(f"{slug}  [unreadable]  {e}", fg=typer.colors.YELLOW)
             continue
         try:
-            n = len(episode_ids(s))
+            n: object = len(episode_ids(s))
         except EpisodeError:
-            n = 0
+            n = "?"
         typer.echo(
             f"{s.slug}  [{s.cadence}]  {n} episodes  {s.target_sec}s  "
             f"{'/'.join(s.formats)}"
@@ -110,6 +115,8 @@ def video_new(
         ep = create_episode(s, episode)
     except (SeriesError, EpisodeError) as e:
         raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot create episode {episode!r}: {e}")
     typer.echo(f"created episode {s.slug}/{ep.id} at {ep.dir}/")
     typer.echo(f'next: agsoc video ingest {ep.id} --research "<query>"')
 

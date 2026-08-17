@@ -10,6 +10,7 @@ from ..workspace import Workspace, atomic_write
 from .models import FORMATS, Series, SeriesError
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+MAX_NAME_LEN = 64
 
 SERIES_TEMPLATE = """\
 [series]
@@ -106,6 +107,10 @@ def render_coverage_json(name: str) -> str:
 
 
 def _validate_slug(slug: str) -> None:
+    if len(slug) > MAX_NAME_LEN:
+        raise SeriesError(
+            f"series slug is too long ({len(slug)} characters, limit {MAX_NAME_LEN})"
+        )
     if not SLUG_RE.match(slug):
         raise SeriesError(
             f"invalid series slug {slug!r} — use lowercase letters, digits and "
@@ -150,6 +155,11 @@ def load_series(ws: Workspace, slug: str) -> Series:
             raw = tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
         raise SeriesError(f"{path}: malformed series.toml — {e}")
+    except UnicodeDecodeError as e:
+        raise SeriesError(
+            f"{path}: series.toml is not valid UTF-8 — {e}. "
+            "Re-save it as UTF-8; agsoc writes and expects UTF-8 everywhere."
+        )
     except OSError as e:
         raise SeriesError(f"{path}: cannot read series.toml — {e}")
 
@@ -203,12 +213,16 @@ def load_series(ws: Workspace, slug: str) -> Series:
 
 
 def series_slugs(ws: Workspace) -> list[str]:
-    """Enumerate series slugs. Cannot fail on a malformed series — see D-018."""
+    """Enumerate series slugs. Cannot fail on a malformed series — see D-018.
+    An unreadable series/ still surfaces as SeriesError, never OSError."""
     if not ws.series_dir.is_dir():
         return []
-    return sorted(
-        d.name for d in ws.series_dir.iterdir() if (d / "series.toml").is_file()
-    )
+    try:
+        return sorted(
+            d.name for d in ws.series_dir.iterdir() if (d / "series.toml").is_file()
+        )
+    except OSError as e:
+        raise SeriesError(f"{ws.series_dir}: cannot list series — {e}")
 
 
 def list_series(ws: Workspace) -> list[Series]:
