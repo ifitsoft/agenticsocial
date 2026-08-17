@@ -1,11 +1,13 @@
 """`agsoc series` and `agsoc video` commands."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
 
 from ..workspace import Workspace, WorkspaceError
+from . import ingest as ingest_mod
 from . import render as render_mod
 from .episode import create_episode, episode_ids, load_episode
 from .models import EpisodeError, SeriesError
@@ -144,6 +146,81 @@ def video_list(
             typer.echo(f"{ep_id}  {load_episode(s, ep_id).status.value}")
         except EpisodeError as e:
             typer.secho(f"{ep_id}  [unreadable]  {e}", fg=typer.colors.YELLOW)
+
+
+@video_app.command("ingest")
+def video_ingest(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    research: Optional[str] = typer.Option(None, "--research", help="search query"),
+    paste: Optional[Path] = typer.Option(
+        None, "--paste", help="file whose text becomes the corpus"
+    ),
+    from_source: Optional[str] = typer.Option(
+        None, "--from-source", help="an existing agsoc source id"
+    ),
+) -> None:
+    """Build this episode's verification corpus from research, a paste, or a source."""
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+
+    modes = [m for m in (research, paste, from_source) if m is not None]
+    if not modes:
+        raise _fail(
+            "nothing to ingest — pass one of --research \"<query>\", "
+            "--paste <file>, or --from-source <id>"
+        )
+    if len(modes) > 1:
+        raise _fail("pass exactly one of --research, --paste or --from-source")
+
+    try:
+        s = load_series(ws, series)
+        ep = load_episode(s, episode)
+    except (SeriesError, EpisodeError) as e:
+        raise _fail(str(e))
+
+    try:
+        if research is not None:
+            result = ingest_mod.ingest_research(ep, _text(research, "The query"))
+        elif paste is not None:
+            try:
+                text = paste.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                raise _fail(f"cannot read --paste {paste}: no such file")
+            except UnicodeDecodeError:
+                raise _fail(
+                    f"cannot read --paste {paste}: the file is not valid UTF-8. "
+                    "Re-save it as UTF-8."
+                )
+            except OSError as e:
+                raise _fail(f"cannot read --paste {paste}: {e}")
+            result = ingest_mod.ingest_paste(ep, text)
+        else:
+            try:
+                src = ws.resolve_source(from_source)
+            except WorkspaceError as e:
+                raise _fail(str(e))
+            result = ingest_mod.ingest_source(ep, src)
+    except ingest_mod.IngestError as e:
+        raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot write the corpus: {e}")
+
+    for url, reason in result.failures:
+        typer.secho(f"  failed: {url or '(pasted)'} — {reason}", fg=typer.colors.YELLOW)
+
+    if not result.keys:
+        raise _fail(
+            f"nothing was ingested ({len(result.failures)} failed) — "
+            f"see {result.brief_path}"
+        )
+
+    typer.echo(
+        f"ingested {len(result.keys)} source(s), {len(result.failures)} failed → "
+        f"{result.brief_path}"
+    )
+    typer.echo(f"next: draft beats into {ep.script_path}")
 
 
 @video_app.command("preview")

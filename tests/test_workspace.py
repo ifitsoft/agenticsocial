@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from agenticsocial.models import Status, TransitionError
@@ -120,7 +122,7 @@ def test_set_status_enforces_gate(ws, src):
 def test_save_variant_roundtrips_body_edits(ws, src):
     ws.create_variant(src, "x", body="old")
     v = ws.load_variant(src, "x")
-    v.body = "new body"
+    v = replace(v, body="new body")
     ws.save_variant(v)
     assert ws.load_variant(src, "x").body == "new body"
 
@@ -137,3 +139,142 @@ def test_source_md_without_id_falls_back_to_dirname(ws):
     src = ws.create_source("Has id", created="2026-07-13")
     (src.dir / "source.md").write_text("---\ntitle: Has id\n---\n", encoding="utf-8")
     assert ws.list_sources()[0].id == src.dir.name
+
+
+def test_set_status_gates_on_disk_not_the_in_memory_variant(tmp_path):
+    """D-049: the identical shape as the video gate bypass (D-045). A stale
+    Variant must not be able to move a variant the file says is a draft."""
+    import pytest
+
+    from agenticsocial.models import Status, TransitionError
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+    ws.set_status(v, Status.IN_REVIEW)
+    ws.set_status(v, Status.APPROVED)
+
+    v.path.write_text(
+        v.path.read_text(encoding="utf-8").replace("status: approved", "status: draft"),
+        encoding="utf-8",
+    )
+    with pytest.raises(TransitionError):
+        ws.set_status(v, Status.PUBLISHING)
+    assert ws.load_variant(src, "x").status is Status.DRAFT
+
+
+def test_set_status_preserves_in_memory_meta(tmp_path):
+    """publish_variant sets posted_url in memory and expects set_status to write
+    it. Reading meta back from disk for the gate must not discard that."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+    ws.set_status(v, Status.IN_REVIEW)
+    ws.set_status(v, Status.APPROVED)
+    ws.set_status(v, Status.PUBLISHING)
+
+    v.meta["posted_ids"] = ["1", "2"]
+    v.meta["posted_url"] = "https://x.com/i/web/status/1"
+    ws.set_status(v, Status.PUBLISHED)
+
+    reloaded = ws.load_variant(src, "x")
+    assert reloaded.meta["posted_url"] == "https://x.com/i/web/status/1"
+    assert reloaded.meta["posted_ids"] == ["1", "2"]
+    assert reloaded.status is Status.PUBLISHED
+
+
+def test_set_status_rejects_an_unreadable_status_on_disk(tmp_path):
+    import pytest
+
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace, WorkspaceError
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+    v.path.write_text(
+        v.path.read_text(encoding="utf-8").replace("status: draft", "status: banana"),
+        encoding="utf-8",
+    )
+    with pytest.raises(WorkspaceError, match="banana"):
+        ws.set_status(v, Status.IN_REVIEW)
+
+
+def test_save_variant_does_not_change_status(tmp_path):
+    """save_variant persists body and metadata. Status belongs to set_status
+    alone — a second, ungated status writer is what let a draft be published."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+
+    v = replace(v, status=Status.PUBLISHED)  # a stale or hostile object
+    v.meta["posted_ids"] = ["1"]
+    ws.save_variant(v)
+
+    reloaded = ws.load_variant(src, "x")
+    assert reloaded.status is Status.DRAFT        # unchanged on disk
+    assert reloaded.meta["posted_ids"] == ["1"]   # metadata still persisted
+
+
+def test_disk_status_reports_the_file_not_the_object(tmp_path):
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+    v = replace(v, status=Status.APPROVED)
+    assert ws.disk_status(v) is Status.DRAFT
+
+
+def test_variant_status_cannot_be_assigned(tmp_path):
+    """Three gate bypasses came from assigning this field. Deleting
+    `frozen=True` passes the entire suite without this test."""
+    import dataclasses
+
+    import pytest
+
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hi")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        v.status = Status.PUBLISHING
+
+
+def test_set_status_returns_a_new_variant_and_leaves_the_argument_alone(tmp_path):
+    """`return v` instead of `return replace(v, ...)` passes the whole suite:
+    every other Variant test reloads from disk."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hi")
+
+    moved = ws.set_status(v, Status.IN_REVIEW)
+    assert moved is not v
+    assert moved.status is Status.IN_REVIEW
+    assert v.status is Status.DRAFT          # the argument is untouched
+
+
+def test_disk_status_defaults_to_draft_not_something_permissive(tmp_path):
+    """precondition: the file has no status key. F10 — defaulting to APPROVED
+    passes all 469 tests."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("x")
+    v = ws.create_variant(src, "x", body="hi")
+    v.path.write_text("---\nplatform: x\n---\nhi", encoding="utf-8")
+    assert ws.disk_status(v) is Status.DRAFT

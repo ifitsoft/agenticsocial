@@ -112,13 +112,13 @@ def test_probe_stops_before_ffmpeg(series, episode, fake):
     assert not [c for c in fake.calls if Path(c[0]).name == "ffmpeg"]
 
 
-def test_missing_node_is_a_clean_error(series, episode, monkeypatch):
+def test_missing_node_is_a_clean_error(series, episode, fake, monkeypatch):
     monkeypatch.setattr(R.shutil, "which", lambda n: None if n == "node" else "/usr/bin/" + n)
     with pytest.raises(R.RenderError, match="node"):
         R.preview(series, episode)
 
 
-def test_missing_ffmpeg_is_a_clean_error(series, episode, monkeypatch):
+def test_missing_ffmpeg_is_a_clean_error(series, episode, fake, monkeypatch):
     monkeypatch.setattr(R.shutil, "which", lambda n: None if n == "ffmpeg" else "/usr/bin/" + n)
     with pytest.raises(R.RenderError, match="ffmpeg"):
         R.preview(series, episode)

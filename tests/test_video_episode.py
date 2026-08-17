@@ -180,7 +180,7 @@ def test_set_status_persists_and_preserves_beats(series):
 
 def test_set_status_updates_the_in_memory_episode(series):
     ep = create_episode(series, "2026-08-14")
-    set_status(ep, Status.IN_REVIEW)
+    ep = set_status(ep, Status.IN_REVIEW)
     assert ep.status is Status.IN_REVIEW
 
 
@@ -609,7 +609,7 @@ def test_set_status_refreshes_the_object_from_disk(series):
         ep.script_path.read_text().replace("status: draft", "status: in_review"),
         encoding="utf-8",
     )
-    set_status(ep, Status.APPROVED)  # legal from in_review, illegal from draft
+    ep = set_status(ep, Status.APPROVED)  # legal from in_review, illegal from draft
     assert ep.status is Status.APPROVED
 
 
@@ -683,3 +683,11 @@ def test_a_lost_create_race_does_not_delete_the_winner(series, monkeypatch):
         create_episode(series, "2026-08-14")
     monkeypatch.undo()
     assert ep.script_path.read_bytes() == before
+
+
+def test_episode_status_cannot_be_assigned(series):
+    import dataclasses
+
+    ep = create_episode(series, "2026-08-14")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ep.status = Status.RENDERING

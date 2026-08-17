@@ -21,6 +21,7 @@ owns the real beats parser.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
@@ -28,7 +29,7 @@ import yaml
 from ..models import VIDEO_TRANSITIONS, Status, assert_transition
 from ..workspace import atomic_write
 from .models import Episode, EpisodeError, Series
-from .series import _assert_safe_name
+from ..workspace import assert_safe_name
 
 SUBDIRS = ("sources", "out", "probe")
 
@@ -121,7 +122,7 @@ def _compose(meta: dict, beats_text: str | None, nl: str = "\n") -> str:
 
 
 def create_episode(series: Series, ep_id: str) -> Episode:
-    _assert_safe_name(ep_id, "episode id", EpisodeError)
+    assert_safe_name(ep_id, "episode id", EpisodeError)
     if len(ep_id) > MAX_ID_LEN:
         raise EpisodeError(
             f"episode id is too long ({len(ep_id)} characters, limit {MAX_ID_LEN})"
@@ -169,7 +170,7 @@ def _new_meta(series: Series, ep_id: str) -> dict:
 
 
 def load_episode(series: Series, ep_id: str) -> Episode:
-    _assert_safe_name(ep_id, "episode id", EpisodeError)
+    assert_safe_name(ep_id, "episode id", EpisodeError)
     d = series.episodes_dir / ep_id
     path = d / "script.yaml"
     if not path.is_file():
@@ -220,7 +221,7 @@ def resolve_episode(series: Series, query: str) -> Episode:
     stop you addressing a healthy one (D-018). It still raises if the episode
     you actually asked for is the corrupt one — that is an addressed operation.
     """
-    _assert_safe_name(query, "episode id", EpisodeError)
+    assert_safe_name(query, "episode id", EpisodeError)
     ids = episode_ids(series)
     if query in ids:
         return load_episode(series, query)
@@ -234,13 +235,16 @@ def resolve_episode(series: Series, query: str) -> Episode:
     return load_episode(series, matches[0])
 
 
-def set_status(episode: Episode, target: Status) -> None:
-    """Move an episode to `target`.
+def set_status(episode: Episode, target: Status) -> Episode:
+    """Move an episode to `target`, gated on the status ON DISK.
 
     The gate is checked against the status ON DISK, not against `episode.status`.
     A caller holding a stale Episode must not be able to reach RENDERING from a
     file that says `draft` — spec §8.4 and §10 exist to make rendering
     unreachable without a human, and an in-memory check is not that guarantee.
+
+    Returns a NEW Episode; the argument is unchanged. See workspace.set_status
+    for why the dataclass is frozen.
     """
     meta, beats_text, nl = _read_meta(episode.script_path)
     raw = meta.get("status", Status.DRAFT.value)
@@ -254,5 +258,4 @@ def set_status(episode: Episode, target: Status) -> None:
     assert_transition(current, target, VIDEO_TRANSITIONS)
     meta["status"] = target.value
     atomic_write(episode.script_path, _compose(meta, beats_text, nl))
-    episode.status = target
-    episode.meta = meta
+    return replace(episode, status=target, meta=meta)

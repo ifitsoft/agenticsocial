@@ -1109,3 +1109,273 @@ two of those (this, and the zsh word-splitting probe that reported four working
 commands as MISSING).
 
 **The leverage in this process is reviewing briefs, not reviewing code.**
+
+## D-059 · PHASE 2 · a draft could be published. Fixed. v1 shipped with this.
+Leader-verified before the fix:
+
+```
+status on disk : draft
+tweets posted  : 2 ['tweet one', 'tweet two']
+status after   : published
+*** A DRAFT WAS PUBLISHED ***
+```
+
+The README's central promise — "Nothing goes live without you running
+`agsoc approve`" — was breakable. **This is the most serious defect the project
+has found, and it shipped in v1.**
+
+**The bypass laundered itself**, in three individually-defensible steps:
+
+1. `publish_variant` decided *whether to run the gate* from the in-memory object,
+   so a stale `Variant` claiming `PUBLISHING` skipped it entirely.
+2. The posting loop's `save_variant` stamped `status: publishing` onto the draft.
+3. The closing `set_status(PUBLISHED)` then passed **legitimately** — disk really
+   did say `publishing` by then.
+
+The final file state is indistinguishable from a properly approved publish. No
+trace.
+
+**Root cause, named by the Task 0 implementer:** `save_variant` was an *ungated
+status writer*. The video pipeline has exactly one writer of episode status and
+it is gated; the text pipeline had two, one of which wrote whatever the object
+claimed. That asymmetry was the bug — and my Task 0 fix hardened one writer while
+the other quietly undid it.
+
+Fixed: `set_status` is now the only writer of the status key; `save_variant`
+preserves what is on disk; both gate-skip decisions read the file. Verified by
+hand — refused before the first network call, zero tweets, status untouched.
+Both pipelines now have exactly one gated status writer each.
+
+## D-060 · phase 2 / task 0b · an existing test was using the defect as an API
+`test_post_stuck_publishing_requires_resume` forged its state with
+`v.status = PUBLISHING; ws.save_variant(v)` — precisely the ungated writer this
+task removed — so it broke.
+
+The implementer **did not edit it**. It analysed it, verified the asserted
+behaviour is intact when the state is reached legitimately by driving the real
+CLI, and corroborated the causal link by showing the test passes again under the
+mutant that restores the ungated writer. That is what "a failing test is a
+finding" is supposed to produce.
+
+Leader applied the two-line setup fix (`ws.set_status(v, Status.PUBLISHING)`, a
+legal approved→publishing move) rather than dispatching an agent for it, since
+the diagnosis was complete and a red suite blocks everything. Verified the test
+still earns its place: disabling the CLI's interrupted branch still fails it.
+
+**Worth recording as a category.** When a defect is removed, tests that *used*
+that defect to set up their fixtures break — and they break in a way that looks
+like the fix is wrong. The tell is that the test's *setup* touches the thing that
+was fixed, while its assertion is unrelated.
+
+## D-061 · OPEN DESIGN QUESTION · should `Variant.status` be mutable at all?
+The Task 0b implementer argued it should not, and the argument is strong enough
+to record verbatim in substance:
+
+> Three bypasses, one identical root cause — that's not three mistakes, it's a
+> design where the mistake is the natural thing to write. `v.status` and
+> `ws.disk_status(v)` look interchangeable at the call site; nothing in either
+> name says which one is a guess, and the security-relevant distinction is
+> invisible in the code. Worse, writability means it isn't a stale cache — it's a
+> **forgeable claim**, and until this commit `save_variant` persisted the forgery.
+
+Its conclusion: `disk_status` is the right mechanism and the **wrong stopping
+point** — it removes the third instance without removing the ability to write a
+fourth. The proposal is a frozen `Variant` (or a property with no setter) with
+`set_status` returning a fresh object, making all three bypasses *unrepresentable*
+rather than merely fixed — the same property the engine gets from `__seek(t)`
+being pure in `t`.
+
+`Episode.status` in the video pipeline has the identical shape, so a full fix
+spans both pipelines.
+
+**Raised with the human; not yet decided.** Also open, flagged by the same
+report: `set_status(FAILED)` inside `publish_variant`'s error handler can itself
+raise while reading the file, **masking the original exception** and leaving
+`posted_ids` one tweet behind reality. Pre-existing, fails in the safe direction
+(a duplicate on resume, never a lost tweet), and worth its own task.
+
+Also noted: mutant 3 (`cli.py` deciding from `v.status`) **survives** — equivalent
+under today's CLI, where `_load` always returns a fresh variant. Kept as defence
+in depth, recorded as unkilled rather than papered over.
+
+## D-062 · phase 2 · "unrepresentable" RETRACTED. Freezing is a correctness fix, not a security one.
+I told the human that freezing `Variant`/`Episode` would make a forged status
+*unrepresentable*. **That was wrong, and I verified it myself:**
+
+```
+frozen=True deleted from Variant  ->  379 passed        (nothing enforced it)
+replace(v, status=PUBLISHING)     ->  forged: publishing | disk says: draft
+```
+
+The Task 0c implementer said so before I checked, unprompted, rather than letting
+my framing stand: *"freezing did not make a forged Variant unconstructible, it
+made it unconstructible by accident — `replace` is now the forgery tool, one
+line."*
+
+**The accurate position**, argued by the Task 0d implementer when asked to
+disagree with me rather than agree:
+
+- Freezing stops **accidental** forging. `v.status = APPROVED` is one invisible
+  token and is the exact shape of all three historical bypasses — every one an
+  accident of convenience. `replace(v, status=...)` names the module and the
+  field and is greppable. It raises the intent floor; it is not a boundary.
+- **The load-bearing defence is that no gate reads the object.** A forged status
+  buys nothing regardless of how it was forged. If only one mechanism could be
+  kept, keep the disk read.
+- **Add no further mechanism.** A custom `__setattr__` is defeated by
+  `object.__setattr__` one line later; a disk-reading property costs I/O per
+  access and trades a hypothetical bypass for real staleness bugs. Python has no
+  in-process boundary and pretending otherwise is a category error.
+
+**Freezing stays, on the correctness argument rather than the security one:** a
+snapshot that mutates lies about its file. That applies to `body` and
+`target_sec` as much as to `status`, and it survives the concession.
+
+Task 0d made the guarantee actually enforced — five mutants, five kills, 383
+tests. Before it, deleting the decorator passed everything.
+
+## D-063 · FORWARD WARNING · where the fourth instance will come from
+The Task 0d implementer's most useful output was not about this task:
+
+> The next bypass probably won't be a forged field. It'll be a Phase 3 gate that
+> reads `episode.status` or a stale `series.target_sec` instead of re-reading
+> disk — and `frozen=True` is completely inert against that.
+
+Correct, and it reframes the whole family. All three bypasses were *writes* to a
+trusted object; the next is likelier to be a *read* of a stale one. Freezing
+prevents the former and does nothing about the latter.
+
+**Standing requirement: every new gate gets a stale-object test.** Phase 3's
+duration gate (`abs(dur - target_sec) > tolerance_sec`) is the first one due, and
+it must have a test that loads an object, changes the file underneath it, and
+asserts the gate follows the file. Rated by its author above anything else in
+that report, and I agree.
+
+`Source` stays mutable — no gate reads it, and grep confirms nothing assigns to
+it. Recommended to freeze opportunistically during ingest, since Phase 2 is the
+phase most likely to start passing `Source` around and `Source.dir` is a `Path`
+consumed by filesystem operations.
+
+## D-064 · PROCESS · why my briefs keep producing tests that cannot fail
+Vacuous tests have now appeared in **four separate phases**, always in briefs I
+wrote. Seventeen brief defects against zero implementer errors. Asked to diagnose
+my process rather than the code, the Task 1c implementer gave the answer:
+
+> An example is a point, a rule is a function, and any finite set of points
+> admits infinitely many functions. But the half that is yours, and is fixable:
+> **your briefs write the assertion after you already know the implementation.**
+> `assert key_for(...) == "reuters-com"` is a value read off code you had just
+> designed — a transcription, and transcriptions cannot disagree with what they
+> transcribed.
+
+**"Passed on arrival" is the transcription rate.** 10 of 11 in Task 1c, 4 of 4 in
+Task 1b. I had been reporting that number for three phases without understanding
+it was the diagnosis.
+
+### The four changes, adopted
+
+1. **State the rule as a sentence with a negative half, before writing any
+   assertion.** "A leading `www-` is stripped; `www` elsewhere is not." Every pin
+   that killed a mutant had a negative half; every one that killed nothing had
+   none.
+2. **Specify the mutant first, derive the assertion from it.** I already write
+   good mutants — in Step 3, *after* the tests, independently. That ordering is
+   the bug. `match="unsafe"` is derivable from "the mutant drops the guard"; it
+   is not something anyone adds while writing a happy-path assertion. This alone
+   would have caught both vacuous tests at authoring time.
+3. **Give each test a one-line `precondition:` naming what the fixture must NOT
+   already be in.** Both vacuous tests failed for exactly this and nothing else.
+   Highest yield per character.
+4. **Use properties where the rule is infinite and the value is cited
+   elsewhere** — keys, collision suffixes, anything a claim hard-codes.
+
+### The line worth keeping
+
+> An example should be chosen because it **discriminates**, not because it
+> **illustrates**. `blog.google` is what a reader needs; `blog.wwwfoo.com` is
+> what the mutant fears. Your briefs have been picking from the reader's set.
+
+This is the most valuable process finding of the project, and it came from asking
+an implementer to critique my briefs rather than the code.
+
+## D-065 · phase 2 / task 1c · corpus.py is closed
+430 tests. Nine mutants, nine kills. The 14-mutant sweep went 12 survivors → 5,
+and **all seven previously called real are dead**; every survivor is cosmetic
+(`sort_keys`/`indent`/`ensure_ascii` round-trip identical, a redundant `sorted()`,
+and one genuinely unreachable recheck).
+
+Task 1b's surviving mutant — deleting `verify`'s empty-dir guard — is also now
+killed.
+
+Chain capped at 1c per D-023. Anything further in this module goes to Phase 3.
+
+**Carried to Task 2, unchanged in importance:** the `-2` collision key is
+fetch-order-dependent, so a corpus rebuild can silently re-point `blog-google-2`
+at the *other* article. That is the one failure mode in this module that yields a
+**wrong fact-check rather than a loud one**, and the fix belongs in ingestion —
+look the URL up in the manifest, reuse its key or refuse, never re-derive.
+
+## D-066 · PHASE 2 GATE · merge-after-fixes → fixed. The gate itself held.
+Thirteen forgery attacks, every one refused: `replace()` to APPROVED and to
+PUBLISHING, a mutated `meta` laundered through `save_variant`, stale objects over
+reverted files, the video equivalents, and the real CLI in a subprocess. The four
+bypasses closed in this phase stay closed under attack.
+
+**F1 — the verifier trusted its own manifest.** Leader-reproduced: a manifest key
+of `../../../../../../outside` made `verify()` report a corpus **SOUND** while
+`sources/` held no documents at all, having hashed a file outside the workspace
+to say so. `document_text` refused the identical key. Fixed; now
+`[('unsafe', ...)]`.
+
+*My first probe of F1 used the wrong traversal depth and came back clean.* I
+nearly filed it as not-reproducing — the same error as D-031, dismissing a real
+finding on a bad probe of my own. Re-ran with the depth computed rather than
+guessed and it reproduced immediately. **A failed probe is not a refutation.**
+
+Also fixed: hostless hrefs recorded rather than aborting the run (F2); symlinked
+documents flagged (F4); `document_text` returns the bytes its hash covers, not
+newline-translated text (F5, the same defect `c47236b` fixed for beats); a
+*missing* `sha256` no longer compares equal to itself (F8); padded bytes are a
+modification (F9); `disk_status`'s fallback is pinned to DRAFT — flipping it to
+APPROVED had passed all 469 tests (F10); and **publishing can no longer grant
+itself** (F11).
+
+Deferred with reasons: F18 (post-approval body swap) belongs to Phase 7, which
+owns the approve gate and whose contract it changes. Hardlinked documents still
+verify sound — weaker than the symlink case, since edits through the other name
+still change the hash, and `st_nlink > 1` would flag innocent files.
+
+## D-067 · you cannot guard a boundary you do not own
+Task 4 added an autouse socket guard. It half worked. Leader-verified:
+
+```
+urllib : blocked (RuntimeError)
+ddgs   : *** REACHED NETWORK *** 2 results
+```
+
+`ddgs` fetches through **`primp`, a Rust HTTP client that opens sockets in native
+code and never touches Python's `socket` module.** The guard is invisible to it.
+`trafilatura` uses urllib3 — pure Python — so extraction was guarded and search
+was not. Two mutants ran **90 seconds to timeout** against duckduckgo rather than
+failing.
+
+**The fix is to guard the seam we own.** `research.search` and `research.extract`
+are this project's only two fetch calls; a guard there cannot be bypassed by a
+dependency's choice of HTTP stack. Measured after: those two mutants now fail in
+**0.80s and 1.26s** — ~70× faster and deterministic rather than DNS-dependent.
+Full suite 482 passed in ~2s, no test broken, all eight respx tests unaffected
+(respx patches the httpx transport, so a mocked request never descends to
+`create_connection`).
+
+The socket patches stay: `x/client.py` and `x/auth.py` use httpx, which is pure
+Python all the way down, and they were measured blocked in 0.06s.
+
+**The honest remaining hole**, reported rather than hidden: `video/render.py`'s
+`subprocess.run` of node. A child process inherits no monkeypatch. Every render
+test patches `R.subprocess.run`, but that is *convention* — exactly where
+`research` was before this task. Phase 8's gated `render` should guard
+`render._run` by the same logic.
+
+**Generalisable:** an isolation guarantee must sit on a boundary you control. A
+guard on someone else's abstraction holds only until they change how they reach
+the network — and it fails silently, which is the worst way to learn.

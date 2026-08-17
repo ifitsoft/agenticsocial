@@ -444,3 +444,15 @@ def test_scaffold_series_detects_a_dangling_symlink(ws):
     (ws.series_dir / "ghost").symlink_to(ws.series_dir / "nowhere")
     with pytest.raises(SeriesError, match="already exists"):
         scaffold_series(ws, "ghost")
+
+
+def test_series_runtime_targets_cannot_be_assigned(ws):
+    """Phase 3 gates duration on target_sec/tolerance_sec. A writable value that
+    a gate reads is exactly what caused three bypasses in the status field."""
+    import dataclasses
+
+    s = scaffold_series(ws, "the-brief")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        s.target_sec = 9999
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        s.tolerance_sec = 9999

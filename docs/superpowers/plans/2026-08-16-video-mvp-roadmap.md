@@ -254,6 +254,35 @@ Everything else the leader decides and records.
 
 ---
 
+## 6a. How briefs specify tests (adopted 2026-08-17, D-064)
+
+Vacuous tests — tests that pass whatever the code does — appeared in four
+separate phases, always in leader-written briefs. The cause is not carelessness:
+**a brief written after the implementation is known transcribes it.** An
+assertion read off code you just designed cannot disagree with that code.
+
+`passed on arrival` is therefore not a curiosity in a report. **It is the
+transcription rate**, and it belongs in every report.
+
+Four rules, in order of yield:
+
+1. **Specify the mutant first; derive the assertion from it.** Mutants used to be
+   written in a later step, after the tests, independently — that ordering was
+   the bug. Name the weaker implementation, then ask what assertion would notice.
+   `match="unsafe"` follows from "the mutant drops the guard"; nobody adds it
+   while writing a happy path.
+2. **State the rule with its negative half before writing any assertion.**
+   "A leading `www-` is stripped; `www` elsewhere is not." Every pin that killed a
+   mutant had a negative half; every one that killed nothing had none.
+3. **Give each test a one-line `precondition:`** naming what the fixture must NOT
+   already be in. Both vacuous tests in Phase 2 failed for exactly this.
+4. **Use properties where the rule is infinite and the value is cited
+   elsewhere** — keys, suffixes, anything another artifact hard-codes.
+
+> An example should be chosen because it **discriminates**, not because it
+> **illustrates**. `blog.google` is what a reader needs; `blog.wwwfoo.com` is what
+> the mutant fears.
+
 ## 7. Standing conventions
 
 Inherited from v1 and non-negotiable without a decision entry:
