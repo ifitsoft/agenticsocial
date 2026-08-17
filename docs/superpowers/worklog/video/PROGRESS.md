@@ -30,7 +30,9 @@ reviewer found — none from scope drift.
 | 3d — Fix separator arithmetic | `910c850` `7f09648` | mixed line endings ate a byte, silently (D-033) |
 | 4 — CLI wiring + input boundary | `37e2b75` `8343b15` `4f09274` | 14 tracebacks found; my CLI tests were vacuous (D-035) |
 | 4b — Complete the error surface | `9350dcc` `8bd2cb3` | fixed one module, forgot its sibling (D-036) |
-| 5 — Path safety | in flight | verified workspace escape (D-038) |
+| 5 — Path safety | `5555056` `94b4797` | verified workspace escape (D-038); 7/7 mutants |
+| **Phase gate review** | — | **merge-after-fixes**; 87 mutants, series.py 30/34 |
+| 6 — Gate fixes | `24a1a03` `d469bdb` | approval gate could be walked past with a stale object (D-045) |
 
 ### What this phase cost, and what it bought
 Four attempts were needed for one guarantee (byte preservation). Every failure
@@ -51,8 +53,8 @@ corruption that misattributed itself to the operator, and a workspace escape.
 - **D-040** — before the gate fix harm, after the gate fix confusion. Without a
   stated line the phase does not end.
 
-Phase gate: pending Task 5. Whole-branch QA over `series.py` is MANDATORY —
-2c skipped its per-task review on that promise (D-024).
+**Phase gate: PASSED.** 319 tests. Whole-branch QA covered `series.py` (34
+mutants, 30 killed), settling the D-024 debt. Merging via PR.
 
 ---
 

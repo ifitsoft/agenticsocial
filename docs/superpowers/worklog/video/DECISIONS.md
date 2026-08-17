@@ -898,3 +898,53 @@ deferred. The deferral stands only for document 1, which is machine-written.
 Worth noting the reviewer volunteered this: it was asked whether anything on the
 deferred list was harm rather than confusion, and rather than answering "no" it
 found the one seam where my own rule had been applied too broadly.
+
+## D-048 · phase 1 / task 6 · gate closed. 319 tests, 5/5 mutants
+Leader-verified:
+
+```
+on disk: draft | stale object: approved
+REFUSED: cannot move draft -> rendering; allowed next: in_review
+disk after: draft
+```
+
+**The implementer caught a vacuous test in my own brief and handled it exactly
+right.** My briefed F5 test (`test_create_over_an_existing_dir_does_not_delete_it`)
+is vacuous: the `d.exists()` precheck the brief insists on keeping raises before
+control reaches the `mkdir` that F5 is actually about, so it passes with the fix,
+without it, and with the mutant applied. Told the code block is authoritative, it
+left mine byte-for-byte, **added** a test that monkeypatches `Path.exists` to
+simulate what a concurrent winner actually does, and flagged the disagreement.
+That added test is what kills mutant 5.
+
+It also went further than asked: mutant 2 alone now dies at the *new* F3 refusal,
+which would have left F4 unproven — so it applied mutants 2+3 together to strip
+the refusal, and showed the **old** substring assertion still passing on the
+corrupted bytes while the new one fails. That is the proof that D-046 is closed,
+and I did not ask for it.
+
+## D-049 · TEXT PIPELINE · fifth D-036 instance, in v1 code
+`workspace.py:206` — `Workspace.set_status` for text variants has the identical
+shape as the video gate bypass:
+
+```python
+    def set_status(self, v: Variant, target: Status) -> None:
+        assert_transition(v.status, target)      # in-memory, not disk
+```
+
+Found by the Task 6 implementer while answering "is there any other route to
+RENDERING", and flagged unprompted as out of scope. Correct on both counts.
+
+**Not fixed in Phase 1**, deliberately: it is pre-existing v1 behaviour, not a
+regression from this phase; the gate that protects posting to X sits in
+`cli.py::post` *before* the keyring is touched; and `cli.py` loads variants fresh
+on every invocation, so it is not reachable through the CLI today. Fixing it means
+touching the text pipeline's tests, which Phase 1 committed not to do.
+
+**Carried to Phase 2 as the first item.** The reason it matters is not today's
+reachability — it is that the video gate had exactly this shape and I defended
+it for two tasks before a reviewer broke it.
+
+Fifth instance of "a guard in one of a matched pair and not the other", and the
+first found in code this project did not write during these phases. The pattern
+predates the phase; the phase just taught us to look.
