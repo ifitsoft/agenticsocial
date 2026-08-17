@@ -79,6 +79,7 @@ class Workspace:
     def __init__(self, root: Path):
         self.root = Path(root)
         self.sources_dir = self.root / "sources"
+        self.series_dir = self.root / "series"
 
     @classmethod
     def init(cls, root: Path) -> "Workspace":
