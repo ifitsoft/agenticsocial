@@ -6,6 +6,7 @@ from agenticsocial.models import Status, TransitionError, assert_transition
 def test_status_values_match_spec():
     assert [s.value for s in Status] == [
         "draft", "in_review", "approved", "scheduled",
+        "rendering", "rendered",
         "publishing", "published", "failed",
     ]
 

@@ -15,6 +15,8 @@ class Status(str, Enum):
     IN_REVIEW = "in_review"
     APPROVED = "approved"
     SCHEDULED = "scheduled"  # reserved for the v2 calendar
+    RENDERING = "rendering"
+    RENDERED = "rendered"
     PUBLISHING = "publishing"
     PUBLISHED = "published"
     FAILED = "failed"
@@ -25,27 +27,54 @@ ALLOWED_TRANSITIONS: dict[Status, set[Status]] = {
     Status.IN_REVIEW: {Status.DRAFT, Status.APPROVED},
     Status.APPROVED: {Status.IN_REVIEW, Status.PUBLISHING},
     Status.SCHEDULED: set(),
+    Status.RENDERING: set(),  # video-only; unreachable for text variants
+    Status.RENDERED: set(),   # video-only; unreachable for text variants
     Status.PUBLISHING: {Status.PUBLISHED, Status.FAILED},
     Status.PUBLISHED: set(),
     Status.FAILED: {Status.PUBLISHING},
+}
+
+# Video episodes have their own lifecycle: the expensive step is rendering, and
+# it sits behind the same human gate that publishing sits behind for text.
+VIDEO_TRANSITIONS: dict[Status, set[Status]] = {
+    Status.DRAFT: {Status.IN_REVIEW},
+    Status.IN_REVIEW: {Status.DRAFT, Status.APPROVED},
+    Status.APPROVED: {Status.IN_REVIEW, Status.RENDERING},
+    Status.SCHEDULED: set(),
+    Status.RENDERING: {Status.RENDERED, Status.FAILED},
+    Status.RENDERED: {Status.PUBLISHING},
+    Status.PUBLISHING: {Status.PUBLISHED, Status.FAILED},
+    Status.PUBLISHED: set(),
+    Status.FAILED: {Status.RENDERING},
 }
 
 _ORDER = list(Status)
 
 
 class TransitionError(Exception):
-    def __init__(self, current: Status, target: Status):
+    def __init__(
+        self,
+        current: Status,
+        target: Status,
+        table: dict[Status, set[Status]] | None = None,
+    ):
+        table = ALLOWED_TRANSITIONS if table is None else table
         allowed = ", ".join(
-            s.value for s in _ORDER if s in ALLOWED_TRANSITIONS[current]
+            s.value for s in _ORDER if s in table[current]
         ) or "none (terminal)"
         super().__init__(
             f"cannot move {current.value} -> {target.value}; allowed next: {allowed}"
         )
 
 
-def assert_transition(current: Status, target: Status) -> None:
-    if target not in ALLOWED_TRANSITIONS[current]:
-        raise TransitionError(current, target)
+def assert_transition(
+    current: Status,
+    target: Status,
+    table: dict[Status, set[Status]] | None = None,
+) -> None:
+    table = ALLOWED_TRANSITIONS if table is None else table
+    if target not in table[current]:
+        raise TransitionError(current, target, table)
 
 
 @dataclass
