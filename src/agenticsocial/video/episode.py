@@ -28,6 +28,7 @@ import yaml
 from ..models import VIDEO_TRANSITIONS, Status, assert_transition
 from ..workspace import atomic_write
 from .models import Episode, EpisodeError, Series
+from .series import _assert_safe_name
 
 SUBDIRS = ("sources", "out", "probe")
 
@@ -105,6 +106,7 @@ def _compose(meta: dict, beats_text: str | None, nl: str = "\n") -> str:
 
 
 def create_episode(series: Series, ep_id: str) -> Episode:
+    _assert_safe_name(ep_id, "episode id", EpisodeError)
     if len(ep_id) > MAX_ID_LEN:
         raise EpisodeError(
             f"episode id is too long ({len(ep_id)} characters, limit {MAX_ID_LEN})"
@@ -148,6 +150,7 @@ def _new_meta(series: Series, ep_id: str) -> dict:
 
 
 def load_episode(series: Series, ep_id: str) -> Episode:
+    _assert_safe_name(ep_id, "episode id", EpisodeError)
     d = series.episodes_dir / ep_id
     path = d / "script.yaml"
     if not path.is_file():
@@ -198,8 +201,7 @@ def resolve_episode(series: Series, query: str) -> Episode:
     stop you addressing a healthy one (D-018). It still raises if the episode
     you actually asked for is the corrupt one — that is an addressed operation.
     """
-    if not query:
-        raise EpisodeError("no episode specified — see `agsoc video list`")
+    _assert_safe_name(query, "episode id", EpisodeError)
     ids = episode_ids(series)
     if query in ids:
         return load_episode(series, query)
