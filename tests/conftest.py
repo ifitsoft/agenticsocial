@@ -18,10 +18,21 @@ class NetworkUseInTest(Exception):
 def _no_network(monkeypatch):
     def blocked(*a, **kw):
         raise NetworkUseInTest(
-            "a test tried to open a socket. Tests must never reach the network — "
+            "a test tried to reach the network. Tests must never fetch — "
             "inject or patch the fetcher instead."
         )
 
+    # Python's socket layer catches trafilatura (urllib3) and anything else in
+    # pure Python.
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     monkeypatch.setattr(socket, "create_connection", blocked)
+
+    # But it does NOT catch ddgs: it fetches through primp, a Rust client that
+    # opens sockets in native code. You cannot guard a boundary you do not own.
+    # research.search/extract are this project's only two fetch calls, and a
+    # guard there cannot be bypassed by a dependency's choice of HTTP stack.
+    from agenticsocial import research
+
+    monkeypatch.setattr(research, "search", blocked)
+    monkeypatch.setattr(research, "extract", blocked)
