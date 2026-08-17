@@ -180,7 +180,7 @@ def test_set_status_persists_and_preserves_beats(series):
 
 def test_set_status_updates_the_in_memory_episode(series):
     ep = create_episode(series, "2026-08-14")
-    set_status(ep, Status.IN_REVIEW)
+    ep = set_status(ep, Status.IN_REVIEW)
     assert ep.status is Status.IN_REVIEW
 
 
@@ -609,7 +609,7 @@ def test_set_status_refreshes_the_object_from_disk(series):
         ep.script_path.read_text().replace("status: draft", "status: in_review"),
         encoding="utf-8",
     )
-    set_status(ep, Status.APPROVED)  # legal from in_review, illegal from draft
+    ep = set_status(ep, Status.APPROVED)  # legal from in_review, illegal from draft
     assert ep.status is Status.APPROVED
 
 

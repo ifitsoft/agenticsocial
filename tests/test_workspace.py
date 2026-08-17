@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from agenticsocial.models import Status, TransitionError
@@ -120,7 +122,7 @@ def test_set_status_enforces_gate(ws, src):
 def test_save_variant_roundtrips_body_edits(ws, src):
     ws.create_variant(src, "x", body="old")
     v = ws.load_variant(src, "x")
-    v.body = "new body"
+    v = replace(v, body="new body")
     ws.save_variant(v)
     assert ws.load_variant(src, "x").body == "new body"
 
@@ -212,7 +214,7 @@ def test_save_variant_does_not_change_status(tmp_path):
     src = ws.create_source("Kill staging")
     v = ws.create_variant(src, "x", body="hello")
 
-    v.status = Status.PUBLISHED          # a stale or hostile object
+    v = replace(v, status=Status.PUBLISHED)  # a stale or hostile object
     v.meta["posted_ids"] = ["1"]
     ws.save_variant(v)
 
@@ -228,5 +230,5 @@ def test_disk_status_reports_the_file_not_the_object(tmp_path):
     ws = Workspace.init(tmp_path / "workspace")
     src = ws.create_source("Kill staging")
     v = ws.create_variant(src, "x", body="hello")
-    v.status = Status.APPROVED
+    v = replace(v, status=Status.APPROVED)
     assert ws.disk_status(v) is Status.DRAFT

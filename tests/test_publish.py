@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from agenticsocial.x.publish import ValidationError, validate_thread
@@ -91,7 +93,7 @@ def test_publish_resumes_from_stuck_publishing(approved_variant):
     with pytest.raises(XApiError):
         publish_variant(ws, v, FakeClient(fail_at=3))
     stuck = ws.load_variant(src, "x")
-    stuck.status = Status.PUBLISHING          # simulate hard-kill before FAILED was written
+    stuck = replace(stuck, status=Status.PUBLISHING)  # simulate hard-kill before FAILED was written
     ws.save_variant(stuck)
     client = FakeClient()
     publish_variant(ws, ws.load_variant(src, "x"), client)
@@ -129,7 +131,7 @@ def test_a_stale_variant_cannot_publish_a_draft(tmp_path):
     ws = Workspace.init(tmp_path / "workspace")
     src = ws.create_source("Unapproved")
     v = ws.create_variant(src, "x", body="one\n\n---tweet---\n\ntwo")
-    v.status = Status.PUBLISHING          # the stale claim
+    v = replace(v, status=Status.PUBLISHING)  # the stale claim
 
     client = Client()
     with pytest.raises(TransitionError):
