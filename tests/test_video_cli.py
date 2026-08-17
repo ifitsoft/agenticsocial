@@ -338,19 +338,7 @@ def _fake_ingest(keys, failures):
 
 
 @pytest.fixture()
-def no_network(monkeypatch):
-    """No test may reach the network, including when the thing under test is
-    wrong. Every --research test below patches ingest_research at the module
-    boundary by default, because a guard that stops the research branch from
-    running is exactly the code a mutant deletes -- and without this the test
-    would then fetch for real and hang rather than fail."""
-    from agenticsocial.video import ingest as I
-
-    monkeypatch.setattr(I, "ingest_research", _fake_ingest(["stub-source"], []))
-
-
-@pytest.fixture()
-def prepared(ws, no_network):
+def prepared(ws):
     """An episode ready to ingest into. precondition for every test below:
     the corpus is empty and brief.md does not exist."""
     run("series", "new", "the-brief", "--name", "The Brief")
@@ -589,7 +577,7 @@ def test_ingest_from_an_empty_source_fails_rather_than_citing_nothing(prepared, 
     assert result.exit_code == 1
 
 
-def test_ingest_into_an_unknown_episode_is_a_clean_error(ws, no_network):
+def test_ingest_into_an_unknown_episode_is_a_clean_error(ws):
     run("series", "new", "the-brief")
     result = run(
         "video", "ingest", "1999-01-01", "--series", "the-brief", "--research", "x"
@@ -598,7 +586,7 @@ def test_ingest_into_an_unknown_episode_is_a_clean_error(ws, no_network):
     assert "agsoc video new" in result.output
 
 
-def test_ingest_into_an_unknown_series_is_a_clean_error(ws, no_network):
+def test_ingest_into_an_unknown_series_is_a_clean_error(ws):
     """R3, own sweep. The series is as typable as the episode."""
     result = run(
         "video", "ingest", "2026-08-17", "--series", "nope", "--research", "x"
