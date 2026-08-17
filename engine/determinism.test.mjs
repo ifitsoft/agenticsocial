@@ -3,22 +3,126 @@
  * This is the engine's load-bearing invariant. It is what makes a render
  * reproducible and any single frame re-creatable for inspection months later.
  * Run: node determinism.test.mjs
+ *
+ * The plan-path case also checks that every renderable beat type puts its own
+ * words on the stage. That is deliberately NOT a pixel golden file: a hash is
+ * bound to a Chromium version (which is why this project pins Playwright) and
+ * reports "the builder silently did nothing" as an unexplained mismatch. Read
+ * the text instead, and the failure names the beat.
  */
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { readFile, writeFile, rm } from 'node:fs/promises';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/* One beat of every type planbuild.js can draw, with the characters that used
+ * to vanish. `<thinking>` was parsed as an unknown tag and disappeared from the
+ * frame while script.yaml still said it — the verification defect this phase
+ * closes — and `&amp;` must stay five characters, not decode to one. */
+const HOLD = 3.0;
+const FIXTURE = [
+  {
+    beat: { type: 'statement', text: 'The model is <thinking> about **it**' },
+    expect: ['The model is <thinking> about it'],
+  },
+  {
+    beat: { type: 'body', text: 'AT&T raised prices &amp; nobody noticed' },
+    expect: ['AT&T raised prices &amp; nobody noticed'],
+  },
+  {
+    beat: {
+      type: 'list',
+      kicker: 'Live today in',
+      lead: 'Tuned for **coding** & agents',
+      items: ['Gemini API & AI Studio', '<script> tags', 'The Spark agent'],
+    },
+    expect: [
+      'Live today in',
+      'Tuned for coding & agents',
+      'Gemini API & AI Studio',
+      '<script> tags',
+      'The Spark agent',
+    ],
+  },
+  {
+    beat: {
+      type: 'quote',
+      text: 'Gemini 3.7 Flash is our new workhorse model',
+      attribution: 'Google DeepMind',
+    },
+    expect: ['Gemini 3.7 Flash is our new workhorse model', 'Google DeepMind'],
+  },
+  {
+    beat: { type: 'title', sub: 'Five stories from the last 24 hours' },
+    expect: ['THE BRIEF', 'Five stories from the last 24 hours'],
+  },
+  {
+    beat: { type: 'signoff', text: 'Same time tomorrow' },
+    expect: ['THE BRIEF', 'Same time tomorrow'],
+  },
+];
+
+const PLAN = {
+  episode: '2026-08-16',
+  series: 'the-brief',
+  series_name: 'The Brief',
+  byline: 'Ali Abdukarim',
+  format: { name: 'vertical', w: 1080, h: 1920 },
+  fps: 30,
+  pace: 1,
+  design: {},
+  beats: FIXTURE.map((f, i) => ({
+    act: '',
+    act_label: '',
+    hold: HOLD,
+    start: i * HOLD,
+    end: (i + 1) * HOLD,
+    kicker: '',
+    src: '',
+    ...f.beat,
+  })),
+};
+
+/* .plan.js is how render.mjs hands a plan to the page — fetch and ES modules
+ * are both CORS-blocked over file://. It is a build artifact (gitignored), but
+ * restore whatever was there so running the tests never costs someone the plan
+ * they were mid-render on. */
+const PLAN_JS = join(HERE, '.plan.js');
+const previousPlan = await readFile(PLAN_JS, 'utf8').catch(() => null);
+await writeFile(PLAN_JS, 'window.__PLAN = ' + JSON.stringify(PLAN) + ';\n', 'utf8');
+
 const CASES = [
   { label: 'day path', qs: 'day=2026-08-14', times: [0.5, 3.7, 42.9] },
+  {
+    label: 'plan path',
+    qs: 'plan=1',
+    // past the midpoint of each beat, where the text has landed
+    times: FIXTURE.map((_, i) => i * HOLD + HOLD * 0.72),
+    content: FIXTURE,
+  },
 ];
-if (process.argv.includes('--plan')) {
-  CASES.push({ label: 'plan path', qs: 'plan=1', times: [0.5, 3.7, 8.0] });
-}
 
 const browser = await chromium.launch();
 let failures = 0;
+
+/* innerText is the RENDERED text, and two presentation details are not the
+ * script's business:
+ *
+ *   - line breaking. A masked word rise wraps every word in its own
+ *     inline-block, so compare on the characters, not the spaces.
+ *   - case. `.kicker` and `.byline` carry `text-transform:uppercase` in
+ *     scene.html, so a kicker written "Live today in" renders — and reads back
+ *     from innerText — as "LIVE TODAY IN". The DOM still holds the authored
+ *     bytes; only the glyphs are uppercased. Worth knowing in Phase 5: a
+ *     verifier that reads innerText must fold case or read textContent, or it
+ *     will report every kicker in the series as a divergence.
+ *
+ * Everything this check exists to catch — a dropped word, a decoded entity, a
+ * stray `**` — survives both foldings. */
+const squash = (s) => s.replace(/\s+/g, '').toLowerCase();
 
 for (const c of CASES) {
   const page = await browser.newPage({
@@ -68,6 +172,24 @@ for (const c of CASES) {
         (odd ? ` differs when reached via t=${odd[0]}` : ' stable from every predecessor'),
     );
   }
+
+  /* Every beat says on screen what the script said. The negative half matters
+   * as much: no `**` markers left over, and no entity decoded on the way. */
+  if (c.content) {
+    for (let i = 0; i < c.content.length; i++) {
+      const { beat, expect } = c.content[i];
+      await page.evaluate((tt) => window.__seek(tt), i * HOLD + HOLD * 0.72);
+      const shown = await page.evaluate(() => document.getElementById('stage').innerText);
+      const missing = expect.filter((e) => !squash(shown).includes(squash(e)));
+      const leaked = shown.includes('**') ? ' · `**` reached the screen' : '';
+      if (missing.length || leaked) failures++;
+      console.log(
+        `  ${missing.length || leaked ? 'FAIL' : 'ok  '} beat ${i} (${beat.type})` +
+          (missing.length ? ` missing ${JSON.stringify(missing)}${leaked}` : ` renders its text${leaked}`),
+      );
+    }
+  }
+
   if (errors.length) {
     failures++;
     console.error('  page errors: ' + errors.join('; '));
@@ -76,5 +198,7 @@ for (const c of CASES) {
 }
 
 await browser.close();
+if (previousPlan === null) await rm(PLAN_JS, { force: true });
+else await writeFile(PLAN_JS, previousPlan, 'utf8');
 console.log(failures ? `${failures} FAILURES` : 'deterministic');
 process.exit(failures ? 1 : 0);
