@@ -200,9 +200,10 @@ def test_verify_on_an_empty_corpus(episode):
     "bad", ["../../../series", "../secret", "a/b", "..", ".", "", "a\\b"]
 )
 def test_document_text_refuses_a_traversing_key(episode, bad):
-    """Phase 5's source key comes from agent-authored YAML. Without this guard
-    the key `../../../../../voice` reads workspace/voice.txt."""
-    with pytest.raises(C.CorpusError):
+    """Each key must be refused as UNSAFE, not merely as absent. The previous
+    version passed with the guard removed: every key raised CorpusError anyway
+    because no such file existed."""
+    with pytest.raises(C.CorpusError, match="unsafe"):
         C.document_text(episode, bad)
 
 
@@ -215,16 +216,95 @@ def test_document_text_cannot_reach_outside_the_corpus(episode):
         C.document_text(episode, "../../../series")
 
 
-def test_verify_reports_everything_missing_when_the_corpus_dir_is_gone(episode):
+def test_verify_is_silent_when_the_corpus_dir_does_not_exist(episode):
+    """The manifest lives inside sources_dir, so if the directory is gone there
+    is nothing recorded either. The guard exists to stop iterdir() raising, not
+    to report losses — the previous version of this test recreated the directory
+    and never entered the branch at all."""
     import shutil
 
     C.write_document(episode, "one", url="https://blog.google/x")
-    C.write_document(episode, "two", url="https://venturebeat.com/y")
-    manifest = (episode.sources_dir / C.MANIFEST_NAME).read_text(encoding="utf-8")
     shutil.rmtree(episode.sources_dir)
-    episode.sources_dir.mkdir()
-    (episode.sources_dir / C.MANIFEST_NAME).write_text(manifest, encoding="utf-8")
-    assert C.verify(episode) == [
-        ("missing", "blog-google"),
-        ("missing", "venturebeat-com"),
-    ]
+    assert C.verify(episode) == []
+
+
+# --- the RULES, not just the outcomes -----------------------------------------
+# Task 1b: 12 of 14 mutants survived because tests pinned example outputs while
+# leaving the rule that produced them free to change.
+
+
+def test_only_a_leading_www_is_stripped(episode):
+    """`www` inside a host is part of the name. Pinning two happy examples left
+    `"www" in key` passing."""
+    assert C.key_for("https://www.reuters.com/x") == "reuters-com"
+    assert C.key_for("https://blog.wwwfoo.com/x") == "blog-wwwfoo-com"
+    assert C.key_for("https://wwwfoo.com/x") == "wwwfoo-com"
+
+
+def test_the_collision_suffix_format_is_stable(episode):
+    """Claims cite these keys. `a != b` left the format entirely unspecified."""
+    C.write_document(episode, "one", url="https://blog.google/x")
+    assert C.write_document(episode, "two", url="https://blog.google/y") == "blog-google-2"
+    assert C.write_document(episode, "three", url="https://blog.google/z") == "blog-google-3"
+
+
+def test_an_explicit_empty_key_is_refused_not_replaced(episode):
+    """`key=""` must not silently fall back to the host key. Invisible before
+    because the only test passing an explicit key also passed url=""."""
+    with pytest.raises(C.CorpusError):
+        C.write_document(episode, "x", url="https://blog.google/x", key="")
+
+
+def test_write_creates_the_sources_dir_when_absent(episode):
+    """Every fixture pre-created it, so dropping the mkdir broke nothing."""
+    import shutil
+
+    shutil.rmtree(episode.sources_dir)
+    C.write_document(episode, "one", url="https://blog.google/x")
+    assert (episode.sources_dir / "blog-google.txt").is_file()
+
+
+def test_fetched_at_is_a_plausible_timestamp(episode):
+    """Presence was asserted; plausibility was not — in the module whose reason
+    to exist is provenance."""
+    from datetime import datetime
+
+    C.write_document(episode, "one", url="https://blog.google/x")
+    stamp = C.read_manifest(episode)["blog-google"]["fetched_at"]
+    assert datetime.fromisoformat(stamp).year >= 2020
+
+
+def test_an_explicit_fetched_at_is_recorded_verbatim(episode):
+    C.write_document(
+        episode, "one", url="https://blog.google/x", fetched_at="2026-08-14T09:00:00+01:00"
+    )
+    assert C.read_manifest(episode)["blog-google"]["fetched_at"] == (
+        "2026-08-14T09:00:00+01:00"
+    )
+
+
+def test_a_subdirectory_is_not_an_orphan(episode):
+    """Dropping the is_file() skip made any directory read as a stray source."""
+    C.write_document(episode, "one", url="https://blog.google/x")
+    (episode.sources_dir / "cache").mkdir()
+    assert C.verify(episode) == []
+
+
+def test_a_manifest_whose_entries_are_not_objects_is_a_corpus_error(episode):
+    """`entry["url"]` would otherwise leak TypeError past the CorpusError
+    contract that every caller catches."""
+    import json
+
+    C.write_document(episode, "one", url="https://blog.google/x")
+    (episode.sources_dir / C.MANIFEST_NAME).write_text(
+        json.dumps({"blog-google": "not an object"}), encoding="utf-8"
+    )
+    with pytest.raises(C.CorpusError):
+        C.read_manifest(episode)
+
+
+def test_a_manifest_that_is_a_json_array_is_a_corpus_error(episode):
+    C.write_document(episode, "one", url="https://blog.google/x")
+    (episode.sources_dir / C.MANIFEST_NAME).write_text("[]", encoding="utf-8")
+    with pytest.raises(C.CorpusError):
+        C.read_manifest(episode)
