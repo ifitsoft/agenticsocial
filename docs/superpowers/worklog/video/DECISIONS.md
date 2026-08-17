@@ -1379,3 +1379,180 @@ test patches `R.subprocess.run`, but that is *convention* — exactly where
 **Generalisable:** an isolation guarantee must sit on a boundary you control. A
 guard on someone else's abstraction holds only until they change how they reach
 the network — and it fails silently, which is the worst way to learn.
+
+## D-068 · SPEC DEFECT · jumpChart's schema cannot describe the only jumpChart
+Spec §7.1 gave `jumpChart` the fields `before`, `after`, `scale`, `footnote` —
+a single bar. Leader-verified against the episode that actually rendered:
+
+```
+engine.js  : function jumpChart(rows, max, d0, parent)
+2026-08-14 : jumpChart([['FrontierCode 1.1', 34.4, 43.6, '<s>34.4</s> → 43.6'],
+                        ... four rows ...], 70, .5, chart)
+```
+
+**The spec's shape cannot express it.** Corrected to
+`rows[{label,before,after,shown}]`, `scale`, `footnote`.
+
+Found because the Task 1 brief pointed the implementer at the two committed
+episodes as *evidence*, not background — "a field neither the spec names nor a
+committed episode uses does not go in". It followed §7.1 as written, flagged the
+contradiction, and did not quietly invent a better shape. That is the correct
+behaviour and the reason the instruction was there.
+
+**The lesson for the rest of the spec:** I wrote §7.1 from the *design* of the
+beats, not from the code that renders them. Every other row in that table is
+suspect for the same reason, and Phase 4 will find out which. The catalogue in
+`script.py` currently encodes the wrong jumpChart shape — fixed in Phase 3 Task 2
+Step 0, before anything writes a script against it.
+
+## D-069 · phase 3 / task 1 · what is speculative in the catalogue
+Asked which fields it had to invent, the implementer produced the list Phase 4
+will need. Recording it so those failures are expected rather than surprising:
+
+- **`jumpChart`** — the spec defect above (D-068).
+- **`quote`** — `text`/`attribution`. **Neither committed episode has a quote
+  beat**; the whole type is spec-only, and `attribution` being *required* is a
+  reading, not a fact.
+- **`dumbbell.caption`** — nothing in `2026-08-12.js` plays that role.
+- **`kpis` item optionality** — `value`/`label` required, `unit`/`decimals`
+  optional is the implementer's split; the spec marks none.
+- **`custom.js`** — §7.1 also says "manual attestation required", which implies a
+  field nobody has named.
+
+It deliberately left `dumbbell.rows`' column shape unvalidated rather than invent
+it. Correct: an unvalidated field is a known gap, an invented one is a wrong
+answer that looks authoritative.
+
+## D-070 · phase 3 / task 1 · warm_acts stays unenforced, for a good reason
+Task 0 flagged `warm_acts` as the only cross-field invariant in `series.toml`.
+Task 1 declined to enforce it and the reasoning is right:
+
+> `2026-08-12.js` has `warmActs:['03 — Agents']` — that is the act **label**,
+> while `series.toml` would join on **id** (`"03"`). Enforcing a rule whose key
+> is ambiguous turns a soft problem into a hard failure on the wrong side.
+
+The join column is genuinely unsettled, and it is the *same* decision that gates
+validating a beat's `act` against the declared acts. Both wait for Phase 4 to
+decide whether beats name acts by id or by label. A warning, not an error, once
+it does.
+
+Also from that report, self-caught: its **first** edit to a plan test passed on
+the unfixed tree because the old message already contained both names it
+asserted — the same vacuity class as my interned-small-int defect two tasks ago.
+It noticed, strengthened the assertion to the phrase that actually distinguishes
+the two gates, and left a comment saying why.
+
+## D-071 · SPEC · comparison folding and claim-number extraction — HUMAN DECISION
+Running a real operator brief through the pipeline before Phase 5 exists surfaced
+two defects in spec §8.2 that synthetic fixtures could never have shown.
+
+**1. The source used non-breaking hyphens.** Leader-verified:
+
+```
+beat wrote  : 'raised prices on its flagship V4-Pro model'   U+002D
+source wrote: 'raised prices on its flagship V4‑Pro model'   U+2011
+```
+
+Two of six beats refused for quotes that were genuinely present. **NFKC does not
+fix this** — U+2011 is not a compatibility variant and survives normalisation
+unchanged. Verified.
+
+An LLM authoring beats emits ASCII punctuation; real sources emit typographic
+punctuation. Without folding, the mechanical pass **refuses correct claims
+routinely**, and a gate that cries wolf is one operators learn to override — D-040's
+failure mode arriving through the front door.
+
+Spec §8.2.1 now requires an explicit fold table (hyphen/dash family, both quote
+families, the space family, ellipsis) applied **to the comparison only**. The
+corpus keeps its bytes and `sha256` still covers the originals; normalising on
+disk would break the §4 integrity guarantee.
+
+**Why this cannot weaken the check, and why that argument is load-bearing:**
+folding touches punctuation and whitespace only. **No digit is ever folded.**
+Measured: with folding on, `1,400%`, `$9.32` and `9.4 trillion` are all still
+refused against a source saying `1,100%`, `$1.32` and `2.4 trillion`. The risk is
+strictly one-directional — folding can turn a false refusal into a pass, never a
+false claim into a verified one.
+
+**2. Product names contain digits that are not claims.** `V4-Pro`, `Qwen3.8-Max`,
+`GPT-5.6`. Demanding those digits appear in the quote is a second false-refusal
+generator. §8.2.2 now defines claim numbers by stripping punctuation, a leading
+currency symbol and a trailing unit suffix, then testing for digits-only.
+
+**My first draft of that rule was wrong and my own test caught it.** "A token with
+letters and digits is an identifier" exempts `1M` and `95B` — so a beat could
+claim `95B active` against a source saying `9B`. The unit-suffix strip is what
+makes the rule safe, and it exists because the rule was run against real text
+before any code was written.
+
+**Both defects came from one real brief.** Synthetic fixtures contain neither
+non-breaking hyphens nor product names, and I would have written Phase 5 against
+fixtures. Worth repeating the exercise with operator material before every phase
+that touches text.
+
+## D-072 · STANDING RULE · what makes a gate a guarantee — my D-063 framing was wrong
+I asked whether `check_runtime` should re-read the file like `disk_status` does.
+The Task 2 implementer refused both available answers and gave a better rule:
+
+> Separate **staleness** (an object loaded from a real file that has since
+> changed) from **forgery** (`Series(target_sec=1, tolerance_sec=10**9)` — one
+> line, and `frozen=True` is inert). **All four bypasses in this project were
+> forgery.** A re-read inside `check_runtime` could only use `series.dir` — from
+> the same object the value came from — so it defends the failure mode that has
+> never happened and not the one that has.
+
+And on the answer I was leaning toward:
+
+> "Callers load fresh" is *also* not a guarantee. It is a grep-discoverable
+> property of today's call sites, true until the first caller that is not a
+> one-shot CLI invocation.
+
+**The actual property**, which I had never stated correctly:
+
+> What makes `set_status` a guarantee is not that it re-reads. It is that **one
+> function reads the authority and performs the write it gates, with nothing in
+> between, and accepts no pre-loaded object for the value it checks.** Copying
+> only the re-read copies the shape without the property.
+
+**Standing rule, adopted:** a gate takes **identifiers, not objects**. Phase 7's
+approve must be `approve(ws, series_slug, ep_id)` — loading `series.toml` and
+`script.yaml` itself, immediately before the transition, with any confirmation
+prompt *before* the loads. Never `approve(series, episode)`.
+
+This generalises to every later gate; the re-read heuristic does not.
+`check_runtime` correctly stays a pure function — it reads nothing, writes
+nothing and decides nothing, so it is not a gate and does not need the property.
+
+## D-073 · phase 3 / task 2 · two totals disagree, and Phase 7 gates on one
+Mutation S19 survived until pace `0.3333` was used: **`build_plan.total_sec`
+reports 3.996 where `check_runtime` reports 4.0.** Every earlier test used holds
+whose product with pace was exact to three decimals, so per-beat rounding and
+end-rounding agreed and the discrepancy was invisible.
+
+Pinned: **`check_runtime` is the authority** for the duration gate. Recorded here
+because Phase 7 refuses on this number, and two functions quietly reporting
+different runtimes is exactly how a gate ends up arguing with itself.
+
+Also killed: **S10, dead code.** `beat_summary`'s generic fallback was unreachable
+because `title`/`signoff` carried inline ones. *"Dead code is code no test can be
+wrong about."* Removed rather than tested.
+
+## D-074 · phase 3 / task 2 · the review was unreadable and only running it showed that
+Rows came out **156 columns wide** — every row wrapping on a normal terminal —
+and the green suite had nothing to say about it. Fixing the rows left the footer
+at 156. Both are now pinned, with the table budgeted to a fixed 100 columns
+rather than grown to fit: 12 beats plus chrome is 19 lines, which fits a 24-line
+terminal without scrolling. **No paging or truncation** — paging destroys the
+scannability that is the whole point.
+
+**The biggest thing an operator still cannot see before approving is `quote`.**
+Spec §7.2's entire mechanism is "every numeric value appears inside `quote`", and
+`review` shows `src` but not what the source actually says. Ranked follow-ups
+from the same report: act ids unchecked against `[[structure.acts]]`; no per-act
+subtotals (when you are 40s over, the next question is always *where*);
+`script_sha256` not shown though Phase 7 binds approval to it.
+
+An honest caveat it volunteered: with `RENDERABLE == {"statement"}`, 10 of 12
+rows carry the cannot-render mark, so the margin flag is near-noise this phase
+and the footer does the real work. It becomes informative as `RENDERABLE` widens,
+and inverting it would be wrong the moment the ratio flips.

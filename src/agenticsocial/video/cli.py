@@ -1,6 +1,7 @@
 """`agsoc series` and `agsoc video` commands."""
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 from typing import Optional
 
@@ -11,7 +12,8 @@ from . import ingest as ingest_mod
 from . import render as render_mod
 from .episode import create_episode, episode_ids, load_episode
 from .models import EpisodeError, SeriesError
-from .plan import PlanError
+from .plan import PlanError, check_runtime
+from .script import RENDERABLE, Beat, ScriptError, load_script
 from .series import load_series, scaffold_series, series_slugs
 
 series_app = typer.Typer(help="Manage video series.", no_args_is_help=True)
@@ -221,6 +223,210 @@ def video_ingest(
         f"{result.brief_path}"
     )
     typer.echo(f"next: draft beats into {ep.script_path}")
+
+
+# --- `agsoc video review` -------------------------------------------------------
+#
+# The screen an operator reads before approving anything. Its job is to make the
+# episode scannable, so the display code is not decoration: a table an operator
+# cannot scan is a table they approve without reading, which defeats the gate
+# Phase 7 puts behind it.
+
+# The table is budgeted to a fixed total width rather than grown to fit its
+# content. The first real twelve-beat run came out 156 columns wide — every row
+# wrapped, and a table whose rows wrap is not a table. Columns are capped, the
+# text column absorbs whatever budget the others leave, and the whole row is one
+# screen line on any terminal an operator is plausibly using.
+ROW_WIDTH = 100
+ACT_WIDTH = 10
+TYPE_WIDTH = 9  # `statement` and `jumpChart`, the longest catalogue names
+SRC_WIDTH = 16  # inside the brackets — enough for a bare domain
+MIN_TEXT_WIDTH = 20
+LEAD = 8  # a space, the ! margin, two spaces, a two-digit index, two spaces
+
+# C0 controls and DEL, mapped to spaces. A YAML block scalar is how an operator
+# writes a long statement, and a raw newline in the text column destroys the
+# alignment that makes the table readable at all.
+_CONTROLS = {c: " " for c in list(range(0x20)) + [0x7F]}
+
+
+def _one_line(value: object) -> str:
+    return " ".join(str(value).translate(_CONTROLS).split())
+
+
+def _clip(value: str, width: int) -> str:
+    return value if len(value) <= width else value[: width - 1].rstrip() + "…"
+
+
+def _join(parts) -> str:
+    return " · ".join(p for p in (_one_line(x) for x in parts) if p)
+
+
+def _kpi(item: dict) -> str:
+    value, unit, label = item.get("value", ""), item.get("unit", ""), item.get("label", "")
+    head = f"{unit}{value}" if unit in ("$", "£", "€", "¥") else f"{value}{unit}"
+    return f"{head} {label}".strip()
+
+
+# One summariser per catalogue type. A dict rather than a chain of `if`s for the
+# same reason BEAT_TYPES is: adding a type in Phase 4 is a row here. There is no
+# `.get(type, "")` default anywhere below — a default is how a new type silently
+# gets a blank text column and stops being reviewable.
+SUMMARISERS = {
+    "statement": lambda b: _one_line(b.fields.get("text", "")),
+    "body": lambda b: _one_line(b.fields.get("text", "")),
+    "list": lambda b: _join([b.fields.get("lead", ""), *b.fields.get("items", [])]),
+    "kpis": lambda b: _join(_kpi(i) for i in b.fields.get("items", [])),
+    "jumpChart": lambda b: _join(r.get("label", "") for r in b.fields.get("rows", [])),
+    "dumbbell": lambda b: _one_line(b.fields.get("caption", "")),
+    "quote": lambda b: _one_line(
+        f"“{b.fields.get('text', '')}” — {b.fields.get('attribution', '')}"
+    ),
+    # `title` and `signoff` are the two types whose only fields are optional, so
+    # these are the two summarisers that can legitimately come back empty. They
+    # do NOT carry their own fallback: one fallback, in beat_summary, is
+    # reachable and therefore testable — two would leave the outer one dead.
+    "title": lambda b: _one_line(b.fields.get("sub", "")),
+    "signoff": lambda b: _one_line(b.fields.get("text", "")),
+    "custom": lambda b: _one_line(b.fields.get("js", "")),
+}
+
+
+def beat_summary(beat: Beat) -> str:
+    """One scannable line of what this beat says. Never empty."""
+    summarise = SUMMARISERS.get(beat.type)
+    return (summarise(beat) if summarise else "") or f"({beat.type})"
+
+
+def _pace(value: float) -> str:
+    """`pace: 2.0` in the file must not print as `pace 2`.
+
+    Same rule as R1's negative on holds: every number on this screen should be
+    findable in the file the operator is about to edit. `:g` drops the decimal
+    point and quietly stops matching what they typed.
+    """
+    rendered = f"{value:g}"
+    return rendered if "." in rendered else rendered + ".0"
+
+
+def _plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _review_table(beats) -> list[str]:
+    """One screen line per beat, inside ROW_WIDTH columns.
+
+    `src` gets its own right-hand column rather than being appended after the
+    text: §7.2 makes the source the thing an approver actually checks, and a
+    column you scan down the page is checkable in a way a ragged tail is not.
+    It only appears when some beat has one — an empty column on every row of
+    a title-and-statement episode is just noise.
+    """
+    act_w = min(ACT_WIDTH, max(3, *(len(_one_line(b.act)) for b in beats)))
+    type_w = min(TYPE_WIDTH, max(4, *(len(b.type) for b in beats)))
+    src_cell = SRC_WIDTH + 2 if any(b.src for b in beats) else 0
+    text_w = max(
+        MIN_TEXT_WIDTH,
+        ROW_WIDTH - LEAD - act_w - 2 - type_w - 2 - 5 - 2 - (src_cell + 2 if src_cell else 0),
+    )
+
+    head = f"    {'#':>2}  {'act':<{act_w}}  {'type':<{type_w}}  {'hold':>5}  {'text':<{text_w}}"
+    lines = [(head + "  src" if src_cell else head).rstrip()]
+    for b in beats:
+        # `!` marks a beat this phase cannot draw. Not an error — see the
+        # command docstring — so it is a margin mark, not a message.
+        flag = " " if b.type in RENDERABLE else "!"
+        src = f"[{_clip(_one_line(b.src), SRC_WIDTH)}]" if b.src else ""
+        row = (
+            f" {flag}  {b.index:>2}  {_clip(_one_line(b.act), act_w):<{act_w}}  "
+            f"{_clip(b.type, type_w):<{type_w}}  {b.hold:>5.1f}  "
+            f"{_clip(beat_summary(b), text_w):<{text_w}}"
+        )
+        lines.append((f"{row}  {src}" if src_cell else row).rstrip())
+    return lines
+
+
+@video_app.command("review")
+def video_review(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+) -> None:
+    """Report what you are about to approve: beats, holds, runtime, verdict.
+
+    A REPORT, not a gate. It exits 0 whether the runtime is in tolerance or
+    out, and whether or not the script contains beats this phase cannot draw.
+    Spec §11 puts the gate at `approve`; a diagnostic command that refuses to
+    speak when something is wrong is the D-018 mistake in a new place — it
+    takes away the one screen that would have explained the problem.
+
+    Writes nothing: not script.yaml, not plan.json, not a derived pace. The
+    script's BYTES are what `script_sha256` binds (D-026), so a command that
+    ran before approval and touched them would have changed what the operator
+    was approving by looking at it.
+
+    Everything it reports is loaded fresh from disk on every invocation — see
+    `plan.check_runtime` on D-063.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    try:
+        s = load_series(ws, series)
+        ep = load_episode(s, episode)
+        script = load_script(ep)
+    except (SeriesError, EpisodeError, ScriptError) as e:
+        # NOT the out-of-tolerance path. An unreadable script is a report that
+        # cannot be produced; printing a runtime for a file nobody parsed would
+        # be worse than failing.
+        raise _fail(str(e))
+
+    check = check_runtime(script, s)
+    beats = script.beats
+
+    typer.echo(
+        f"{s.slug}/{ep.id} · {ep.status.value} · {_plural(len(beats), 'beat')} · "
+        f"pace {_pace(script.pace)}"
+    )
+    typer.echo("")
+    for line in _review_table(beats):
+        typer.echo(line)
+    typer.echo("")
+
+    held = sum(b.hold for b in beats)
+    typer.echo(
+        f"holds {held:.1f}s × pace {_pace(script.pace)} = "
+        f"runtime {check.total_sec:.1f}s"
+    )
+    verdict = "within tolerance" if check.within else "OUT OF TOLERANCE"
+    typer.secho(
+        f"target {check.target_sec}s ± {check.tolerance_sec}s · "
+        f"{verdict} ({check.delta:+.1f}s)",
+        fg=typer.colors.GREEN if check.within else typer.colors.YELLOW,
+    )
+
+    # Valid beats this phase cannot draw yet. Named, counted, and NOT treated as
+    # an operator error: the fix is to implement the renderer, not to edit the
+    # script. Silent when there are none — a warning that fires on every healthy
+    # episode is one operators learn to scroll past.
+    pending: dict[str, int] = {}
+    for b in beats:
+        if b.type not in RENDERABLE:
+            pending[b.type] = pending.get(b.type, 0) + 1
+    if pending:
+        listed = ", ".join(
+            f"{k} ({n})" for k, n in sorted(pending.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        # Wrapped to the same budget as the table. Nine catalogue types and
+        # their counts is 156 columns on one line, which is the table problem
+        # again in the one place a reader is most likely to skip.
+        typer.echo(
+            textwrap.fill(
+                f"{_plural(sum(pending.values()), 'beat')} cannot be rendered yet "
+                f"— marked ! above: {listed}",
+                width=ROW_WIDTH,
+                subsequent_indent="    ",
+            )
+        )
 
 
 @video_app.command("preview")

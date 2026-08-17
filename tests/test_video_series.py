@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -15,6 +16,13 @@ def ws(tmp_path):
 def _write_series(ws, slug, body):
     d = ws.series_dir / slug
     (d / "episodes").mkdir(parents=True)
+    (d / "series.toml").write_text(body, encoding="utf-8")
+
+
+def _write_series_overwrite(ws, slug, body):
+    d = ws.series_dir / slug
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "episodes").mkdir(exist_ok=True)
     (d / "series.toml").write_text(body, encoding="utf-8")
 
 
@@ -456,3 +464,99 @@ def test_series_runtime_targets_cannot_be_assigned(ws):
         s.target_sec = 9999
     with pytest.raises(dataclasses.FrozenInstanceError):
         s.tolerance_sec = 9999
+
+
+# --- fields that become gate inputs this phase (D-025, D-063) ------------------
+
+
+@pytest.mark.parametrize("bad", ['"eight"', "-1", "true", "1.5"])
+def test_bad_tolerance_sec_is_rejected(ws, bad):
+    """precondition: no other field is invalid, so only tolerance_sec can fail.
+    Phase 3 gates runtime on this value; target_sec one line above is strictly
+    validated for exactly this reason."""
+    _write_series(ws, "bad", f'[series]\nname = "B"\n\n[runtime]\ntolerance_sec = {bad}\n')
+    with pytest.raises(SeriesError, match="tolerance_sec"):
+        load_series(ws, "bad")
+
+
+def test_zero_tolerance_is_valid(ws):
+    """R1 NEGATIVE: a series demanding an exact runtime is legitimate, and a
+    naive `> 0` check would reject it."""
+    _write_series(ws, "exact", '[series]\nname = "E"\n\n[runtime]\ntolerance_sec = 0\n')
+    assert load_series(ws, "exact").tolerance_sec == 0
+
+
+@pytest.mark.parametrize("bad", ['"shouty"', "5", "true"])
+def test_unknown_register_is_rejected(ws, bad):
+    """precondition: register is the only invalid field. Phase 4 BRANCHES on
+    this; a typo must not silently select a default."""
+    _write_series(ws, "bad", f'[series]\nname = "B"\n\n[series]\n')  # placeholder
+    _write_series_overwrite(ws, "bad", f'[series]\nname = "B"\nregister = {bad}\n')
+    with pytest.raises(SeriesError, match="register"):
+        load_series(ws, "bad")
+
+
+def test_both_registers_in_the_spec_are_accepted(ws):
+    for value in ("reported", "first-person"):
+        slug = "r-" + value.replace("-", "")
+        _write_series(ws, slug, f'[series]\nname = "R"\nregister = "{value}"\n')
+        assert load_series(ws, slug).register == value
+
+
+def test_cadence_stays_free_form(ws):
+    """R2 NEGATIVE: cadence is explicitly advisory (spec 6) — nothing branches
+    on it, so validating it would reject a legitimate 'fortnightly'."""
+    _write_series(ws, "c", '[series]\nname = "C"\ncadence = "fortnightly"\n')
+    assert load_series(ws, "c").cadence == "fortnightly"
+
+
+@pytest.mark.parametrize("field", ["name", "byline"])
+@pytest.mark.parametrize("bad", ["5", "[\"a\"]", "true"])
+def test_non_string_text_fields_are_rejected(ws, field, bad):
+    """precondition: the field is present. A non-string name reaches _toml_str
+    on the next scaffold and raises TypeError far from here."""
+    _write_series(ws, "bad", f'[series]\n{field} = {bad}\n')
+    with pytest.raises(SeriesError, match=field):
+        load_series(ws, "bad")
+
+
+def test_absent_text_fields_still_default(ws):
+    """R3 NEGATIVE: absent is not the same as wrong-typed."""
+    _write_series(ws, "min", "[series]\n")
+    s = load_series(ws, "min")
+    assert s.name == "min" and s.byline == ""
+
+
+def test_one_length_limit_shared_by_both_modules(ws):
+    """R4. Two separate 64s will drift exactly as D-036 predicts — that pattern
+    has produced five defects in this project."""
+    from agenticsocial.video import episode as E
+    from agenticsocial.video import series as S
+
+    assert S.MAX_NAME_LEN is E.MAX_ID_LEN
+
+
+def test_episode_does_not_redeclare_the_length_limit():
+    """R4, structurally. `S.MAX_NAME_LEN is E.MAX_ID_LEN` cannot detect a
+    duplicated definition: CPython interns small ints, so `64 is 64` is True
+    and two independent `= 64` literals satisfy it. Only the absence of a
+    second definition actually pins one constant."""
+    from pathlib import Path
+
+    from agenticsocial.video import episode as E
+
+    src = Path(E.__file__).read_text(encoding="utf-8")
+    assert "from .series import MAX_NAME_LEN as MAX_ID_LEN" in src
+    assert not re.search(r"^MAX_ID_LEN\s*=", src, re.MULTILINE)
+
+
+@pytest.mark.parametrize("field", ["name", "byline"])
+@pytest.mark.parametrize("bad", ["0", "false", "[]", "0.0"])
+def test_falsy_non_string_text_fields_are_rejected(ws, field, bad):
+    """Mutation sweep: `if value:` in place of `if value is not None:` survived
+    the brief's cases, because every one of them is truthy. `name = 0` would
+    then load and reach _toml_str on the next scaffold — the exact TypeError
+    the check exists to prevent."""
+    _write_series(ws, "bad", f'[series]\n{field} = {bad}\n')
+    with pytest.raises(SeriesError, match=field):
+        load_series(ws, "bad")

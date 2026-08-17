@@ -121,12 +121,19 @@ def test_design_tokens_come_from_the_series(series):
 
 
 def test_unsupported_beat_type_is_refused_by_name(series):
+    """Phase 3 split the schema (script.py) from resolution (plan.py), so a
+    valid-but-unrenderable type reaches plan.py and is refused THERE. `title`
+    is used rather than `jumpChart` because jumpChart now fails the schema
+    first — that would test the wrong gate."""
     ep = create_episode(series, "2026-08-14")
-    _script(ep, "beats:\n  - type: jumpChart\n    text: x\n")
+    _script(ep, "beats:\n  - type: title\n    sub: x\n")
     with pytest.raises(PlanError) as e:
         build_plan(series, load_episode(series, "2026-08-14"))
-    assert "jumpChart" in str(e.value)
+    assert "title" in str(e.value)
     assert "statement" in str(e.value)
+    # Without this line the edit is vacuous: the pre-split message already
+    # named both types, so the test would pass on the unsplit tree.
+    assert "cannot be rendered yet" in str(e.value)
 
 
 def test_beat_without_a_type_is_refused(series):

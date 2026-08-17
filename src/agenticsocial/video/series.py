@@ -12,6 +12,11 @@ from .models import FORMATS, Series, SeriesError
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 MAX_NAME_LEN = 64
 
+# Phase 4 selects voice rules from `register`, so a typo must not silently pick
+# a default. `cadence` is deliberately NOT validated: spec §6 marks it advisory
+# and nothing branches on it, so a legitimate "fortnightly" must still load.
+REGISTERS = ("reported", "first-person")
+
 SERIES_TEMPLATE = """\
 [series]
 name       = {name}
@@ -185,6 +190,33 @@ def load_series(ws: Workspace, slug: str) -> Series:
     if isinstance(target_sec, bool) or not isinstance(target_sec, int) or target_sec <= 0:
         raise SeriesError(f"{path}: [runtime] target_sec must be a positive integer")
 
+    tolerance_sec = runtime.get("tolerance_sec", 8)
+    if (
+        isinstance(tolerance_sec, bool)
+        or not isinstance(tolerance_sec, int)
+        or tolerance_sec < 0
+    ):
+        raise SeriesError(
+            f"{path}: [runtime] tolerance_sec must be a non-negative integer "
+            "(0 means the runtime must match target_sec exactly)"
+        )
+
+    register = meta.get("register", "reported")
+    if register not in REGISTERS:
+        raise SeriesError(
+            f"{path}: [series] register must be one of "
+            f"{', '.join(REGISTERS)} — got {register!r}. "
+            "Phase 4 selects voice rules from this value."
+        )
+
+    for field in ("name", "byline"):
+        value = meta.get(field)
+        if value is not None and not isinstance(value, str):
+            raise SeriesError(
+                f"{path}: [series] {field} must be a string, got "
+                f"{type(value).__name__}"
+            )
+
     acts = structure.get("acts", [])
     if not isinstance(acts, list) or not all(isinstance(a, dict) for a in acts):
         raise SeriesError(
@@ -204,9 +236,9 @@ def load_series(ws: Workspace, slug: str) -> Series:
         dir=d,
         byline=meta.get("byline", ""),
         cadence=meta.get("cadence", "daily"),
-        register=meta.get("register", "reported"),
+        register=register,
         target_sec=target_sec,
-        tolerance_sec=runtime.get("tolerance_sec", 8),
+        tolerance_sec=tolerance_sec,
         formats=formats,
         design=design,
         acts=acts,
