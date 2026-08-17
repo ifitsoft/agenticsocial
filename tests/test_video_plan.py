@@ -124,14 +124,15 @@ def test_design_tokens_come_from_the_series(series):
 
 def test_unsupported_beat_type_is_refused_by_name(series):
     """Phase 3 split the schema (script.py) from resolution (plan.py), so a
-    valid-but-unrenderable type reaches plan.py and is refused THERE. `title`
+    valid-but-unrenderable type reaches plan.py and is refused THERE. `custom`
     is used rather than `jumpChart` because jumpChart now fails the schema
-    first — that would test the wrong gate."""
+    first — that would test the wrong gate — and rather than `title`, which
+    Phase 4 can now draw."""
     ep = create_episode(series, "2026-08-14")
-    _script(ep, "beats:\n  - type: title\n    sub: x\n")
+    _script(ep, "beats:\n  - type: custom\n    js: x\n")
     with pytest.raises(PlanError) as e:
         build_plan(series, load_episode(series, "2026-08-14"))
-    assert "title" in str(e.value)
+    assert "custom" in str(e.value)
     assert "statement" in str(e.value)
     # Without this line the edit is vacuous: the pre-split message already
     # named both types, so the test would pass on the unsplit tree.
@@ -216,8 +217,12 @@ def test_building_a_plan_never_rewrites_the_script(series):
     assert ep.script_path.read_bytes() == before
 
 
-def test_supported_beats_is_exactly_statement_for_this_phase():
-    assert SUPPORTED_BEATS == frozenset({"statement"})
+def test_supported_beats_is_exactly_this_phases_types():
+    """Phase 4 widens the gate from one type to six. Pinned so that widening it
+    again is a deliberate edit and not a side effect of adding a builder."""
+    assert SUPPORTED_BEATS == frozenset(
+        {"statement", "body", "list", "quote", "title", "signoff"}
+    )
 
 
 # --- added by the implementer: vacuity fixes, see report section 5 -----------
@@ -233,6 +238,9 @@ def test_top_level_keys_are_exactly_the_documented_ones_in_order(series):
     assert list(plan) == [
         "episode",
         "series",
+        # Phase 4: the title and signoff cards render the display name, so it
+        # travels next to the slug it belongs to rather than at the end.
+        "series_name",
         "byline",
         "script_sha256",
         "format",
@@ -679,3 +687,130 @@ def test_planbuild_actually_passes_the_label_to_scene():
     )
     assert proc.returncode == 0, proc.stderr
     assert _json.loads(proc.stdout) == ["01 — The headline", "07", ""]
+
+
+# --- Phase 4: the plan carries every renderable type's own fields ---------------
+#
+# Until this phase every renderable beat was a `statement`, so `plan.json` could
+# emit one hard-coded `text` key. A `list` has `items`, a `quote` has an
+# `attribution`, a `title` has neither — and a field that never reaches
+# plan.json is a field the renderer cannot draw, however well the schema
+# validates it.
+
+FIVE_TYPES = """beats:
+  - type: title
+    hold: 3.0
+    sub: Five stories from the last 24 hours.
+  - type: body
+    hold: 3.0
+    text: It costs **half** of what 3.6 Flash did.
+  - type: list
+    hold: 3.0
+    lead: Live today in
+    items:
+      - Gemini API & AI Studio
+      - Antigravity
+  - type: quote
+    hold: 3.0
+    text: Gemini 3.7 Flash is our new workhorse model
+    attribution: Google
+  - type: signoff
+    hold: 3.0
+    text: Same time tomorrow.
+"""
+
+
+def _beats_by_type(series):
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, FIVE_TYPES)
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    return {b["type"]: b for b in plan["beats"]}
+
+
+def test_a_list_beat_carries_its_items_and_lead(series):
+    """M6/M7 upstream of Node: a builder cannot render a field the plan dropped."""
+    b = _beats_by_type(series)["list"]
+    assert b["items"] == ["Gemini API & AI Studio", "Antigravity"]
+    assert b["lead"] == "Live today in"
+
+
+def test_a_quote_beat_carries_its_attribution(series):
+    """M8 upstream of Node."""
+    b = _beats_by_type(series)["quote"]
+    assert b["text"] == "Gemini 3.7 Flash is our new workhorse model"
+    assert b["attribution"] == "Google"
+
+
+def test_a_title_beat_carries_its_sub_and_no_text_key(series):
+    """`title` has no `text` field at all. Emitting one — empty, or copied from
+    somewhere — would invent content the operator did not write, which is the
+    same divergence as dropping it."""
+    b = _beats_by_type(series)["title"]
+    assert b["sub"] == "Five stories from the last 24 hours."
+    assert "text" not in b
+
+
+def test_a_signoff_beat_carries_its_optional_text(series):
+    assert _beats_by_type(series)["signoff"]["text"] == "Same time tomorrow."
+
+
+def test_an_omitted_optional_field_is_omitted_not_blanked(series):
+    """`sub: ""` is a title card with a deliberately blank subtitle; a missing
+    `sub` is a card that has none. script.py keeps them distinct on purpose and
+    plan.json must not collapse them."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, "beats:\n  - type: title\n    hold: 3.0\n")
+    b = build_plan(series, load_episode(series, "2026-08-14"))["beats"][0]
+    assert "sub" not in b
+
+
+def test_bold_markers_reach_the_plan_unaltered(series):
+    """`**` is markup the ENGINE resolves. Python touching it would put the
+    conversion in two places, and script.yaml's bytes are what Phase 5 verifies."""
+    assert _beats_by_type(series)["body"]["text"] == (
+        "It costs **half** of what 3.6 Flash did."
+    )
+
+
+def test_type_fields_sit_between_kicker_and_src(series):
+    """The documented order is prefix, kicker, the type's own fields, src —
+    `==` on a dict cannot see a reordering."""
+    b = _beats_by_type(series)["list"]
+    assert list(b) == [
+        "type",
+        "act",
+        "act_label",
+        "hold",
+        "start",
+        "end",
+        "start_frame",
+        "end_frame",
+        "kicker",
+        "items",
+        "lead",
+        "src",
+    ]
+
+
+def test_claim_override_does_not_leak_into_the_plan(series):
+    """`claim_override` rides in `Beat.fields` because the dataclass has no slot
+    for it, but it is Phase 5's verification input, not content. The renderer
+    must not be able to draw it."""
+    ep = create_episode(series, "2026-08-14")
+    _script(
+        ep,
+        "beats:\n  - type: body\n    hold: 3.0\n    text: t\n"
+        "    claim_override: not a claim\n",
+    )
+    b = build_plan(series, load_episode(series, "2026-08-14"))["beats"][0]
+    assert "claim_override" not in b
+
+
+def test_the_plan_carries_the_series_display_name(series):
+    """The title and signoff cards put the series NAME on screen at 150px. The
+    slug is a filesystem key — `the-brief` is not what the brand card says."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    assert plan["series"] == "the-brief"
+    assert plan["series_name"] == "The Brief"

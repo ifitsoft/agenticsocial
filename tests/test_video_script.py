@@ -178,10 +178,13 @@ def test_renderable_is_a_subset_of_the_catalogue():
     assert S.RENDERABLE <= set(S.BEAT_TYPES)
 
 
-def test_renderable_is_exactly_statement_for_this_phase():
-    """precondition: Phase 3 renders one beat type. This pins the gate so that
-    widening it is a deliberate edit."""
-    assert S.RENDERABLE == frozenset({"statement"})
+def test_renderable_is_exactly_this_phases_types():
+    """precondition: Phase 4 renders six of the ten catalogue types. This pins
+    the gate so that widening it is a deliberate edit — `kpis`, `jumpChart`,
+    `dumbbell` and `custom` still have no builder in planbuild.js."""
+    assert S.RENDERABLE == frozenset(
+        {"statement", "body", "list", "quote", "title", "signoff"}
+    )
 
 
 # --- D-068: jumpChart is a list of bars, not one bar ----------------------------

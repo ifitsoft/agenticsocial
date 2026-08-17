@@ -235,3 +235,231 @@ def test_statement_text_and_kicker_are_both_prose():
     assert shown([n for n in flatten(tree) if n["tag"] == "h1"][0]) == (
         "1 &lt; 2 &amp; <b>true</b>"
     )
+
+
+# --- Step 1: the five new builders ----------------------------------------------
+# One mutant per assertion, from the table in the brief. The recurring failure
+# these are written against is not a crash: it is a builder that renders SOME of
+# its beat and drops the rest, which looks like a design choice on screen.
+
+
+@needs_node
+def test_every_renderable_type_has_a_builder():
+    """precondition (M10, and the D-036 drift pattern). `RENDERABLE` is Python's
+    promise that plan.py may emit a type; `BUILDERS` is Node's promise that it
+    can draw one. Two lists, one meaning: the phase they diverge in is the phase
+    where a beat reaches the stage and silently renders nothing."""
+    from agenticsocial.video.script import RENDERABLE
+
+    builders = _node(expr="Object.keys(BUILDERS)")["value"]
+    assert set(builders) == set(RENDERABLE)
+
+
+RENDERABLE_BEATS = {
+    "statement": {"text": "a statement"},
+    "body": {"text": "a body line"},
+    "list": {"items": ["one", "two"]},
+    "quote": {"text": "a quoted sentence", "attribution": "Someone"},
+    "title": {},
+    "signoff": {},
+}
+
+
+@needs_node
+@pytest.mark.parametrize("kind", sorted(RENDERABLE_BEATS))
+def test_every_type_renders_visible_content(kind):
+    """R3 (M10). The minimal legal beat of every type puts something on the
+    stage and animates it. A builder that returns before appending, or appends
+    without registering an animation, leaves a card that is blank or frozen at
+    opacity 0 — and `__seek(t)` still returns cleanly."""
+    scene = build([beat(kind, **RENDERABLE_BEATS[kind])])[0]
+    assert scene["tree"]["kids"], f"{kind} appended nothing"
+    assert scene["anims"], f"{kind} animated nothing"
+
+
+@needs_node
+def test_body_renders_its_text_as_prose():
+    """M1. `.body` is the class both committed episodes use for a paragraph,
+    and `.body b` is styled there — which is what makes `**bold**` land."""
+    tree = build([beat("body", text="costs **half** of 3.6 & rising")])[0]["tree"]
+    assert shown(find(tree, "body")[0]) == "costs <b>half</b> of 3.6 &amp; rising"
+
+
+@needs_node
+def test_body_renders_its_kicker_too():
+    tree = build([beat("body", text="t", kicker="Why it matters")])[0]["tree"]
+    assert shown(find(tree, "kicker")[0]) == "Why it matters"
+
+
+@needs_node
+def test_list_renders_every_item():
+    """M6. `lead` is optional and `items` is the required field — a builder that
+    draws the lead and stops renders the introduction to a list that is not
+    there."""
+    tree = build([beat("list", lead="Live today in", items=["A", "B", "C"])])[0]["tree"]
+    assert [shown(n) for n in flatten(tree) if n["tag"] == "span"] == ["A", "B", "C"]
+
+
+@needs_node
+def test_list_renders_its_lead_when_items_exist():
+    """M7. The mirror image: the items arrive and the sentence that framed them
+    is gone, which reads on screen as a list with no subject."""
+    tree = build([beat("list", lead="Tuned for **agents** & code", items=["A"])])[0][
+        "tree"
+    ]
+    assert shown(find(tree, "body")[0]) == "Tuned for <b>agents</b> &amp; code"
+
+
+@needs_node
+def test_list_items_are_prose_not_markup():
+    """M2, inside a list. The items are the field most likely to carry a raw
+    `<tag>` — they are names of things."""
+    tree = build([beat("list", items=["<think> mode", "AT&T"])])[0]["tree"]
+    assert [shown(n) for n in flatten(tree) if n["tag"] == "span"] == [
+        "&lt;think&gt; mode",
+        "AT&amp;T",
+    ]
+
+
+@needs_node
+def test_a_list_without_a_lead_still_renders_its_items():
+    """R3 NEGATIVE. `lead` is optional in the catalogue; its absence must not
+    take the items with it."""
+    tree = build([beat("list", items=["only"])])[0]["tree"]
+    assert [shown(n) for n in flatten(tree) if n["tag"] == "span"] == ["only"]
+    assert not find(tree, "body")
+
+
+@needs_node
+def test_list_uses_the_stack_classes_the_stage_already_styles():
+    """`.stack`/`.item` carry the bullet and the slide-in geometry. A div with
+    the right text and the wrong class renders as unstyled 16px text."""
+    tree = build([beat("list", items=["A", "B"])])[0]["tree"]
+    assert find(tree, "stack sm"), "no .stack"
+    assert len(find(tree, "item")) == 2
+    assert [n["tag"] for n in flatten(tree) if n["tag"] == "i"] == ["i", "i"]
+
+
+@needs_node
+def test_quote_renders_both_the_words_and_the_attribution():
+    """M8. Spec §7.1 marks `quote` verifiable VERBATIM — an unattributed
+    verbatim quotation is the one thing this beat exists to prevent."""
+    scene = build(
+        [beat("quote", text="It is a **workhorse** model", attribution="Sundar Pichai")]
+    )[0]
+    rendered = [shown(n) for n in flatten(scene["tree"])]
+    assert "It is a <b>workhorse</b> model" in rendered
+    assert "Sundar Pichai" in rendered
+
+
+@needs_node
+def test_quote_draws_a_rule_between_the_words_and_the_name():
+    """Spec §7.1 gives `quote` the motion "fade + rule draw"."""
+    scene = build([beat("quote", text="t", attribution="A")])[0]
+    assert any(a["kind"] == "draw" for a in scene["anims"])
+    assert find(scene["tree"], "rule blue")
+
+
+@needs_node
+def test_a_bare_title_still_renders_a_card():
+    """M9, R3 NEGATIVE. `title` has NO required fields — `sub` is optional and
+    the spec's own cold-open title beat carries only a `hold`. A builder keyed
+    off its text renders an empty stage for a legal beat."""
+    tree = build([beat("title")], series_name="The Brief")[0]["tree"]
+    assert shown(find(tree, "big-title")[0]) == "THE BRIEF"
+    assert find(tree, "byline")
+
+
+@needs_node
+def test_title_renders_its_subtitle_when_it_has_one():
+    tree = build([beat("title", sub="Five stories from **24 hours**")], series_name="X")[
+        0
+    ]["tree"]
+    assert shown(find(tree, "body")[0]) == "Five stories from <b>24 hours</b>"
+
+
+@needs_node
+def test_a_bare_signoff_still_renders_a_card():
+    """M9's other half — `signoff`'s only field is optional too."""
+    tree = build([beat("signoff")], series_name="The Brief")[0]["tree"]
+    assert shown(find(tree, "big-title")[0]) == "THE BRIEF"
+
+
+@needs_node
+def test_signoff_renders_its_closing_line():
+    tree = build([beat("signoff", text="Same time & place")], series_name="X")[0]["tree"]
+    assert "Same time &amp; place" in [shown(n) for n in flatten(tree["kids"][0])] + [
+        shown(n) for n in flatten(tree)
+    ]
+
+
+@needs_node
+def test_the_title_card_falls_back_to_the_slug_when_there_is_no_name():
+    """A plan written before `series_name` existed still renders a title card
+    rather than a blank one."""
+    tree = build([beat("title")])[0]["tree"]
+    assert shown(find(tree, "big-title")[0]) == "THE-BRIEF"
+
+
+# --- R1 negative: the documented HTML override stays HTML ------------------------
+
+
+@needs_node
+def test_jumpchart_shown_is_still_rendered_as_html():
+    """M5. `shown` is a documented display override, not prose: the committed
+    2026-08-14 episode renders `<s>34.4</s> &rarr; 43.6` through it and depends
+    on both the strikethrough and the entity. Escaping every string in the
+    engine would put the tags on screen."""
+    out = _node(
+        expr=(
+            "(() => { const p = document.createElement('div');"
+            " jumpChart([['FrontierCode 1.1', 34.4, 43.6,"
+            " '<s>34.4</s> &rarr; 43.6']], 70, 0.5, p);"
+            " const walk = (n) => [n, ...n.kids.flatMap(walk)];"
+            " return walk(p).filter((n) => n.className === 'jval')"
+            "   .map((n) => n.innerHTML); })()"
+        )
+    )["value"]
+    assert out == ["<s>34.4</s> &rarr; 43.6"]
+
+
+# --- R4: the engine does no timing arithmetic ------------------------------------
+
+
+@needs_node
+def test_meta_pace_stays_one_however_the_plan_is_paced():
+    """M11, R4 NEGATIVE. `hold` in plan.json is ALREADY scaled by pace in
+    Python. Passing the plan's pace to META would scale it a second time, and
+    the render would silently disagree with the plan's own total_sec — which is
+    what `agsoc video review` showed the operator before they approved."""
+    meta = _node(
+        plan={
+            "episode": "2026-08-16",
+            "series": "the-brief",
+            "byline": "",
+            "pace": 2.5,
+            "beats": [beat(text="t")],
+        }
+    )["meta"]
+    assert meta["pace"] == 1
+
+
+@needs_node
+def test_an_unrenderable_type_still_fails_loudly():
+    """R3's guard. Widening the builder table must not turn the gate into a
+    silent skip: a `kpis` beat that reaches Node is a plan.py bug, and a beat
+    quietly missing from the video is the hardest kind to notice."""
+    proc = subprocess.run(
+        ["node", "-e", HARNESS],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "ENGINE": str(ENGINE),
+            "PLAN": json.dumps(
+                {"episode": "e", "series": "s", "byline": "", "beats": [beat("kpis")]}
+            ),
+        },
+    )
+    assert proc.returncode != 0
+    assert "kpis" in proc.stderr
