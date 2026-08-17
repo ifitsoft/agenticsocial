@@ -634,3 +634,92 @@ discovered that rich interleaves ANSI escapes *inside* the literal string
 `Traceback (most recent call last)`, which defeated its first detector. It said
 so rather than trusting its own tooling — the same instinct that makes the rest
 of its report worth reading.
+
+## D-038 · phase 1 / task 5 · workspace escape, verified. Naming ≠ path safety
+Leader-verified against the real CLI:
+
+```
+$ agsoc video new 2026-08-14 --series ../../outside
+created episode ../../outside/2026-08-14 …
+*** ESCAPED WORKSPACE *** /private/tmp/t5c/outside/episodes/2026-08-14/script.yaml
+```
+
+`scaffold_series` calls `_validate_slug`; **`load_series` does not** — and
+`video new --series` reaches `create_episode` through `load_series`. It escapes
+only when the traversal target is itself a valid series directory, which is why
+my first probe reported it safe: the OS returns ENOENT through a missing
+component. I reproduced the implementer's exact condition rather than trusting
+either result.
+
+**24 traceback probes missed it because it is not a crash. It succeeds.** A
+correctness sweep that only looks for exceptions cannot see a function doing the
+wrong thing calmly.
+
+**The fix introduces a distinction that was missing:**
+
+- **Naming rules** govern what agsoc will *create* — lowercase, digits, hyphens,
+  length cap. `scaffold_series` only.
+- **Path safety** governs what agsoc will *touch* — every function turning a
+  caller-supplied name into a path: `load_series`, `load_episode`,
+  `resolve_episode`, both creators.
+
+Kept separate deliberately. A directory a human named `My-Show` must stay
+loadable; `../../outside` must not, whoever made it. Folding path safety into
+`_validate_slug` would have broken the first case to fix the second.
+
+**Third instance of D-036.** `episode.py` has had three tasks of attention;
+`series.py` receives each fix late or never. Task 5 ends with a mandatory
+function-by-function sweep of both modules, and I asked for a long list rather
+than a clean bill of health.
+
+## D-039 · phase 1 / task 4b · adjudication, including two of my own errors
+279 tests. 3 of 5 mutants killed, and **both survivors were my specification
+errors, not gaps in the work**:
+
+- **Mutant 1 (`catch_exceptions=False`) is mis-specified.** It only matters when
+  something raises; against fixed code it is a semantic no-op no test can kill.
+  It is a mutant of the *detector*, so it must be run combined with a code
+  mutant. The implementer ran my version as written, then constructed the correct
+  combination itself using Task 4's actual survivor: killed under the new
+  harness, **passes under the old one**. Same test, same code, different harness.
+  That is the proof I asked for, obtained despite my brief rather than because
+  of it.
+- **Mutant 4 (length cap) survived for a subtle reason.** My own Step 2d masks
+  Step 2c: with the cap removed, the errno string `[Errno 63] File name too long`
+  contains the literal `"too long"`, so my assertion passes through the `OSError`
+  path. The cap was unpinned. Fixed in Task 5 Step 1b by asserting `"limit 64"`.
+
+Notable non-finding: **zero** pre-existing tests changed behaviour under
+`catch_exceptions=False`. The harness was not hiding a live bug in covered code —
+it was hiding the *absence* of coverage. Worth recording, because it means D-035
+cost us missing tests, not silent breakage.
+
+`MAX_NAME_LEN = 64` confirmed reasonable: `textutils.slugify` already truncates
+at 60, real ids run 10–35 characters, and `NAME_MAX` is 255 — so the cap is
+validation-time rather than platform-derived, which was the point.
+
+## D-040 · phase 1 · scope: what does NOT get fixed before the gate
+Verified still-broken, and deliberately **not** in Task 5:
+
+| Case | Behaviour |
+|---|---|
+| no leading `---` | `EpisodeError` — PyYAML accepts it |
+| `%YAML` directive first | `EpisodeError` |
+| leading blank line | `EpisodeError` |
+| UTF-8 BOM | `EpisodeError` |
+| `tolerance_sec`, `name`, `byline`, `register`, `design.*` unvalidated | wrong types load silently |
+| metadata block scalars reflowed by `safe_dump` | semantic loss in document 1 |
+
+All produce a clear error or affect only machine-written data. None loses
+operator work, none escapes the workspace, none reaches a traceback. They are
+robustness gaps, not harm.
+
+**These become Phase 2/3 follow-ups, carried in `PROGRESS.md`.** The separator
+cases belong with Phase 3's real script parser, which will rewrite `_split`
+anyway; the field validation belongs with Phase 4, which owns what those fields
+mean. Fixing them now means specifying behaviour for consumers that do not exist.
+
+The line I am drawing: **before the gate, fix what causes harm — escapes,
+tracebacks, silent data loss. After the gate, fix what causes confusion.**
+Without a stated line this phase does not end, because every finding so far has
+been real and there is no natural stopping point from correctness alone.
