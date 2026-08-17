@@ -229,3 +229,4 @@ engine/frames/
 engine/probe/
 engine/*.mp4
 engine/*.png
+engine/.plan.js

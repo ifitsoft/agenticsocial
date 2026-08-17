@@ -67,10 +67,10 @@ than the explanation.
 Every task landed **two commits — failing tests, then implementation** — so the
 RED phase is verifiable from history rather than from a report.
 
-Four planned tasks became thirteen. Every extra one came from a defect found by
+Four planned tasks became fourteen. Every extra one came from a defect found by
 an implementer or a reviewer; none from scope drift. The full record is in
 `docs/superpowers/worklog/video/` — briefs, reports with pasted RED/GREEN
-evidence, reviews, and 47 numbered decisions.
+evidence, reviews, and 49 numbered decisions.
 
 ## What the review found
 
@@ -114,7 +114,7 @@ causes confusion after.**
 
 ## Test plan
 
-`uv run pytest` — full suite green, no network, no new dependencies.
+`uv run pytest` — **319 passed**, no network, no new dependencies.
 
 Manual smoke test, verified before merge:
 

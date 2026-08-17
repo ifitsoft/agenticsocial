@@ -68,6 +68,16 @@ rm -rf frames                                 # ~2.5 GB of intermediate PNGs
 
 **5. Record it in `coverage.json`** — one entry per story, with a stable `id`.
 
+## Reproducibility
+
+Playwright is pinned to an exact version, not a caret range. Chromium's
+rasterisation of `filter: blur()` is version-dependent, so a different Chromium
+produces different bytes from the same `script.yaml`. Frames are only
+reproducible against the pinned build.
+
+Before bumping Playwright, run `node determinism.test.mjs` on the new version
+and re-render a committed episode to see what moved.
+
 ## Pacing
 
 `pace` in the episode's `meta({...})` is the read-speed knob. It multiplies every

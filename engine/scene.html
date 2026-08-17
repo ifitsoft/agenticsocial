@@ -192,10 +192,21 @@
 <div id="ui"><input type="range" id="sl" min="0" max="1000" value="0"></div>
 
 <script src="engine.js"></script>
+<script src="planbuild.js"></script>
 <script>
-  /* Load the day's script synchronously so its scene() calls land before init().
-     Classic <script src> works over file://; ES modules would be CORS-blocked. */
-  var __day=new URLSearchParams(location.search).get('day')||'2026-08-14';
-  document.write('<scr'+'ipt src="content/'+encodeURIComponent(__day)+'.js"><\/scr'+'ipt>');
+  /* Load the script synchronously so scene() calls land before init().
+     Classic <script src> works over file://; ES modules would be CORS-blocked.
+     ?plan=1 renders a resolved plan.json written by `agsoc video render`;
+     ?day=<date> renders content/<date>.js, the hand-written path. */
+  var __q = new URLSearchParams(location.search);
+  if (__q.get('plan')) {
+    document.write('<scr' + 'ipt src=".plan.js"><\/scr' + 'ipt>');
+  } else {
+    var __day = __q.get('day') || '2026-08-14';
+    document.write('<scr' + 'ipt src="content/' + encodeURIComponent(__day) + '.js"><\/scr' + 'ipt>');
+  }
 </script>
-<script>init();</script>
+<script>
+  if (window.__PLAN) buildFromPlan(window.__PLAN);
+  init();
+</script>

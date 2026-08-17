@@ -948,3 +948,164 @@ it for two tasks before a reviewer broke it.
 Fifth instance of "a guard in one of a matched pair and not the other", and the
 first found in code this project did not write during these phases. The pattern
 predates the phase; the phase just taught us to look.
+
+## D-050 · phase 1.5 / task 2 · THE PIPELINE PRODUCED A VIDEO
+Leader-verified end to end: hand-written `script.yaml` → `plan.json` → 300
+Playwright frames → ffmpeg → `vertical-1080x1920.mp4`, `duration=10.000000`,
+1080×1920, `nb_frames=300`. Sent to the human.
+
+Resolved timing came out exactly as designed — contiguous, Python-owned:
+
+```
+  0.0–3.5 s   f  0–105
+  3.5–6.5 s   f105–195
+  6.5–10.0s   f195–300
+```
+
+**The architectural bet paid off.** `render.mjs` performed no timing arithmetic;
+it looked up pre-resolved values. That is the property that makes `__seek(t)`
+policeable, and it is the format Phase 4 inherits. Deciding it against a real
+render — rather than in the abstract at Phase 4 — was the entire point of this
+phase.
+
+## D-051 · phase 1.5 / task 2 · the determinism test was committed RED, correctly
+The implementer found `day path t=3.7` failing on the **existing** `?day=` path
+and committed it red rather than narrowing the sampled times to hide it. That is
+the right instinct and the opposite of what a green-dashboard reflex produces.
+
+It then separated two defects that present as one red line:
+
+**A · a genuine `__seek(t)` impurity.** With no `act`/`src` on a scene, the
+previous scene's text and transform stay in the DOM, hidden only by `opacity: 0`.
+Byte-identical pixels today; a visible wrong-label bug the moment that chip fades
+instead of snapping. `CLAUDE.md` calls this invariant load-bearing.
+
+**B · Chromium rasterises `filter: blur()` differently** on a reused `.sc` layer
+versus a fresh one. Max delta 9/255 over ~1.4% of pixels, confined to blurred
+`<h1>` glyphs in exit tails. **This is what makes the test red.**
+
+**It proved the test is not theatre**, unprompted by results: baseline 1/3 fail →
+`Math.random()` injected → 3/3 fail → `Date.now()` injected → 3/3 fail → reverted
+clean. After four tests in this project that could not fail, a determinism test
+that cannot detect non-determinism would have been the fifth.
+
+**Human decision:** determinism over render speed. Task 2b works a cheap→expensive
+ladder (layer-promotion hints first) with per-frame rebuild as the authorised
+fallback, because the cause is a compositing inconsistency rather than something
+that inherently needs 3,600 rebuilds.
+
+**A is being fixed on its own terms, with a page-state check added to the test.**
+A pixel-only determinism test is structurally blind to A — the same lesson as
+D-035 in a new costume: the harness could observe one dimension and the bug lived
+in the other.
+
+## D-052 · phase 1.5 / task 3 · spec deviation — `preview`, not `render`
+Spec §11 names this command `agsoc video render`. **Phase 1.5 ships
+`agsoc video preview` instead.**
+
+`render` is gated: spec §10 makes `RENDERING` reachable only from `APPROVED`, and
+Phase 1 built that gate. Phase 1.5 has no `approve` command — that is Phase 7 —
+so a `render` today would either be blocked for every episode or bypass the gate
+it is named after.
+
+**Shipping a gate-bypassing command under the name the gated one will later take
+is how a gate quietly stops meaning anything.** `preview` never touches status
+and says so in its help text. Phase 8 adds `render` on top of the same
+implementation.
+
+Two tests pin the distinction: `preview` leaves status at `draft`, and never
+rewrites `script.yaml`.
+
+## D-053 · phase 1.5 · tenth brief defect, and it was a vacuous test again
+`test_resolved_times_are_rounded_not_raw_floats`, which I wrote in Task 2's brief
+*specifically* to kill a mutant the previous implementer found surviving, does
+not kill it. At the `pace=1.1` I chose, `hold` is rounded before accumulation, so
+every running sum is exactly representable — there is no float noise to catch.
+
+The implementer kept my code block verbatim, flagged it, and added a sibling at
+`pace=1.15` where `4.025 + 3.45 = 7.4750000000000005` actually kills the mutant.
+
+Sixth instance of the D-035 family, and the second time I have written a vacuous
+test *while explicitly thinking about vacuous tests*. The rule from D-046 —
+run the test against the mutant before committing it — is one I keep prescribing
+to implementers and failing to apply to my own briefs. **From here, any test I
+write in a brief that names a specific mutant must come with the pace/values that
+demonstrably produce the condition, or say plainly that I have not verified it.**
+
+## D-054 · phase 1.5 / task 2b · determinism green, and my premise was false
+Fixed at rung 3 of the ladder: `stageScenes.appendChild(SC)` on every seek —
+re-inserting the existing node discards its paint layer without rebuilding the
+DOM or re-running the word-rise walk. Leader-verified: `deterministic`, exit 0,
+pixel and page-state checks green on both paths.
+
+**The trade-off I put to the human did not exist.** I framed "25 rebuilds vs
+3,600" as a performance decision. Measured: rebuild-every-frame costs **0.6%**,
+because rendering is dominated by `page.screenshot()` at ~230 ms/frame. The real
+objection to that option was architectural — `if(true)` deletes the caching
+mechanism and strands a dead `CUR` — and I presented it as speed. The chosen fix
+is free within noise (229.86 vs 229.94 ms/frame).
+
+Same error class as my vacuous tests, one level up: **I passed along a number
+without checking it, and asked for a decision on it.**
+
+The diagnostic that found the fix: arriving at `t=3.7` from any predecessor gives
+the same frame *unless a screenshot was taken in between*. The trigger is raster
+cache reuse — one level below anything a CSS declaration reaches, which is why
+all three of my suggested hints failed. It tried each and reported each failure
+rather than jumping to the authorised fallback.
+
+**Also fixed: a real `__seek(t)` impurity** (act chip and source tag were hidden,
+not cleared) — invisible in pixels, which is why the test now carries a
+page-state check. My page-state snippet in the brief was itself vacuous: both
+arms arrived from scenes that also had no act, so both inherited the same stale
+label and it printed "stable" with the bug present.
+
+## D-055 · phase 1.5 · playwright pinned; reproducibility was per-machine
+`engine/package.json` declared `"playwright": "^1.62.1"`. Chromium's blur
+rasterisation is version-dependent, so under a caret range **two operators could
+render different MP4s from one `script.yaml`** — and the determinism test cannot
+see it, because it compares two hashes within one session and both move together
+on upgrade. `CLAUDE.md` calls reproducibility load-bearing; a caret range quietly
+made it a property of the machine. Pinned exactly, with the reasoning in
+`engine/README.md`.
+
+## D-056 · phase 1.5 / task 3 · the engine is not in the wheel
+Asked whether `ENGINE_DIR = parents[3]` breaks under pip install. The implementer
+built an actual wheel rather than reasoning about it: **`engine/` is not packaged
+at all.** `pyproject.toml` ships only `src/agenticsocial`. In a clean venv the
+path resolves to a directory that has never existed, and the installed CLI
+reports `could not start the renderer: [Errno 2]`.
+
+So no `parents[N]` is correct — fixing the arithmetic points at something that
+was never shipped. **Required before Phase 8**, in three parts: ship the engine
+inside the package; anchor it with `importlib.resources.files("agenticsocial")`
+rather than a parent count (a parent count encodes repo depth in an unrelated
+module and breaks silently); and add `$AGSOC_ENGINE` plus a fail-fast check in
+`_require_tools`, so it fails up front with an actionable message.
+
+Not fixed in Phase 1.5: it moves a tracked Node subproject and edits packaging.
+
+## D-057 · phase 1.5 · a test hazard the mutation audit exposed
+`test_missing_node_is_a_clean_error` and `test_missing_ffmpeg_is_a_clean_error`
+patch `shutil.which` but not `subprocess.run`. They pass only because
+`_require_tools` raises first. **Remove that check and those two tests launch
+real Chromium and real ffmpeg** — violating the offline-suite rule and turning a
+1-second suite into a minutes-long one.
+
+Found by an implementer's own mutation audit, not by anything failing. Recorded
+as a Phase 2 cleanup: give both tests the `fake` fixture so they cannot reach a
+real subprocess whatever the code does.
+
+## D-058 · phase 1.5 · brief defect count: 14, implementer errors: 0
+Across Phases 1 and 1.5, every implementation has been a faithful transcription
+of its brief, and every defect has been mine, written upstream. Task 3 alone
+found three: a `--probe` path whose implementation could not have passed my own
+test, an `ffprobe` command that printed nothing and **read exactly like the
+feature failing**, and a misplaced import.
+
+The `ffprobe` one is the instructive one — a verification command that fails
+*closed* teaches the operator their working feature is broken. I have now written
+two of those (this, and the zsh word-splitting probe that reported four working
+commands as MISSING).
+
+**The leverage in this process is reviewing briefs, not reviewing code.**
