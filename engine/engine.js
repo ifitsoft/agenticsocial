@@ -204,6 +204,16 @@ function seek(t){
     const tp=clamp((lt-.55)/.5)*(lt>S.dur-tail?1-EZ.io((lt-(S.dur-tail))/tail):1);
     tagEl.style.opacity=String(EZ.out(tp));
   }else{tagEl.style.opacity='0';}
+
+  /* Re-insert the scene node so it is rasterised from scratch every seek.
+     Chromium composites `filter: blur()` differently on a layer that already has
+     a warm raster (scrubbed into the tail within one scene) than on a layer built
+     fresh (jumped in from another scene) — up to 9/255 on blurred glyphs. That
+     made seek(t) depend on where you seeked from, which is exactly the invariant
+     this engine sells. appendChild() of an existing child is a remove+insert, so
+     it throws away the paint layer WITHOUT rebuilding the DOM or re-running
+     rise()'s walk: the scene is still built once per scene, not once per frame. */
+  stageScenes.appendChild(SC);
 }
 
 /* ============================ init ============================ */
