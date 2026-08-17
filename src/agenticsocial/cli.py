@@ -9,6 +9,7 @@ import typer
 from . import __version__, research
 from .models import Status, TransitionError, assert_transition
 from .textutils import split_thread
+from .video.cli import series_app, video_app
 from .workspace import Workspace, WorkspaceError, atomic_write, load_config
 from .x import auth as x_auth
 from .x.client import XApiError, XClient
@@ -18,6 +19,9 @@ app = typer.Typer(
     help="Capture sources, research, review drafts, and post to X. The agent drafts; you approve.",
     no_args_is_help=True,
 )
+
+app.add_typer(series_app, name="series")
+app.add_typer(video_app, name="video")
 
 
 @app.callback()
