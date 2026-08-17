@@ -1255,3 +1255,62 @@ that report, and I agree.
 it. Recommended to freeze opportunistically during ingest, since Phase 2 is the
 phase most likely to start passing `Source` around and `Source.dir` is a `Path`
 consumed by filesystem operations.
+
+## D-064 · PROCESS · why my briefs keep producing tests that cannot fail
+Vacuous tests have now appeared in **four separate phases**, always in briefs I
+wrote. Seventeen brief defects against zero implementer errors. Asked to diagnose
+my process rather than the code, the Task 1c implementer gave the answer:
+
+> An example is a point, a rule is a function, and any finite set of points
+> admits infinitely many functions. But the half that is yours, and is fixable:
+> **your briefs write the assertion after you already know the implementation.**
+> `assert key_for(...) == "reuters-com"` is a value read off code you had just
+> designed — a transcription, and transcriptions cannot disagree with what they
+> transcribed.
+
+**"Passed on arrival" is the transcription rate.** 10 of 11 in Task 1c, 4 of 4 in
+Task 1b. I had been reporting that number for three phases without understanding
+it was the diagnosis.
+
+### The four changes, adopted
+
+1. **State the rule as a sentence with a negative half, before writing any
+   assertion.** "A leading `www-` is stripped; `www` elsewhere is not." Every pin
+   that killed a mutant had a negative half; every one that killed nothing had
+   none.
+2. **Specify the mutant first, derive the assertion from it.** I already write
+   good mutants — in Step 3, *after* the tests, independently. That ordering is
+   the bug. `match="unsafe"` is derivable from "the mutant drops the guard"; it
+   is not something anyone adds while writing a happy-path assertion. This alone
+   would have caught both vacuous tests at authoring time.
+3. **Give each test a one-line `precondition:` naming what the fixture must NOT
+   already be in.** Both vacuous tests failed for exactly this and nothing else.
+   Highest yield per character.
+4. **Use properties where the rule is infinite and the value is cited
+   elsewhere** — keys, collision suffixes, anything a claim hard-codes.
+
+### The line worth keeping
+
+> An example should be chosen because it **discriminates**, not because it
+> **illustrates**. `blog.google` is what a reader needs; `blog.wwwfoo.com` is
+> what the mutant fears. Your briefs have been picking from the reader's set.
+
+This is the most valuable process finding of the project, and it came from asking
+an implementer to critique my briefs rather than the code.
+
+## D-065 · phase 2 / task 1c · corpus.py is closed
+430 tests. Nine mutants, nine kills. The 14-mutant sweep went 12 survivors → 5,
+and **all seven previously called real are dead**; every survivor is cosmetic
+(`sort_keys`/`indent`/`ensure_ascii` round-trip identical, a redundant `sorted()`,
+and one genuinely unreachable recheck).
+
+Task 1b's surviving mutant — deleting `verify`'s empty-dir guard — is also now
+killed.
+
+Chain capped at 1c per D-023. Anything further in this module goes to Phase 3.
+
+**Carried to Task 2, unchanged in importance:** the `-2` collision key is
+fetch-order-dependent, so a corpus rebuild can silently re-point `blog-google-2`
+at the *other* article. That is the one failure mode in this module that yields a
+**wrong fact-check rather than a loud one**, and the fix belongs in ingestion —
+look the URL up in the manifest, reuse its key or refuse, never re-derive.
