@@ -125,3 +125,41 @@ def test_transition_error_requires_an_explicit_table():
     so a video caller could be told 'allowed next: in_review, publishing'."""
     with pytest.raises(TypeError):
         TransitionError(Status.APPROVED, Status.PUBLISHED)
+
+
+# --- exact table pins ---------------------------------------------------------
+# QA mutation testing survived three added edges, two of which bypass the
+# approval gate (draft -> rendering, scheduled -> rendering). The behavioural
+# tests above say what the tables MEAN and carry the reasoning; these two say
+# exactly what they ARE. The redundancy is deliberate: intent and tripwire.
+#
+# If you are changing a table and one of these fails, that is the point. Read
+# the docstrings above before widening either dict.
+
+
+def test_video_transitions_table_is_exact():
+    assert VIDEO_TRANSITIONS == {
+        Status.DRAFT: {Status.IN_REVIEW},
+        Status.IN_REVIEW: {Status.DRAFT, Status.APPROVED},
+        Status.APPROVED: {Status.IN_REVIEW, Status.RENDERING},
+        Status.SCHEDULED: set(),
+        Status.RENDERING: {Status.RENDERED, Status.FAILED},
+        Status.RENDERED: set(),
+        Status.PUBLISHING: set(),
+        Status.PUBLISHED: set(),
+        Status.FAILED: {Status.RENDERING},
+    }
+
+
+def test_text_transitions_table_is_exact():
+    assert ALLOWED_TRANSITIONS == {
+        Status.DRAFT: {Status.IN_REVIEW},
+        Status.IN_REVIEW: {Status.DRAFT, Status.APPROVED},
+        Status.APPROVED: {Status.IN_REVIEW, Status.PUBLISHING},
+        Status.SCHEDULED: set(),
+        Status.RENDERING: set(),
+        Status.RENDERED: set(),
+        Status.PUBLISHING: {Status.PUBLISHED, Status.FAILED},
+        Status.PUBLISHED: set(),
+        Status.FAILED: {Status.PUBLISHING},
+    }
