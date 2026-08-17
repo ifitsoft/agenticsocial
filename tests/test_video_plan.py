@@ -250,6 +250,23 @@ def test_written_json_preserves_the_documented_key_order(series):
     ]
 
 
+def test_a_comment_bearing_script_survives_plan_building_byte_for_byte(series):
+    """test_building_a_plan_never_rewrites_the_script uses a script whose
+    metadata round-trips through safe_dump unchanged, so a `_compose`-based
+    re-emission leaves it byte-identical and the guard stays green. D-026 is
+    about the scripts that DON'T round-trip: comments, quoting, blank lines.
+    """
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_text(
+        "---\n# storyboard: do not reflow\nepisode: e\nseries: the-brief\n"
+        'status: "draft"\n\n---\n' + THREE,
+        encoding="utf-8",
+    )
+    before = ep.script_path.read_bytes()
+    write_plan(series, load_episode(series, "2026-08-14"))
+    assert ep.script_path.read_bytes() == before
+
+
 def test_beat_without_a_type_names_the_missing_key_not_an_unsupported_one(series):
     """`match="type"` also matches the unsupported-type message, so dropping the
     missing-`type` branch would leave that test green."""
