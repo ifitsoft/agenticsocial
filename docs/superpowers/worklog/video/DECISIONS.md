@@ -1556,3 +1556,76 @@ An honest caveat it volunteered: with `RENDERABLE == {"statement"}`, 10 of 12
 rows carry the cannot-render mark, so the margin flag is near-noise this phase
 and the footer does the real work. It becomes informative as `RENDERABLE` widens,
 and inverting it would be wrong the moment the ratio flips.
+
+## D-075 · phase 4 · beat text reaches innerHTML — the rendered bytes are not the verified bytes
+Found by the Task 0 implementer while answering "what else does the renderer
+interpolate that nothing validates". Leader-verified in a real browser:
+
+```
+script: "The model is <thinking> about it"
+screen: "The model is  about it"          <- the word is GONE
+
+script: "AT&amp;T raised prices"
+screen: "AT&T raised prices"
+
+script: "Qwen3.8-Max <em>self-hostable</em> at 2.4T"
+screen: "Qwen3.8-Max self-hostable at 2.4T"
+```
+
+`engine.js` defines `const P=(t)=>({html:t})` and `E` does
+`e.innerHTML=opts.html`; `planbuild.js` builds every statement with `P(b.text)`
+and `P(b.kicker)`. So markup in a beat is *interpreted*, and entities *decode*.
+
+**This is a verification defect, not a rendering one.** Spec §4's whole promise
+is that a claim is checked against bytes. Phase 5 will check the *script's*
+bytes, and the video shows something else — a claim can pass verification while
+the frame displays different text. Nothing errors; the render looks fine. Same
+family as `accent = 5`, one layer deeper and considerably worse, because the
+divergence is in the thing being fact-checked.
+
+**Fix is not blanket escaping.** `jumpChart`'s `shown` is a *documented* HTML
+override — `2026-08-14.js` uses `<s>34.4</s> &rarr; 43.6` deliberately. So:
+prose fields (`text`, `kicker`, `lead`, `label`, `caption`, `footnote`,
+`attribution`) render through `textContent`; only fields the schema marks as HTML
+go through `innerHTML`. Rendering prose as text needs no escaping and cannot
+diverge. **First item in Task 1.**
+
+## D-076 · phase 4 / task 0 · acts join by id — and the real argument is stronger than mine
+I argued ids are "stable under rewording". The implementer gave the better case
+and I am recording its version, not mine:
+
+> A label join fails **silently**. Rename an act and every beat still renders,
+> the chip still shows a string, `warm_acts` just stops matching and the warm
+> treatment quietly disappears. **That is `accent = 5` in different clothes.**
+
+Two arguments I had not made: Phase 5 anchors claims to beats, so a label join
+invalidates anchors on edits unrelated to the claim; and `validate_acts` **already
+decided this** — it requires `id`, does not require `label` at all, so choosing
+labels would mean joining the optional free-form field against the mandatory one.
+
+And the line worth keeping:
+
+> The committed episode's labels are not evidence for labels; they are evidence
+> the question had not been asked.
+
+## D-077 · phase 4 / task 0 · type_scale wired, type_family dropped
+The implementer split a question I had posed as one:
+
+> Wire `type_scale`: three enumerated values, validatable like `register`. **Drop
+> `type_family`**: a font stack naming a family the render host lacks falls back
+> silently — the same silent-wrong-render class — and unlike a colour it *cannot*
+> be validated, because whether `SF Pro Display` resolves is a property of the
+> machine, not the string. Making it honest means embedding fonts as data URIs
+> and validating against the embedded set, which is a feature, not a knob.
+
+Adopted. A knob that cannot be checked and fails silently is worse than no knob.
+
+Also carried: `warm_acts` is now validated and warned about, then **ignored** —
+`planbuild.js` hardcodes `warmActs: []`. Wiring it needs resolved *labels*, since
+`engine.js:191` compares against `S.act`. Belongs to the task that draws the warm
+treatment.
+
+Its own sweep caught S5 surviving: `assert "act_label" in src` is satisfied by
+`scene(b.act || b.act_label || '')`, which prints the bare id and ignores the
+label — the defect the resolution exists to prevent. Same weak-assertion class as
+the falsy-value problem, in a string.
