@@ -458,7 +458,7 @@ rather than through `_read_meta`.
 | Case | PyYAML | Ours | Verdict |
 |---|---|---|---|
 | LF | 2 docs | OK | — |
-| CRLF | 2 docs | **OK** | **not a defect** — universal newlines |
+| CRLF | 2 docs | parses OK | **RETRACTED — it IS a defect, see D-031** |
 | `--- ` trailing space | 2 docs | `EpisodeError` | real, → Task 5 |
 | no leading `---` | 2 docs | `EpisodeError` | real, → Task 5 |
 
@@ -500,6 +500,66 @@ because unparseable beats never reach a write path anywhere in the suite. True,
 and honest of it to report a gap in its own evidence rather than let the mutant
 table look cleaner than it is.
 
+## D-031 · phase 1 / task 3c · I RETRACT D-029's CRLF verdict. QA was right.
+D-029 declared the CRLF finding "not a defect". **That was wrong.** QA disproved
+it and I reproduced the disproof:
+
+```
+beats before: b'beats:\r\n  # a comment\r\n  - type: statement\r\n'
+beats after : b'beats:\n  # a comment\n  - type: statement\n'
+BYTE-IDENTICAL: False
+```
+
+`set_status` rewrites every byte of a CRLF beats document — the exact
+`script_sha256` drift (spec §10) that D-026 gives as *the reason* for the
+two-document design.
+
+**The error was mine and it is worth naming precisely: I verified a proxy.** The
+guarantee is *byte identity*. I tested that the file *still parses* and that the
+status *still loads*, saw green, and declared the finding closed. Both of those
+can be true while every byte changes. A confident correction built on the wrong
+property is worse than no correction, because it closes the question.
+
+The chain, in full, because each link is instructive:
+
+1. The Task 3 implementer flagged CRLF — right instinct, wrong mechanism (it
+   blamed `_split`; the real cause is `read_text`'s universal newlines).
+2. I "corrected" it by testing parseability — wrong property, confidently stated.
+3. QA tested byte identity and caught both of us.
+
+D-014 said a reviewer's verdict is evidence, not a ruling. The symmetric half now
+also holds: **the leader's verification is evidence, not a ruling.** What makes
+it evidence is testing the property under contract, not a property nearby.
+
+QA also found *why* the suite missed it: every preservation test uses
+`write_text`/`read_text`, so newline translation happens on both sides and
+cancels out. **The tests pinned content, not bytes** — and four whitespace
+mutants lived in that gap. Same family as D-027's "corrupt fixture that is still
+valid YAML": a test whose setup and assertion share a transformation cannot see
+that transformation.
+
+**Task 3c fixes it, and this is not a D-028 breach.** D-028 caps *additional*
+scope on `episode.py`; 3b's own stated contract is not met. Finishing a task is
+not extending it.
+
+## D-032 · phase 1 / task 3b · QA findings adjudicated
+| # | Sev | Finding | Verdict |
+|---|---|---|---|
+| F1 | med-high | CRLF beats rewritten on every status change | **fix-now** → 3c (D-031) |
+| F2 | med | Preservation tests pin content, not bytes; 4 mutants survive there | **fix-now** → 3c |
+| F3 | med | `episode_ids` raises `PermissionError`; `create_episode` raises `FileExistsError` on a dangling symlink — both escape `except EpisodeError` | **fix-now** → 3c. Task 4 depends on this contract |
+| F4 | low | `create_episode(series, "../escape")` writes outside `episodes_dir` | **Task 5** — mirrors series slug validation, same fix shape |
+| F5 | low | `resolve_episode(series, "")` resolves the only episode | **fix-now** → 3c (two lines) |
+| F6 | low | Stale `Episode` can regress `approved` → `in_review`; no disk re-check | **Phase 7** — the approve gate owns freshness |
+| F7 | note | `%YAML` directive / leading blank line accepted by PyYAML, rejected by us | **Task 5** — third member of the separator family |
+
+QA verified a large amount that did *not* break, which is worth recording: block
+scalars containing `---`, metadata forging a separator, 3rd/4th documents,
+bare-sequence and scalar beats, NUL bytes, 200KB lines, U+2028, missing trailing
+newline. It found no case where `_split` accepts a file PyYAML rejects. It also
+identified one *equivalent* mutant (subdirs created after the script) and said so
+rather than counting it as a survivor.
+
 ---
 
 ## Open risks carried from the spec
@@ -511,3 +571,66 @@ table look cleaner than it is.
 - ~~Engine source untracked~~ — **resolved 2026-08-16, see D-007.**
 - The operator's `workspace/` content (series, episodes, scripts, claims) is
   unversioned by design. No backup story yet. Not a code risk; is a data risk.
+
+## D-035 · process · THE pattern of this phase: harnesses that hide the bug
+Three times now a test has been green while the bug it targeted was live, and
+every time for the same reason: **the test's own harness performed the
+transformation the test was meant to detect.**
+
+| Decision | Harness | What it hid |
+|---|---|---|
+| D-027 | corrupt fixture was still valid YAML | the missing parser guard |
+| D-031 | `write_text`/`read_text` translated newlines on *both* sides | `set_status` rewriting every byte |
+| D-035 | `CliRunner` catches exceptions by default | uncaught tracebacks reaching operators |
+
+Leader-verified for the third:
+
+```
+exit_code = 1        output = ''        exception = ValueError: uncaught crash
+  assert exit_code == 1              -> True   (passes)
+  assert "traceback" not in output   -> True   (passes)
+```
+
+An uncaught crash is byte-identical, from the test's view, to a clean `_fail`.
+That is why the Task 4 mutant disabling UTF-8 validation survived.
+
+**The check to run on every negative test from here on:** *what would this test
+do if the code did nothing at all?* If the answer is "pass", the harness is
+neutralising the thing under test. Three concrete forms to watch: a fixture that
+is invalid in the wrong dimension; a symmetric encode/decode on both sides of an
+assertion; and a runner that converts failures into return values.
+
+This is worth more than any single bug found in Phase 1.
+
+## D-036 · phase 1 / task 4 · fixed one module, forgot its sibling
+Task 4 Step 0 added a `UnicodeDecodeError` guard to `episode.py`. `series.py` has
+the identical hole and I never looked. Leader-verified: one cp1252-saved
+`series.toml` makes `agsoc series list` die with a raw traceback — the exact
+D-018 failure this phase exists to prevent, in the command it exists to protect.
+
+Same shape: `series_slugs` lacks the `OSError` guard `episode_ids` has, with the
+sibling's explicit comment sitting right there explaining why it needs one.
+
+**Sibling asymmetry is now a standing review question.** Task 4b's brief asks
+its implementer to compare the two modules function by function on the
+assumption I made this mistake elsewhere too. When a fix lands in one of a
+matched pair, checking the other is not optional.
+
+## D-037 · phase 1 / task 4 · QA adjudication
+Task 4: 272 tests, 3 commits, 4 of 5 mutants killed.
+
+| # | Finding | Verdict |
+|---|---|---|
+| Mutant 3 survived — the D-025 surrogate test is vacuous | **fix-now** → 4b (D-035) |
+| (a) slug/id > 255 chars → uncaught `OSError` | **fix-now** → 4b. Reachable by pasting a URL |
+| (b) non-UTF-8 `series.toml` kills `series list` | **fix-now** → 4b (D-036) |
+| (c) `series_slugs` lacks the `OSError` guard | **fix-now** → 4b |
+| (d) write-path `OSError` in both `new` commands | **fix-now** → 4b |
+| Q1: `series list` prints `0 episodes` when the count is unreadable | **fix-now** → 4b. `0` is a claim; `?` is the truth, and still satisfies D-018 at exit 0 |
+| Q2: `--series` autocreates only `default` | **keep.** The implementer's reasoning is right: `default` is a name the operator never typed, `nope` is one they did — auto-creating `--series the-breif` would silently misplace an episode. Only the `--series` help text needs to mention it |
+
+The implementer found these by running the real CLI in a subprocess, having
+discovered that rich interleaves ANSI escapes *inside* the literal string
+`Traceback (most recent call last)`, which defeated its first detector. It said
+so rather than trusting its own tooling — the same instinct that makes the rest
+of its report worth reading.
