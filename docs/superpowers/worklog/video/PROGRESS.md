@@ -19,11 +19,27 @@ Task 1 — Video status machine: **implemented** (commit `41ad23e`), QA dispatch
   Leader-verified: `uv run pytest` → 106 passed; commit touches 3 files;
   `tests/test_models.py` diff is 1 added line, snapshot still full-enum.
   Carries D-003 (RENDERED → PUBLISHING → FAILED → RENDERING) to the human.
-Task 2 — Series configuration: not started
+Task 1 QA: **changes-required** — mutation testing found the suite asserted
+  forbidden transitions well and permitted ones barely at all. Breaking the
+  render path left all 106 tests green. 5 findings adjudicated in D-008
+  (3 fix-now → Task 1b, 1 resolved by D-006, 1 deferred).
+Task 1b — Cut RENDERED→PUBLISHING + close test gaps: **implemented**
+  (`1016c09` tests, `43799e5` impl), QA dispatched
+  First task under the two-commit rule (D-009). Leader-verified RED from git
+  history: old models.py + new tests → 3 failed / 16 passed, matching the
+  prediction. Restored → 112 passed.
+  Implementer caught a prose/code contradiction in my brief → D-010.
+Task 2 — Series configuration: brief written, awaiting Task 1b QA verdict
 Task 3 — Episode scaffolding: not started
 Task 4 — CLI wiring: not started
 
 Phase gate: not reached
+
+### Phase 1 running notes
+- Two leader-authored brief defects so far (D-005, D-010). Both caught by
+  implementers rather than reaching QA. Briefs from Task 2 onward: code blocks
+  are authoritative, prose explains *why* and never restates *what*.
+- Mutation testing is earning its place in the QA brief. Keep it for all phases.
 
 ---
 
