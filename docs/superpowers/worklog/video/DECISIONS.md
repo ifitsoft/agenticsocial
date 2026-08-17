@@ -723,3 +723,70 @@ The line I am drawing: **before the gate, fix what causes harm — escapes,
 tracebacks, silent data loss. After the gate, fix what causes confusion.**
 Without a stated line this phase does not end, because every finding so far has
 been real and there is no natural stopping point from correctness alone.
+
+## D-041 · phase 1 / task 5 · symlinks are an operator affordance, not an escape
+Leader-verified after Task 5's fix:
+
+```
+--series ../../outside   -> refused: "unsafe series slug ... not a path"   ✓
+--series link            -> created /private/tmp/t5sym/outside/episodes/…  (still escapes)
+```
+
+A symlinked series directory — or a symlinked `episodes/` inside a legitimate
+series — still writes outside the workspace. Name-based guards are structurally
+blind to it; only `Path.resolve()` + `is_relative_to(ws.root)` would catch it.
+
+**Decision: accept it. Do not add resolve-based containment.**
+
+Three reasons:
+
+1. **It grants no capability.** Planting the symlink requires write access to
+   `workspace/series/` already. Anyone with that can write wherever their
+   permissions allow, with or without agsoc.
+2. **It is a legitimate operator action.** Renders run ~27 MB per episode.
+   Symlinking `episodes/` or `out/` to another volume is exactly what a person
+   with a small SSD does, and spec §5 does not forbid it.
+3. **The contrast with D-038 is the whole point.** `--series ../../outside`
+   escapes through an *argument*: you type a series name and get a path. That is
+   surprising, and surprise is the harm. A symlink is the operator's own prior,
+   explicit act on their own filesystem. Nothing is misrepresented.
+
+Per D-040 this is not harm, so it does not block the gate. **What it needs is
+disclosure, not prevention** — Phase 8 (render) should say plainly when output
+lands outside the workspace, since that is where large files and real surprise
+would meet. Recorded as a Phase 8 requirement.
+
+A `series.toml` whose own `slug` key says `../../../far` does **not** escape:
+`load_series` ignores the file's `slug` entirely. The implementer noted this
+holds "only by accident and with no test saying so" — correct, and it goes on
+the post-gate list.
+
+## D-042 · phase 1 / task 5 · adjudication. Phase 1 implementation is COMPLETE
+311 tests, 7/7 mutants killed — including the length-cap survivor from Task 4b,
+which my own error message had been masking.
+
+**One code deviation, correctly made and flagged.** The brief specified
+`_assert_safe_name(slug, "series name", ...)`, which broke six pre-existing
+assertions requiring the word `slug` — the new guard runs before `_validate_slug`
+and now owns that message. Told not to weaken assertions, the implementer changed
+the *code* to say `"series slug"`, matching the episode side's existing
+`"episode id"`. Right call: the tests encoded a real contract and my brief did
+not know it.
+
+**It also reported a weakness in its own evidence:** the Step 1c CLI escape test
+was green at RED, because the escape needs `<ws>/series/` to already exist and
+`Workspace.init` never creates it. A correct end-state assertion, but not a
+red-to-green witness — mutants 1 and 2 carry that proof instead. Reported rather
+than left to look better than it was.
+
+**Remaining asymmetries — 12, all post-gate (D-040):** two separate `64`
+constants that will drift exactly as D-036 predicts; `--name` capped nowhere
+while the slug is capped at 64; naming rules callable in `series.py` and inlined
+in `episode.py` (the structural cause of D-038); symlink checks symmetric in the
+creators but absent from both readers and enumerators; `scaffold_series`'s
+`episodes/` mkdir sitting outside its cleanup `try` where `create_episode`'s sits
+inside; and `video new ../../../pwned` autocreating the `default` series before
+refusing the id.
+
+None causes harm. All are recorded for Phase 2. **No Task 5b — the phase gate
+runs next.**
