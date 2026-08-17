@@ -348,6 +348,44 @@ stopping point from correctness alone. The stopping point has to come from
 scope. `series.py` is 150 lines of config loading — if it needs a fourth pass,
 the problem is the design, not the coverage.
 
+## D-024 · phase 1 / task 2c · closed. 184 tests, 6/6 mutants killed
+Leader-verified: `--name "The Brief 😀"` and `--name "北京 𠀋"` now scaffold and
+round-trip, written as literal UTF-8 with no surrogate escapes. Mutant 2
+(`ensure_ascii=False`, the plausible wrong fix a future maintainer reaches for)
+dies to three tests — decisively to `test_del_and_control_chars_are_escaped_not_literal`,
+which asserts on file bytes rather than the round trip.
+
+First task in the phase with **no brief defect**. The change: the brief carried
+the whole final function rather than prose describing an edit (D-021).
+
+**No per-task QA pass on 2c.** Deliberate, and the reasoning matters more than
+the saving: 2c is narrow, and its six-mutant sweep is stronger evidence than a
+read-through would be. `series.py` still gets a full adversarial review at the
+phase gate, which the roadmap requires anyway. Skipping *because a reviewer might
+find more* would have been the wrong reason; skipping because the phase gate
+covers it is not. Recorded so the phase gate is not quietly skipped too.
+
+## D-025 · phase 1 · Task 5 created — the config validation contract
+2c's closing question found four fields still reaching the system unvalidated.
+Per D-023 these do **not** become a 2d. They become **Task 5**, run after Task 4
+so it is informed by what the CLI actually needs, and covering series *and*
+episode validation in one consistent pass:
+
+| Field | Hole | Why it matters |
+|---|---|---|
+| `tolerance_sec` | accepts `"eight"`, `-99`, `true` | sits one line below `target_sec`, which is strictly validated for exactly this reason; Phase 4 does arithmetic with it |
+| `name`, `byline` | accept `5`, `["a"]` | `Series.name` becomes an int; a later `_toml_str(name)` raises `TypeError` far from the cause |
+| `register` | accepts `"shouty"` | Phase 4 *branches* on it, so a typo silently selects a default. Unlike `cadence`, which is explicitly advisory |
+| `design.*` values | `accent = 5` loads | Phase 4 interpolates these into rendered output — a type hole and an escaping-policy question |
+
+**Lone surrogates go to Task 4 instead**, because that is where they become
+reachable. Python decodes `sys.argv` with `surrogateescape`, so any non-UTF-8
+byte in a CLI argument arrives as U+DC80–U+DCFF — verified: `$'caf\xe9'` →
+`'caf\udce9'`. No escaping can save it; UTF-8 cannot encode a non-scalar. Today
+it would surface as a raw `UnicodeEncodeError` traceback from inside
+`atomic_write` — the D-020 shape once more. The fix belongs at the boundary where
+operator input enters, which is the CLI.
+
 ---
 
 ## Open risks carried from the spec

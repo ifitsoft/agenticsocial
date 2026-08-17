@@ -36,11 +36,24 @@ Task 1c — Pin both transition tables: **complete** (`7e240eb`), 114 passed
   First task under D-013 (guard tests justified by mutation kills, not RED).
   All 3 mutants killed. Leader re-verified the gate bypass independently.
   No separate QA pass — see D-015 for why, and why it is not a precedent.
-Task 2 — Series configuration: **dispatched** (3 commits: cleanup, tests, impl)
-Task 3 — Episode scaffolding: not started
-Task 4 — CLI wiring: not started
+Task 2 — Series configuration: **complete** (`88752ac`, `52c3e4c`, `8a49f9a`)
+Task 2 QA: **changes-required** — 34 mutants, 6 survived. Found hostile names
+  corrupting both config files, misattributing it to the operator, and blocking
+  retry. All findings were brief defects faithfully implemented (D-020).
+Task 2b — Harden config: **complete** (`22a78c0`, `8af23fd`), 160 passed
+  All 5 surviving mutants killed. Found the D-022 bug in my own fix.
+Task 2c — Correct TOML escaper: **complete** (`a5d2ceb`, `2dbf3e9`), 184 passed
+  6/6 mutants killed. First task in the phase with no brief defect.
+  Leader-verified: emoji and CJK ext-B names now round-trip.
+  No per-task QA — narrow change, strong mutation evidence, covered by the
+  phase gate. See D-024; the phase gate is NOT optional as a result.
+Task 3 — Episode scaffolding: **dispatched**
+Task 4 — CLI wiring: not started (adds `series_slugs`, skip-and-warn listing,
+  and lone-surrogate rejection at the operator-input boundary — D-025)
+Task 5 — Config validation contract: created, runs after Task 4 (D-025)
 
-Phase gate: not reached
+Phase gate: not reached. Whole-branch QA over `series.py` is REQUIRED —
+  2c did not get a per-task review on the understanding that this covers it.
 
 ### Phase 1 running notes
 - Two leader-authored brief defects so far (D-005, D-010). Both caught by
