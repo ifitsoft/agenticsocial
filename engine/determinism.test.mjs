@@ -60,6 +60,13 @@ const FIXTURE = [
     expect: ['THE BRIEF', 'Five stories from the last 24 hours'],
   },
   {
+    /* R3's negative, and the mutant the browser half missed until this beat
+     * existed: `title` has no required fields, so a bare one is legal and must
+     * still put a card on screen. */
+    beat: { type: 'title' },
+    expect: ['THE BRIEF', '2026-08-16'],
+  },
+  {
     beat: { type: 'signoff', text: 'Same time tomorrow' },
     expect: ['THE BRIEF', 'Same time tomorrow'],
   },
@@ -72,7 +79,10 @@ const PLAN = {
   byline: 'Ali Abdukarim',
   format: { name: 'vertical', w: 1080, h: 1920 },
   fps: 30,
-  pace: 1,
+  /* Not 1: `hold` in a plan is ALREADY scaled by pace in Python, so a renderer
+   * that scales again shifts every beat and this file's seek times land in the
+   * wrong scene. With pace 1 that mutant is invisible. */
+  pace: 1.293,
   design: {},
   beats: FIXTURE.map((f, i) => ({
     act: '',
@@ -179,7 +189,11 @@ for (const c of CASES) {
     for (let i = 0; i < c.content.length; i++) {
       const { beat, expect } = c.content[i];
       await page.evaluate((tt) => window.__seek(tt), i * HOLD + HOLD * 0.72);
-      const shown = await page.evaluate(() => document.getElementById('stage').innerText);
+      /* #scenes, not #stage. The stage's chrome carries the brand chip ("THE
+       * BRIEF") and the date, so a title card that rendered NOTHING still
+       * satisfied both of its expectations when read from #stage — the check
+       * passed on an empty scene. Read only what the builder built. */
+      const shown = await page.evaluate(() => document.getElementById('scenes').innerText);
       const missing = expect.filter((e) => !squash(shown).includes(squash(e)));
       const leaked = shown.includes('**') ? ' · `**` reached the screen' : '';
       if (missing.length || leaked) failures++;

@@ -210,6 +210,15 @@ def test_bold_is_converted_after_escaping_not_before():
 
 
 @needs_node
+def test_two_bold_runs_stay_two():
+    """Found by the mutation sweep: a GREEDY `**…**` passed every other
+    assertion here. It joins the first opener to the LAST closer, so
+    "**A** and **B**" renders as one bold run with the connective swallowed —
+    emphasis the operator did not write, on words they did not choose."""
+    assert prose_html("**A** and **B**") == "<b>A</b> and <b>B</b>"
+
+
+@needs_node
 def test_bold_markers_do_not_leak_when_unpaired():
     """A lone `**` is prose, not an unterminated tag. It must render as itself
     rather than swallowing the rest of the sentence."""
@@ -287,8 +296,12 @@ def test_body_renders_its_text_as_prose():
 
 @needs_node
 def test_body_renders_its_kicker_too():
-    tree = build([beat("body", text="t", kicker="Why it matters")])[0]["tree"]
-    assert shown(find(tree, "kicker")[0]) == "Why it matters"
+    """M1 again, on the SHARED kicker path. Also found by the sweep: only
+    `statement` builds its own kicker, so a `P()` left in the helper every other
+    type calls survived a fixture whose kicker had nothing to escape. A kicker
+    is authored text and carries the same risk as any other field."""
+    tree = build([beat("body", text="t", kicker="R&D on <tools>")])[0]["tree"]
+    assert shown(find(tree, "kicker")[0]) == "R&amp;D on &lt;tools&gt;"
 
 
 @needs_node
