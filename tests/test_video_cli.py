@@ -320,3 +320,313 @@ def test_video_preview_render_failure_is_a_clean_error(ws, monkeypatch):
     result = run("video", "preview", "2026-08-14", "--series", "the-brief")
     assert result.exit_code == 1
     assert "ffmpeg" in result.output
+
+
+# --- agsoc video ingest --------------------------------------------------------
+
+
+@pytest.fixture()
+def prepared(ws):
+    """An episode ready to ingest into. precondition for every test below:
+    the corpus is empty and brief.md does not exist."""
+    run("series", "new", "the-brief", "--name", "The Brief")
+    run("video", "new", "2026-08-17", "--series", "the-brief")
+    return ws.series_dir / "the-brief" / "episodes" / "2026-08-17"
+
+
+def _fake_ingest(keys, failures):
+    """A stand-in for ingest.ingest_research. Patched at the module boundary so
+    no test can reach the network — the CLI must never be the thing that
+    fetches in a unit test."""
+    from agenticsocial.video import ingest as I
+
+    def fake(episode, query, **kw):
+        return I.IngestResult(list(keys), list(failures), episode.dir / "brief.md")
+
+    return fake
+
+
+def test_ingest_requires_an_input_mode(prepared):
+    """R1 negative. Kills M2 — doing nothing and exiting 0 is
+    indistinguishable from success."""
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief")
+    assert result.exit_code == 1
+    for flag in ("--research", "--paste", "--from-source"):
+        assert flag in result.output
+
+
+def test_ingest_refuses_two_input_modes(prepared, tmp_path):
+    """R1 negative. Kills M1 — silently preferring one hides which source the
+    corpus actually came from, which is the one thing this phase exists to
+    record."""
+    f = tmp_path / "p.md"
+    f.write_text("pasted", encoding="utf-8")
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief",
+        "--paste", str(f), "--research", "gemini",
+    )
+    assert result.exit_code == 1
+    assert "one" in result.output.lower()
+
+
+def test_ingest_refuses_the_other_pair_of_input_modes(prepared, tmp_path):
+    """R1 negative, own sweep. M1 restated: a guard written as `if research and
+    paste` passes the brief's test and lets --paste --from-source through, and
+    the corpus would then silently come from whichever branch is written first.
+    precondition: the source exists, so the accepted branch would succeed."""
+    ws_src = tmp_path  # only the paste file lives here
+    f = ws_src / "p.md"
+    f.write_text("pasted", encoding="utf-8")
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief",
+        "--paste", str(f), "--from-source", "kill-staging",
+    )
+    assert result.exit_code == 1
+    assert not (prepared / "sources").exists()
+
+
+def test_ingest_refuses_all_three_input_modes(prepared, tmp_path):
+    """R1 negative, own sweep. `len(modes) > 1` and `len(modes) == 2` are not
+    the same rule and only one of them is right."""
+    f = tmp_path / "p.md"
+    f.write_text("pasted", encoding="utf-8")
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief",
+        "--paste", str(f), "--research", "gemini", "--from-source", "x",
+    )
+    assert result.exit_code == 1
+    assert not (prepared / "sources").exists()
+
+
+def test_ingest_paste_writes_the_corpus(prepared, tmp_path):
+    """precondition: corpus empty."""
+    f = tmp_path / "p.md"
+    f.write_text("the pasted digest", encoding="utf-8")
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--paste", str(f))
+    assert result.exit_code == 0
+    assert (prepared / "sources" / "_pasted.txt").read_text(encoding="utf-8") == (
+        "the pasted digest"
+    )
+    assert (prepared / "brief.md").exists()
+
+
+def test_ingest_paste_on_a_missing_file_is_a_clean_error(prepared, tmp_path):
+    """R3. Kills M3."""
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief",
+        "--paste", str(tmp_path / "nope.md"),
+    )
+    assert result.exit_code == 1
+    assert "nope.md" in result.output
+
+
+def test_ingest_paste_on_a_non_utf8_file_is_a_clean_error(prepared, tmp_path):
+    """R3 negative. Kills M4 — a cp1252-saved digest is the likeliest real
+    input here, and it must not traceback."""
+    f = tmp_path / "p.md"
+    f.write_bytes(b"caf\xe9 pricing")
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--paste", str(f))
+    assert result.exit_code == 1
+    assert "UTF-8" in result.output
+
+
+def test_ingest_paste_on_a_directory_is_a_clean_error(prepared, tmp_path):
+    """R3, own sweep. Tab-completion hands you a directory as readily as a
+    file; read_text raises IsADirectoryError, which is an OSError and not one
+    of the two the brief's mutant table names. precondition: the path exists
+    and is a directory."""
+    d = tmp_path / "adir"
+    d.mkdir()
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--paste", str(d))
+    assert result.exit_code == 1
+    assert "adir" in result.output
+
+
+def test_ingest_reports_partial_failure_and_still_succeeds(prepared, monkeypatch):
+    """R2. Kills M8 — a corpus with three of four sources is usable, and
+    failing the command would throw the three away."""
+    from agenticsocial.video import ingest as I
+
+    monkeypatch.setattr(
+        I, "ingest_research",
+        _fake_ingest(["blog-google"], [("https://venturebeat.com/b", "403 Forbidden")]),
+    )
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--research", "x")
+    assert result.exit_code == 0
+    assert "venturebeat.com/b" in result.output      # R4: failures are visible
+    assert "403" in result.output
+
+
+def test_ingest_does_not_invent_failures_when_there_were_none(prepared, monkeypatch):
+    """R4's other half, own sweep. The failure report must be driven by the
+    failures. An unconditional block, or one printed from the wrong list, is
+    as misleading as printing nothing. precondition: a run with two keys and
+    an empty failure list."""
+    from agenticsocial.video import ingest as I
+
+    monkeypatch.setattr(I, "ingest_research", _fake_ingest(["blog-google", "arstechnica"], []))
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--research", "x")
+    assert result.exit_code == 0
+    assert "venturebeat" not in result.output
+    assert "http" not in result.output
+
+
+def test_ingest_reports_how_many_sources_landed(prepared, monkeypatch):
+    """R4. Kills M6's counting variant: reporting `1 source` for a three-source
+    ingest is a false record of what the corpus contains."""
+    from agenticsocial.video import ingest as I
+
+    monkeypatch.setattr(
+        I, "ingest_research",
+        _fake_ingest(["a-com", "b-com", "c-com"], [("https://d.com/x", "timeout")]),
+    )
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--research", "x")
+    assert result.exit_code == 0
+    assert "3" in result.output
+    assert "d.com/x" in result.output
+    assert "timeout" in result.output
+
+
+def test_ingest_fails_when_nothing_was_ingested(prepared, monkeypatch):
+    """R2 negative. Kills M7 — an empty corpus that exits 0 looks exactly like
+    a successful run to any script that checks the exit code."""
+    from agenticsocial.video import ingest as I
+
+    monkeypatch.setattr(I, "ingest_research", _fake_ingest([], [("https://x/y", "403")]))
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--research", "x")
+    assert result.exit_code == 1
+
+
+def test_ingest_fails_when_nothing_was_ingested_and_nothing_failed(prepared, monkeypatch):
+    """R2 negative, own sweep. M7's matched half: a search that returned no
+    results at all yields keys == [] AND failures == [], and a guard written as
+    `if not keys and failures` exits 0 on it — the silent empty corpus R2
+    exists to forbid."""
+    from agenticsocial.video import ingest as I
+
+    monkeypatch.setattr(I, "ingest_research", _fake_ingest([], []))
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--research", "x")
+    assert result.exit_code == 1
+    assert "nothing" in result.output.lower()
+
+
+def test_ingest_surfaces_a_search_failure_cleanly(prepared, monkeypatch):
+    """R3. Kills M5."""
+    from agenticsocial.video import ingest as I
+
+    def boom(episode, query, **kw):
+        raise I.IngestError("search failed: connection refused")
+
+    monkeypatch.setattr(I, "ingest_research", boom)
+    result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--research", "x")
+    assert result.exit_code == 1
+    assert "connection refused" in result.output
+
+
+def test_ingest_from_an_unknown_source_is_a_clean_error(prepared):
+    """R3. Kills M9."""
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief", "--from-source", "nope"
+    )
+    assert result.exit_code == 1
+    assert "nope" in result.output
+
+
+def test_ingest_from_an_ambiguous_source_is_a_clean_error(prepared, ws):
+    """R3, own sweep. resolve_source raises WorkspaceError for an ambiguous
+    prefix as well as an unknown one, and a handler that only special-cases
+    'not found' tracebacks here. precondition: two sources share a substring."""
+    ws.create_source("Kill staging", body="a", created="2026-08-14")
+    ws.create_source("Kill staging again", body="b", created="2026-08-15")
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief",
+        "--from-source", "kill-staging",
+    )
+    assert result.exit_code == 1
+    assert "multiple" in result.output.lower()
+
+
+def test_ingest_from_an_existing_source(prepared, ws):
+    """precondition: corpus empty; the source exists with a non-empty body."""
+    ws.create_source("Kill staging", body="the original reasoning", created="2026-08-14")
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief",
+        "--from-source", "kill-staging",
+    )
+    assert result.exit_code == 0
+    assert any((prepared / "sources").glob("*.txt"))
+
+
+def test_ingest_from_an_empty_source_fails_rather_than_citing_nothing(prepared, ws):
+    """R2 negative through the CLI, own sweep. ingest_source returns keys == []
+    for an empty body; the command must treat that as the empty corpus it is.
+    precondition: the source exists and its body is blank."""
+    ws.create_source("Empty one", body="   \n", created="2026-08-14")
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief",
+        "--from-source", "empty-one",
+    )
+    assert result.exit_code == 1
+
+
+def test_ingest_into_an_unknown_episode_is_a_clean_error(ws):
+    run("series", "new", "the-brief")
+    result = run(
+        "video", "ingest", "1999-01-01", "--series", "the-brief", "--research", "x"
+    )
+    assert result.exit_code == 1
+    assert "agsoc video new" in result.output
+
+
+def test_ingest_into_an_unknown_series_is_a_clean_error(ws):
+    """R3, own sweep. The series is as typable as the episode."""
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "nope", "--research", "x"
+    )
+    assert result.exit_code == 1
+    assert "nope" in result.output
+
+
+def test_ingest_into_an_unwritable_episode_is_a_clean_error(prepared, tmp_path):
+    """R3 negative — 'an unreadable output directory', named in the rule and in
+    no mutant. precondition: the paste file is valid, so the only thing that can
+    fail is the write."""
+    import os
+    import stat
+
+    f = tmp_path / "p.md"
+    f.write_text("the pasted digest", encoding="utf-8")
+    mode = prepared.stat().st_mode
+    os.chmod(prepared, stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        if os.access(prepared, os.W_OK):
+            pytest.skip("cannot revoke write permission as this user")
+        result = run(
+            "video", "ingest", "2026-08-17", "--series", "the-brief", "--paste", str(f)
+        )
+        assert result.exit_code == 1
+        assert "cannot" in result.output.lower()
+    finally:
+        os.chmod(prepared, stat.S_IMODE(mode))
+
+
+def test_ingest_with_an_undecodable_query_fails_cleanly(prepared):
+    """R3 negative, own sweep. D-025: sys.argv is decoded with surrogateescape,
+    so a non-UTF-8 byte in --research arrives as a lone surrogate and reaches
+    brief.md, where atomic_write cannot encode it. --research was the newest
+    operator input and the one most likely to be pasted from a terminal."""
+    result = run(
+        "video", "ingest", "2026-08-17", "--series", "the-brief", "--research", "caf\udce9"
+    )
+    assert result.exit_code == 1
+    assert "UTF-8" in result.output
+
+
+def test_ingest_with_an_undecodable_episode_id_fails_cleanly(prepared):
+    """R3 negative, own sweep. F1 was `--series` skipping _text() on one
+    command; every new command re-opens that hole on every argument."""
+    result = run(
+        "video", "ingest", "caf\udce9", "--series", "the-brief", "--research", "x"
+    )
+    assert result.exit_code == 1
+    assert "UTF-8" in result.output
