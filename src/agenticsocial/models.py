@@ -42,8 +42,8 @@ VIDEO_TRANSITIONS: dict[Status, set[Status]] = {
     Status.APPROVED: {Status.IN_REVIEW, Status.RENDERING},
     Status.SCHEDULED: set(),
     Status.RENDERING: {Status.RENDERED, Status.FAILED},
-    Status.RENDERED: {Status.PUBLISHING},
-    Status.PUBLISHING: {Status.PUBLISHED, Status.FAILED},
+    Status.RENDERED: set(),      # terminal in MVP; see spec §10 and D-006
+    Status.PUBLISHING: set(),    # unreachable in MVP; kept for table totality
     Status.PUBLISHED: set(),
     Status.FAILED: {Status.RENDERING},
 }
@@ -56,9 +56,8 @@ class TransitionError(Exception):
         self,
         current: Status,
         target: Status,
-        table: dict[Status, set[Status]] | None = None,
+        table: dict[Status, set[Status]],
     ):
-        table = ALLOWED_TRANSITIONS if table is None else table
         allowed = ", ".join(
             s.value for s in _ORDER if s in table[current]
         ) or "none (terminal)"
