@@ -457,3 +457,60 @@ def test_empty_query_does_not_resolve_an_episode(series):
     create_episode(series, "2026-08-14")
     with pytest.raises(EpisodeError):
         resolve_episode(series, "")
+
+
+# --- mixed line endings, and the metadata block ---------------------------------
+# `sep.end() + len(sep.group(1))` assumed the separator's trailing newline was
+# the same length as its leading one. With CRLF metadata and LF beats it ate the
+# first byte of the beats document, silently, leaving a file that still parses.
+
+
+@pytest.mark.parametrize(
+    "meta_nl,beats_nl",
+    [("\r\n", "\n"), ("\n", "\r\n"), ("\r", "\n"), ("\n", "\r"), ("\r\n", "\r")],
+)
+def test_mixed_line_endings_preserve_beats_bytes(series, meta_nl, beats_nl):
+    ep = create_episode(series, "ep")
+    meta = meta_nl.join(["episode: e", "series: the-brief", "status: draft", ""])
+    beats = beats_nl.join(["beats:", "  - type: statement", ""])
+    ep.script_path.write_bytes(
+        f"---{meta_nl}{meta}---{beats_nl}{beats}".encode()
+    )
+    set_status(load_episode(series, "ep"), Status.IN_REVIEW)
+    assert beats.encode() in ep.script_path.read_bytes()
+
+
+def test_first_byte_of_beats_is_never_eaten(series):
+    """The specific corruption: b'beats:' became b'eats:'."""
+    ep = create_episode(series, "ep")
+    ep.script_path.write_bytes(
+        b"---\r\nepisode: e\r\nseries: the-brief\r\nstatus: draft\r\n"
+        b"---\nbeats:\n  - type: statement\n"
+    )
+    set_status(load_episode(series, "ep"), Status.IN_REVIEW)
+    raw = ep.script_path.read_bytes()
+    assert b"beats:" in raw
+    assert b"eats:\n" not in raw.replace(b"beats:", b"")
+
+
+def test_an_all_crlf_script_stays_all_crlf(series):
+    """Kills the 3c survivor: dropping head.replace() emits LF metadata lines
+    inside CRLF fences, and no byte test looked at the metadata block."""
+    ep = create_episode(series, "ep")
+    ep.script_path.write_bytes(
+        b"---\r\nepisode: e\r\nseries: the-brief\r\nstatus: draft\r\n"
+        b"---\r\nbeats:\r\n  - type: statement\r\n"
+    )
+    set_status(load_episode(series, "ep"), Status.IN_REVIEW)
+    raw = ep.script_path.read_bytes()
+    assert raw.replace(b"\r\n", b"").count(b"\n") == 0
+
+
+def test_an_all_lf_script_stays_all_lf(series):
+    ep = create_episode(series, "ep")
+    ep.script_path.write_bytes(
+        b"---\nepisode: e\nseries: the-brief\nstatus: draft\n"
+        b"---\nbeats:\n  - type: statement\n"
+    )
+    set_status(load_episode(series, "ep"), Status.IN_REVIEW)
+    assert b"\r" not in ep.script_path.read_bytes()
