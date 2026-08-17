@@ -232,3 +232,36 @@ def test_disk_status_reports_the_file_not_the_object(tmp_path):
     v = ws.create_variant(src, "x", body="hello")
     v = replace(v, status=Status.APPROVED)
     assert ws.disk_status(v) is Status.DRAFT
+
+
+def test_variant_status_cannot_be_assigned(tmp_path):
+    """Three gate bypasses came from assigning this field. Deleting
+    `frozen=True` passes the entire suite without this test."""
+    import dataclasses
+
+    import pytest
+
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hi")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        v.status = Status.PUBLISHING
+
+
+def test_set_status_returns_a_new_variant_and_leaves_the_argument_alone(tmp_path):
+    """`return v` instead of `return replace(v, ...)` passes the whole suite:
+    every other Variant test reloads from disk."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hi")
+
+    moved = ws.set_status(v, Status.IN_REVIEW)
+    assert moved is not v
+    assert moved.status is Status.IN_REVIEW
+    assert v.status is Status.DRAFT          # the argument is untouched

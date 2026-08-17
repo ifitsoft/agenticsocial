@@ -683,3 +683,11 @@ def test_a_lost_create_race_does_not_delete_the_winner(series, monkeypatch):
         create_episode(series, "2026-08-14")
     monkeypatch.undo()
     assert ep.script_path.read_bytes() == before
+
+
+def test_episode_status_cannot_be_assigned(series):
+    import dataclasses
+
+    ep = create_episode(series, "2026-08-14")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ep.status = Status.RENDERING
