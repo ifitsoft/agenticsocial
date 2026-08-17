@@ -175,6 +175,7 @@ def test_documents_are_written_before_the_brief(episode, monkeypatch):
     )
     assert order[-1] == "brief.md"
     assert "blog-google.txt" in order
+    assert order.count("brief.md") == 1
 
 
 def test_an_empty_search_still_writes_a_brief_that_says_so(episode):
@@ -184,6 +185,20 @@ def test_an_empty_search_still_writes_a_brief_that_says_so(episode):
     assert res.keys == []
     assert res.brief_path.exists()
     assert "no sources" in res.brief_path.read_text(encoding="utf-8").lower()
+
+
+def test_a_second_ingest_does_not_lose_the_first_from_the_brief(episode):
+    """precondition: the corpus already contains blog-google from ingest #1.
+    Kills the mutant that builds the brief from this call's keys only."""
+    I.ingest_research(
+        episode, "gemini",
+        search=fake_search(RESULTS[:1]),
+        extract=fake_extract({"https://blog.google/a": "article a"}),
+    )
+    res = I.ingest_paste(episode, "a pasted digest")
+    brief = res.brief_path.read_text(encoding="utf-8")
+    assert "blog-google" in brief
+    assert "_pasted" in brief
 
 
 def test_the_brief_records_the_query(episode):
@@ -206,6 +221,14 @@ def test_ingest_source_uses_the_source_body(ws, episode):
     src = ws.create_source("Kill staging", body="the original reasoning")
     res = I.ingest_source(episode, src)
     assert res.keys and C.document_text(episode, res.keys[0]) == "the original reasoning"
+
+
+def test_a_long_source_id_produces_a_bounded_key(ws, episode):
+    """precondition: corpus empty. Keys become filenames and citation tokens;
+    episode ids are capped for the same reason and corpus keys were not."""
+    src = ws.create_source("x" * 200, body="body")
+    res = I.ingest_source(episode, src)
+    assert len(res.keys[0]) <= 64
 
 
 def test_ingest_source_with_an_empty_body_is_a_failure(ws, episode):

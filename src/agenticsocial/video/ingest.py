@@ -70,9 +70,24 @@ def _brief(
 ) -> Path:
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     lines = [f"# {heading}", "", f"_Query: {query} · ingested {now}_", ""]
-    if written:
+
+    # The corpus accumulates but brief.md is rewritten whole by every ingest, so
+    # a brief built from THIS call's writes silently drops everything earlier
+    # runs fetched. The manifest already holds url/title for the whole corpus,
+    # so a brief regenerated from it is correct by construction. `written` is
+    # only the fallback for a manifest that cannot be read.
+    try:
+        manifest = C.read_manifest(episode)
+    except C.CorpusError:
+        manifest = {}
+    entries = [
+        (key, entry.get("url") or "", entry.get("title") or "")
+        for key, entry in sorted(manifest.items())
+    ] or list(written)
+
+    if entries:
         lines += ["## Sources in the corpus", ""]
-        for key, url, title in written:
+        for key, url, title in entries:
             lines += [f"- `{key}` — {title or '(untitled)'}", f"  <{url}>" if url else "  (pasted)"]
         lines.append("")
     else:
@@ -149,8 +164,12 @@ def ingest_source(episode: Episode, source) -> IngestResult:
     if not body.strip():
         fails = [(source.id, "source body is empty")]
         return IngestResult([], fails, _brief(episode, "Brief", source.id, [], fails))
+    # source.id is a date plus a slugified title, and it becomes a filename, a
+    # manifest key and a citation token. episode.py caps ids with MAX_ID_LEN for
+    # exactly this reason; corpus keys were not capped.
+    key = f"src-{source.id}"[:64]
     key = C.write_document(
-        episode, body, url=source.origin_url or "", title=source.title, key=f"src-{source.id}"
+        episode, body, url=source.origin_url or "", title=source.title, key=key
     )
     return IngestResult(
         [key], [], _brief(episode, "Brief", source.id, [(key, source.origin_url or "", source.title)], [])
