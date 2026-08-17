@@ -279,3 +279,10 @@ def test_video_new_cannot_escape_the_workspace(ws, tmp_path):
     result = run("video", "new", "2026-08-14", "--series", traversal)
     assert result.exit_code == 1
     assert not (outside / "episodes" / "2026-08-14").exists()
+
+
+def test_series_option_with_undecodable_text_fails_cleanly(ws):
+    """F1: --series was the one operator input never passed through _text()."""
+    result = run("video", "new", "2026-08-14", "--series", "caf\udce9")
+    assert result.exit_code == 1
+    assert "UTF-8" in result.output

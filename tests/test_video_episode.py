@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -545,12 +547,14 @@ def test_date_shaped_episode_ids_are_accepted(series):
 
 
 def test_empty_metadata_document_keeps_its_beats(series):
-    """Pins the 3d mutant that survived: searching from start.end() instead of
-    start.end() - len(nl) discards the beats of an empty-metadata script."""
+    """F4: the previous version asserted a substring that the CORRUPTED output
+    also contains, so the 3d mutant survived. Assert bytes at the end."""
     ep = create_episode(series, "2026-08-14")
-    ep.script_path.write_bytes(b"---\n---\nbeats:\n  - type: statement\n")
+    beats = b"beats:\n  - type: statement\n"
+    ep.script_path.write_bytes(b"---\n---\n" + beats)
     set_status(load_episode(series, "2026-08-14"), Status.IN_REVIEW)
-    assert b"- type: statement" in ep.script_path.read_bytes()
+    raw = ep.script_path.read_bytes()
+    assert raw.endswith(beats), raw
 
 
 # --- path safety: shared with series.py, distinct from the naming rules --------
@@ -579,3 +583,103 @@ def test_load_episode_still_accepts_a_hand_made_directory_name(series):
         encoding="utf-8",
     )
     assert load_episode(series, "Ep_01").status is Status.DRAFT
+
+
+# --- F2: the gate must be checked against disk, not a stale object -------------
+
+
+def test_set_status_checks_the_gate_against_disk_not_memory(series):
+    """The approval gate is the one invariant the product rests on. A stale
+    Episode must not be able to walk past it."""
+    ep = create_episode(series, "2026-08-14")
+    set_status(ep, Status.IN_REVIEW)
+    set_status(ep, Status.APPROVED)
+    ep.script_path.write_text(
+        ep.script_path.read_text().replace("status: approved", "status: draft"),
+        encoding="utf-8",
+    )
+    with pytest.raises(TransitionError):
+        set_status(ep, Status.RENDERING)
+    assert load_episode(series, "2026-08-14").status is Status.DRAFT
+
+
+def test_set_status_refreshes_the_object_from_disk(series):
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_text(
+        ep.script_path.read_text().replace("status: draft", "status: in_review"),
+        encoding="utf-8",
+    )
+    set_status(ep, Status.APPROVED)  # legal from in_review, illegal from draft
+    assert ep.status is Status.APPROVED
+
+
+def test_set_status_rejects_an_unreadable_status_on_disk(series):
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_text(
+        "---\nepisode: e\nstatus: banana\n---\nbeats: []\n", encoding="utf-8"
+    )
+    with pytest.raises(EpisodeError, match="banana"):
+        set_status(ep, Status.IN_REVIEW)
+
+
+# --- F3: refuse the ambiguous shape rather than destroy beats ------------------
+
+
+def test_script_without_a_separator_is_refused_not_reflowed(series):
+    """Beats in document 1 were parsed as metadata, then `beats: []` was
+    fabricated as document 2 — comments destroyed and the episode reported
+    empty."""
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_text(
+        "---\nepisode: e\nseries: the-brief\nstatus: draft\n"
+        "beats:\n  # hand written\n  - type: statement\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(EpisodeError, match="separator"):
+        load_episode(series, "2026-08-14")
+
+
+def test_metadata_only_script_is_still_allowed(series):
+    """No beats key and no second document is the create path, not ambiguity."""
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_text(
+        "---\nepisode: e\nseries: the-brief\nstatus: draft\n", encoding="utf-8"
+    )
+    assert load_episode(series, "2026-08-14").status is Status.DRAFT
+
+
+# --- F5: a losing concurrent create must not delete the winner -----------------
+
+
+def test_create_over_an_existing_dir_does_not_delete_it(series, monkeypatch):
+    """Two concurrent `video new`: the loser's FileExistsError must not trigger
+    cleanup of the winner's finished episode."""
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_text("---\nstatus: approved\n---\nbeats: [1]\n", encoding="utf-8")
+    before = ep.script_path.read_bytes()
+    with pytest.raises(EpisodeError, match="already exists"):
+        create_episode(series, "2026-08-14")
+    assert ep.script_path.read_bytes() == before
+
+
+def test_a_lost_create_race_does_not_delete_the_winner(series, monkeypatch):
+    """The briefed test above cannot reach the racing branch: the `d.exists()`
+    precheck answers first, so it passes with or without the fix. This one
+    blinds that precheck — exactly what a concurrent winner does by creating
+    the directory after we looked — so the FileExistsError path is the one
+    under test.
+    """
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_text("---\nstatus: approved\n---\nbeats: [1]\n", encoding="utf-8")
+    before = ep.script_path.read_bytes()
+    target = series.episodes_dir / "2026-08-14"
+    real_exists = Path.exists
+
+    def blind(self):
+        return False if self == target else real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", blind)
+    with pytest.raises(EpisodeError, match="already exists"):
+        create_episode(series, "2026-08-14")
+    monkeypatch.undo()
+    assert ep.script_path.read_bytes() == before
