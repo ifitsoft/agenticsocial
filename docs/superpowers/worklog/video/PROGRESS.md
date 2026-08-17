@@ -29,7 +29,14 @@ Task 1b — Cut RENDERED→PUBLISHING + close test gaps: **implemented**
   history: old models.py + new tests → 3 failed / 16 passed, matching the
   prediction. Restored → 112 passed.
   Implementer caught a prose/code contradiction in my brief → D-010.
-Task 2 — Series configuration: brief written, awaiting Task 1b QA verdict
+Task 1b QA: **approve**. 12 mutants, 9 killed, 3 survived — all one class
+  (an edge added to a table no test forbids), incl. `DRAFT → RENDERING`, an
+  approval-gate bypass. Adjudicated in D-012 → Task 1c.
+Task 1c — Pin both transition tables: **complete** (`7e240eb`), 114 passed
+  First task under D-013 (guard tests justified by mutation kills, not RED).
+  All 3 mutants killed. Leader re-verified the gate bypass independently.
+  No separate QA pass — see D-015 for why, and why it is not a precedent.
+Task 2 — Series configuration: **dispatched** (3 commits: cleanup, tests, impl)
 Task 3 — Episode scaffolding: not started
 Task 4 — CLI wiring: not started
 

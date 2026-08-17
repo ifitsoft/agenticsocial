@@ -7,9 +7,11 @@
 
 ## Ground rules
 
-- **Two commits.** Tests first, in a failing state, then the implementation. A
-  reviewer must be able to verify the RED phase from git history rather than from
-  your report. Do not squash.
+- **Three commits**, in order: Step 0's cleanup, then the failing tests, then the
+  implementation. A reviewer must be able to verify the RED phase from git
+  history rather than from your report. Do not squash.
+- I may edit files under `docs/superpowers/worklog/` while you work — that is me
+  recording decisions, not interference. Never stage anything under `docs/`.
 - **Pipe command output to a file and paste from it.** Do not hand-transcribe.
 - Do not modify any existing test.
 - Do not add dependencies. `tomllib` is stdlib on Python 3.11+.
@@ -52,6 +54,42 @@ Later tasks import these by these exact names:
 - `agenticsocial.workspace.Workspace`: attribute `series_dir: Path`
 
 ---
+
+- [ ] **Step 0: Delete one redundant test (its own commit)**
+
+Unrelated to series config — a carried-over cleanup, committed separately so it
+does not muddy the Task 2 diff.
+
+Task 1c added `test_video_transitions_table_is_exact`, which strictly implies
+four earlier per-key assertions. Three of those four keep their place because
+their docstrings carry the *reasoning* (D-006, spec §3.1) and their names state
+the broken invariant in the failure line — a table pin only reports "the dict
+differs". `test_published_is_terminal_for_video` is the exception: no docstring,
+no decision record behind it, fully implied by the pin. Redundancy without the
+compensating rationale.
+
+In `tests/test_video_status.py`, delete exactly this function and its blank-line
+padding:
+
+```python
+def test_published_is_terminal_for_video():
+    assert VIDEO_TRANSITIONS[Status.PUBLISHED] == set()
+```
+
+Then:
+
+```bash
+uv run pytest 2>&1 | tail -3
+git add tests/test_video_status.py
+git commit -m "test: drop an assertion the table pin already covers
+
+test_published_is_terminal_for_video is implied by
+test_video_transitions_table_is_exact and, unlike the other per-key
+assertions, carries no docstring or decision record to justify keeping
+the redundancy."
+```
+
+Expected after: 113 passed.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -458,8 +496,11 @@ uv run pytest tests/test_video_series.py -v 2>&1 | tail -25
 uv run pytest 2>&1 | tail -5
 ```
 
-Expected: 17 passed in the new file; 129 passed overall. If a pre-existing test
-fails, **stop and report** — do not edit it.
+Expected: 17 passed in the new file; **130 passed overall** (113 after Step 0,
+plus 17 new). If a pre-existing test fails, **stop and report** — do not edit it.
+
+Arithmetic is my prediction, not gospel. If your count differs, report the number
+you observe and do not adjust anything to reach mine.
 
 - [ ] **Step 6: Commit the implementation**
 

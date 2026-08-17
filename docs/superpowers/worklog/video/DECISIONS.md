@@ -140,6 +140,82 @@ RED reproduced independently from git history rather than from the report:
 `3 failed, 16 passed`, matching the prediction exactly. Restored to `HEAD` →
 `112 passed`. D-009's two-commit rule justified itself on first use.
 
+## D-012 · phase 1 / task 1b · QA adjudication 2026-08-16
+QA verdict on `1016c09..43799e5`: **approve**. 12 mutants, 9 killed, 3 survived.
+The gap Task 1b existed to close *is* closed — "render can only fail, never
+complete" is now killed by `test_rendering_may_complete`.
+
+| # | Sev | Finding | Verdict |
+|---|---|---|---|
+| F1 | medium | `DRAFT → RENDERING` added to `VIDEO_TRANSITIONS` passes all 112 tests — an **approval-gate bypass** with no guard | **fix-now** → Task 1c |
+| F2 | low | `SCHEDULED → RENDERING` survives; unreachable today, live once v2 gives `SCHEDULED` an in-edge | **fix-now** → Task 1c (same test) |
+| F3 | low | `PUBLISHING: {FAILED}` survives; spec §10 says these stay empty, nothing enforces it | **fix-now** → Task 1c (same test) |
+| F4 | info | `test_transition_error_requires_an_explicit_table` asserts only "some `TypeError`" | **reject** — the property that matters is preserved; tightening it would test Python, not us |
+| F5 | info | The brief contradicted itself; implementer followed the verbatim table | already recorded as D-010 |
+
+All three survivors are one class — *an edge added to a table that no test
+forbids* — so one exact-equality pin per table kills the class, not just the
+three instances. That is why Task 1c pins both tables rather than adding three
+targeted tests.
+
+Severity capped by a real observation from QA: `VIDEO_TRANSITIONS` has **no
+consumer in `src/` yet** (`workspace.set_status` still uses the text table), so
+F1 is unreachable at runtime today. It stops being unreachable the moment Phase 3
+wires the table in — which is exactly why it gets closed now rather than then.
+
+## D-013 · process · clarification
+**Guard tests are exempt from the two-commit rule (D-009).** A test that pins
+already-correct behaviour cannot have a red phase. Justifying it with a fake RED
+would be theatre. The evidence that earns a guard test its place is **mutation
+kills**: apply the mutant, show the test fails, restore. Task 1c is the first
+task run this way.
+
+## D-014 · process · QA is not infallible
+QA's 1b review stated "the brief names `publish.py`; no such module exists".
+`src/agenticsocial/x/publish.py` does exist — I verified it. Its *conclusion* was
+still correct (that path reaches the table through `ws.set_status`, which keeps
+`assert_transition`'s text-table default, so requiring `TransitionError.table` is
+safe).
+
+Recorded because the leader's job includes not rubber-stamping the reviewer. A
+QA verdict is evidence, not a ruling. Findings get verified before they are acted
+on, and so do non-findings.
+
+## D-015 · phase 1 / task 1c · verified, closed
+All three surviving mutants killed; 112 → 114 tests. Leader re-verified the one
+that matters independently: applying `DRAFT → RENDERING` to `VIDEO_TRANSITIONS`
+now fails `test_video_transitions_table_is_exact` (`1 failed, 113 passed`);
+restored → 114 passed, tree clean. **The approval-gate bypass is guarded.**
+
+No separate QA pass. A test-only commit whose entire justification is
+reproducible mutation evidence is cheaper for the leader to verify directly than
+to hand to a reviewer. Not a precedent for source changes.
+
+## D-016 · phase 1 / task 1c · assertion redundancy — implementer's call adopted
+Asked whether four exact-equality assertions is too many. The implementer argued
+the smell points at the *old* per-key assertions, not the new pins, but that
+three of the four still earn their place: their docstrings carry the reasoning
+(D-006, spec §3.1) and their names state the broken invariant in the failure
+line, where a whole-table pin only reports "the dict differs". The maintenance
+friction of updating two tests is itself the feature — it routes whoever widens a
+table past both the tripwire and the rationale.
+
+Its one exception: **delete `test_published_is_terminal_for_video`** — the only
+one of the four with no docstring and no decision record, so redundancy without
+compensating rationale. **Adopted**; folded into Task 2 Step 0 as its own commit,
+because the leader does not edit code.
+
+Ceiling it set, and I am holding us to it: two whole-table pins is the maximum. A
+third table gets a parametrised pin over `(table, expected)`, not a third
+copy-paste, and no further per-key equality tests go in this file.
+
+## D-017 · process · leader writes during agent runs
+Task 1c's implementer noticed `DECISIONS.md` changing mid-session and flagged it
+rather than ignoring it — correct instinct, and it was me. Benign: agents never
+touch `docs/superpowers/worklog/`, and nothing under `docs/` is ever staged by a
+task. Briefs from Task 2 onward say so explicitly, so the next agent does not
+spend attention on it.
+
 ---
 
 ## Open risks carried from the spec
