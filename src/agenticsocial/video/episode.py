@@ -95,7 +95,13 @@ def _read_meta(path: Path) -> tuple[dict, str | None, str]:
             "Re-save it as UTF-8; agsoc writes and expects UTF-8 everywhere."
         )
     meta_text, beats_text, nl = _split(text)
-    return _parse_meta(meta_text, path), beats_text, nl
+    meta = _parse_meta(meta_text, path)
+    if beats_text is None and "beats" in meta:
+        raise EpisodeError(
+            f"{path}: `beats` appears in the metadata document. script.yaml needs "
+            "a `---` separator line between the metadata and the beats document."
+        )
+    return meta, beats_text, nl
 
 
 def _compose(meta: dict, beats_text: str | None, nl: str = "\n") -> str:
@@ -120,8 +126,12 @@ def create_episode(series: Series, ep_id: str) -> Episode:
     if d.exists() or d.is_symlink():
         raise EpisodeError(f"episode already exists: {series.slug}/{ep_id}")
     try:
+        d.mkdir(parents=True)  # atomic claim; FileExistsError if we lost
+    except FileExistsError:
+        raise EpisodeError(f"episode already exists: {series.slug}/{ep_id}")
+    try:
         for sub in SUBDIRS:
-            (d / sub).mkdir(parents=True)
+            (d / sub).mkdir()
         atomic_write(d / "script.yaml", _compose(_new_meta(series, ep_id), None))
     except BaseException:
         # Mirror scaffold_series: a half-built episode is invisible to
@@ -216,8 +226,23 @@ def resolve_episode(series: Series, query: str) -> Episode:
 
 
 def set_status(episode: Episode, target: Status) -> None:
-    assert_transition(episode.status, target, VIDEO_TRANSITIONS)
+    """Move an episode to `target`.
+
+    The gate is checked against the status ON DISK, not against `episode.status`.
+    A caller holding a stale Episode must not be able to reach RENDERING from a
+    file that says `draft` — spec §8.4 and §10 exist to make rendering
+    unreachable without a human, and an in-memory check is not that guarantee.
+    """
     meta, beats_text, nl = _read_meta(episode.script_path)
+    raw = meta.get("status", Status.DRAFT.value)
+    try:
+        current = Status(raw)
+    except ValueError:
+        raise EpisodeError(
+            f"{episode.script_path}: invalid status '{raw}' — one of: "
+            f"{', '.join(s.value for s in Status)}"
+        )
+    assert_transition(current, target, VIDEO_TRANSITIONS)
     meta["status"] = target.value
     atomic_write(episode.script_path, _compose(meta, beats_text, nl))
     episode.status = target

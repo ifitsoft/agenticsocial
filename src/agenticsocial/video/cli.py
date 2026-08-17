@@ -110,6 +110,7 @@ def video_new(
     """Create an episode directory with a stub script.yaml."""
     ws = _workspace()
     episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
     try:
         s = _resolve_series(ws, series, autocreate=True)
         ep = create_episode(s, episode)
@@ -127,6 +128,7 @@ def video_list(
 ) -> None:
     """List episodes and their statuses. Reports broken ones rather than dying."""
     ws = _workspace()
+    series = _text(series, "The series slug")
     try:
         s = load_series(ws, series)
         ids = episode_ids(s)
