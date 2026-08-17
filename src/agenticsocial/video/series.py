@@ -53,15 +53,41 @@ CONVENTIONS = {
 }
 
 
-def _toml_str(value: str) -> str:
-    """Render a TOML basic string.
+_TOML_SHORT_ESCAPES = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\b": "\\b",
+    "\t": "\\t",
+    "\n": "\\n",
+    "\f": "\\f",
+    "\r": "\\r",
+}
 
-    JSON's string escaping is a valid subset of TOML's basic-string escaping
-    (both use \\", \\\\, \\n, \\t, \\uXXXX), so json.dumps produces a correct
-    quoted TOML string. Interpolating raw operator input instead corrupts the
-    file it is written into — see D-020.
+
+def _toml_str(value: str) -> str:
+    """Render a TOML v1.0.0 basic string.
+
+    TOML files are UTF-8, so every printable character — including non-BMP ones
+    like emoji — is written literally. Only what UTF-8 cannot carry safely
+    inside a basic string gets escaped: the quote, the backslash, the C0
+    controls, and U+007F.
+
+    Do NOT substitute json.dumps here. With ensure_ascii=True it emits UTF-16
+    surrogate pairs, which TOML rejects because \\uXXXX must name a Unicode
+    scalar value; with ensure_ascii=False it emits raw U+007F, which TOML
+    forbids in a basic string. Neither setting is correct. See D-022.
     """
-    return json.dumps(value)
+    out = ['"']
+    for ch in value:
+        short = _TOML_SHORT_ESCAPES.get(ch)
+        if short is not None:
+            out.append(short)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    out.append('"')
+    return "".join(out)
 
 
 def render_series_toml(name: str, slug: str) -> str:
@@ -147,6 +173,19 @@ def load_series(ws: Workspace, slug: str) -> Series:
     if isinstance(target_sec, bool) or not isinstance(target_sec, int) or target_sec <= 0:
         raise SeriesError(f"{path}: [runtime] target_sec must be a positive integer")
 
+    acts = structure.get("acts", [])
+    if not isinstance(acts, list) or not all(isinstance(a, dict) for a in acts):
+        raise SeriesError(
+            f"{path}: [[structure.acts]] must be a list of tables — "
+            "write [[structure.acts]] blocks, not a bare acts = value"
+        )
+
+    warm_acts = structure.get("warm_acts", [])
+    if not isinstance(warm_acts, list) or not all(
+        isinstance(a, str) for a in warm_acts
+    ):
+        raise SeriesError(f"{path}: [structure] warm_acts must be a list of strings")
+
     return Series(
         slug=slug,
         name=meta.get("name", slug),
@@ -158,8 +197,8 @@ def load_series(ws: Workspace, slug: str) -> Series:
         tolerance_sec=runtime.get("tolerance_sec", 8),
         formats=formats,
         design=design,
-        acts=structure.get("acts", []),
-        warm_acts=structure.get("warm_acts", []),
+        acts=acts,
+        warm_acts=warm_acts,
     )
 
 
