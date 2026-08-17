@@ -65,6 +65,50 @@ two new subprocess boundaries and must not reintroduce them.
 
 ---
 
+- [ ] **Step 0: Pin Chromium, or the reproducibility claim is false (own commit)**
+
+`engine/package.json` declares `"playwright": "^1.62.1"`. Task 2b established
+that the blur-rasterisation behaviour is Chromium-version dependent — so under a
+caret range, **two operators can render different MP4s from the same
+`script.yaml`**. The determinism test cannot catch this: it compares two hashes
+within one session, so both sides move together on an upgrade.
+
+`CLAUDE.md` calls reproducibility load-bearing. A caret range quietly makes it a
+per-machine property.
+
+In `engine/package.json`, pin exactly:
+
+```json
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+```
+
+Then run `npm install --package-lock-only` inside `engine/` so the lockfile
+matches, and add to `engine/README.md`, under the render workflow:
+
+```markdown
+## Reproducibility
+
+Playwright is pinned to an exact version, not a caret range. Chromium's
+rasterisation of `filter: blur()` is version-dependent, so a different Chromium
+produces different bytes from the same `script.yaml`. Frames are only
+reproducible against the pinned build.
+
+Before bumping Playwright, run `node determinism.test.mjs` on the new version
+and re-render a committed episode to see what moved.
+```
+
+```bash
+cd engine && npm install --package-lock-only 2>&1 | tail -2 && node determinism.test.mjs 2>&1 | tail -3
+cd .. && git add engine/package.json engine/package-lock.json engine/README.md
+git commit -m "build: pin playwright exactly so renders are reproducible
+
+Chromium's blur rasterisation is version-dependent, so a caret range let
+two operators produce different MP4s from one script.yaml. The
+determinism test compares two hashes in one session and cannot see this."
+```
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `tests/test_video_render.py`:

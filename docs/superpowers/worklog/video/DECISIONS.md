@@ -1031,3 +1031,81 @@ run the test against the mutant before committing it — is one I keep prescribi
 to implementers and failing to apply to my own briefs. **From here, any test I
 write in a brief that names a specific mutant must come with the pace/values that
 demonstrably produce the condition, or say plainly that I have not verified it.**
+
+## D-054 · phase 1.5 / task 2b · determinism green, and my premise was false
+Fixed at rung 3 of the ladder: `stageScenes.appendChild(SC)` on every seek —
+re-inserting the existing node discards its paint layer without rebuilding the
+DOM or re-running the word-rise walk. Leader-verified: `deterministic`, exit 0,
+pixel and page-state checks green on both paths.
+
+**The trade-off I put to the human did not exist.** I framed "25 rebuilds vs
+3,600" as a performance decision. Measured: rebuild-every-frame costs **0.6%**,
+because rendering is dominated by `page.screenshot()` at ~230 ms/frame. The real
+objection to that option was architectural — `if(true)` deletes the caching
+mechanism and strands a dead `CUR` — and I presented it as speed. The chosen fix
+is free within noise (229.86 vs 229.94 ms/frame).
+
+Same error class as my vacuous tests, one level up: **I passed along a number
+without checking it, and asked for a decision on it.**
+
+The diagnostic that found the fix: arriving at `t=3.7` from any predecessor gives
+the same frame *unless a screenshot was taken in between*. The trigger is raster
+cache reuse — one level below anything a CSS declaration reaches, which is why
+all three of my suggested hints failed. It tried each and reported each failure
+rather than jumping to the authorised fallback.
+
+**Also fixed: a real `__seek(t)` impurity** (act chip and source tag were hidden,
+not cleared) — invisible in pixels, which is why the test now carries a
+page-state check. My page-state snippet in the brief was itself vacuous: both
+arms arrived from scenes that also had no act, so both inherited the same stale
+label and it printed "stable" with the bug present.
+
+## D-055 · phase 1.5 · playwright pinned; reproducibility was per-machine
+`engine/package.json` declared `"playwright": "^1.62.1"`. Chromium's blur
+rasterisation is version-dependent, so under a caret range **two operators could
+render different MP4s from one `script.yaml`** — and the determinism test cannot
+see it, because it compares two hashes within one session and both move together
+on upgrade. `CLAUDE.md` calls reproducibility load-bearing; a caret range quietly
+made it a property of the machine. Pinned exactly, with the reasoning in
+`engine/README.md`.
+
+## D-056 · phase 1.5 / task 3 · the engine is not in the wheel
+Asked whether `ENGINE_DIR = parents[3]` breaks under pip install. The implementer
+built an actual wheel rather than reasoning about it: **`engine/` is not packaged
+at all.** `pyproject.toml` ships only `src/agenticsocial`. In a clean venv the
+path resolves to a directory that has never existed, and the installed CLI
+reports `could not start the renderer: [Errno 2]`.
+
+So no `parents[N]` is correct — fixing the arithmetic points at something that
+was never shipped. **Required before Phase 8**, in three parts: ship the engine
+inside the package; anchor it with `importlib.resources.files("agenticsocial")`
+rather than a parent count (a parent count encodes repo depth in an unrelated
+module and breaks silently); and add `$AGSOC_ENGINE` plus a fail-fast check in
+`_require_tools`, so it fails up front with an actionable message.
+
+Not fixed in Phase 1.5: it moves a tracked Node subproject and edits packaging.
+
+## D-057 · phase 1.5 · a test hazard the mutation audit exposed
+`test_missing_node_is_a_clean_error` and `test_missing_ffmpeg_is_a_clean_error`
+patch `shutil.which` but not `subprocess.run`. They pass only because
+`_require_tools` raises first. **Remove that check and those two tests launch
+real Chromium and real ffmpeg** — violating the offline-suite rule and turning a
+1-second suite into a minutes-long one.
+
+Found by an implementer's own mutation audit, not by anything failing. Recorded
+as a Phase 2 cleanup: give both tests the `fake` fixture so they cannot reach a
+real subprocess whatever the code does.
+
+## D-058 · phase 1.5 · brief defect count: 14, implementer errors: 0
+Across Phases 1 and 1.5, every implementation has been a faithful transcription
+of its brief, and every defect has been mine, written upstream. Task 3 alone
+found three: a `--probe` path whose implementation could not have passed my own
+test, an `ffprobe` command that printed nothing and **read exactly like the
+feature failing**, and a misplaced import.
+
+The `ffprobe` one is the instructive one — a verification command that fails
+*closed* teaches the operator their working feature is broken. I have now written
+two of those (this, and the zsh word-splitting probe that reported four working
+commands as MISSING).
+
+**The leverage in this process is reviewing briefs, not reviewing code.**
