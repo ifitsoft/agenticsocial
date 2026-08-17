@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -66,6 +67,10 @@ def test_first_beat_carries_every_field(series):
         "type": "statement",
         "act": "01",
         "hold": 3.5,
+        "start": 0.0,
+        "end": 3.5,
+        "start_frame": 0,
+        "end_frame": 105,
         "kicker": "Today's headline",
         "text": "Google shipped its main agentic model.",
         "src": "blog.google",
@@ -82,7 +87,9 @@ def test_optional_fields_default_rather_than_vanish(series):
 def test_missing_hold_defaults_to_three_seconds(series):
     ep = create_episode(series, "2026-08-14")
     _script(ep, "beats:\n  - type: statement\n    text: no hold here\n")
-    assert build_plan(series, load_episode(series, "2026-08-14"))["beats"][0]["hold"] == 3.0
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    assert plan["beats"][0]["hold"] == 3.0
+    assert plan["total_sec"] == 3.0
 
 
 def test_total_sec_is_the_sum_of_holds_times_pace(series):
@@ -93,13 +100,16 @@ def test_total_sec_is_the_sum_of_holds_times_pace(series):
     assert plan["total_sec"] == 10.5
 
 
-def test_pace_scales_total_but_not_holds(series):
+def test_pace_scales_holds_and_total(series):
+    """Renamed from test_pace_scales_total_but_not_holds: the plan is now fully
+    resolved, so pace is applied in Python and the engine does no arithmetic."""
     ep = create_episode(series, "2026-08-14")
     _script(ep, THREE, pace=1.5)
     plan = build_plan(series, load_episode(series, "2026-08-14"))
     assert plan["pace"] == 1.5
     assert plan["total_sec"] == 15.75
-    assert plan["beats"][0]["hold"] == 3.5  # unscaled; the engine applies pace
+    assert plan["beats"][0]["hold"] == 5.25     # 3.5 * 1.5, scaled here
+    assert plan["beats"][0]["end"] == 5.25
 
 
 def test_design_tokens_come_from_the_series(series):
@@ -172,7 +182,7 @@ def test_write_plan_lands_in_out_dir_and_is_valid_json(series):
     ep = create_episode(series, "2026-08-14")
     _script(ep, THREE)
     path = write_plan(series, load_episode(series, "2026-08-14"))
-    assert path == ep.out_dir / "plan.json"
+    assert path == ep.out_dir / "plan-vertical.json"
     assert json.loads(path.read_text(encoding="utf-8"))["episode"] == "2026-08-14"
 
 
@@ -215,10 +225,12 @@ def test_top_level_keys_are_exactly_the_documented_ones_in_order(series):
         "episode",
         "series",
         "byline",
+        "script_sha256",
         "format",
         "fps",
         "pace",
         "total_sec",
+        "total_frames",
         "design",
         "beats",
     ]
@@ -230,7 +242,18 @@ def test_beat_keys_are_emitted_in_the_documented_order(series):
     ep = create_episode(series, "2026-08-14")
     _script(ep, THREE)
     b = build_plan(series, load_episode(series, "2026-08-14"))["beats"][0]
-    assert list(b) == ["type", "act", "hold", "kicker", "text", "src"]
+    assert list(b) == [
+        "type",
+        "act",
+        "hold",
+        "start",
+        "end",
+        "start_frame",
+        "end_frame",
+        "kicker",
+        "text",
+        "src",
+    ]
 
 
 def test_written_json_preserves_the_documented_key_order(series):
@@ -244,6 +267,10 @@ def test_written_json_preserves_the_documented_key_order(series):
         "type",
         "act",
         "hold",
+        "start",
+        "end",
+        "start_frame",
+        "end_frame",
         "kicker",
         "text",
         "src",
@@ -276,3 +303,94 @@ def test_beat_without_a_type_names_the_missing_key_not_an_unsupported_one(series
         build_plan(series, load_episode(series, "2026-08-14"))
     assert "no `type`" in str(e.value)
     assert "unsupported" not in str(e.value)
+
+
+# --- the plan is fully resolved: the engine does no timing arithmetic ---------
+
+
+def test_beats_are_contiguous_and_start_at_zero(series):
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    beats = build_plan(series, load_episode(series, "2026-08-14"))["beats"]
+    assert beats[0]["start"] == 0.0
+    for a, b in zip(beats, beats[1:]):
+        assert b["start"] == a["end"], (a, b)
+
+
+def test_total_sec_is_the_last_end_not_a_sum(series):
+    """Deriving the total from the last beat's end keeps the schema neutral
+    about overlap, so adding tracks later does not change this contract."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    assert plan["total_sec"] == plan["beats"][-1]["end"]
+
+
+def test_frames_are_integers_and_sum_to_the_total(series):
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE, pace=1.1)
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    for b in plan["beats"]:
+        assert isinstance(b["start_frame"], int)
+        assert isinstance(b["end_frame"], int)
+    assert plan["beats"][0]["start_frame"] == 0
+    assert plan["total_frames"] == plan["beats"][-1]["end_frame"]
+    for a, b in zip(plan["beats"], plan["beats"][1:]):
+        assert b["start_frame"] == a["end_frame"]
+
+
+def test_fractional_frames_are_resolved_in_python(series):
+    """3.5s at pace 1.1 is 115.5 frames. Somebody must own that half-frame, and
+    it is not the renderer."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, "beats:\n  - type: statement\n    text: x\n    hold: 3.5\n", pace=1.1)
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    assert plan["beats"][0]["end_frame"] == 116          # round(115.5) -> banker's
+    assert plan["total_frames"] == 116
+
+
+# --- identity: the plan is bound to the exact script it came from -------------
+
+
+def test_plan_carries_the_script_sha256(series):
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    expected = hashlib.sha256(ep.script_path.read_bytes()).hexdigest()
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    assert plan["script_sha256"] == expected
+
+
+def test_editing_the_script_changes_the_hash(series):
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    first = build_plan(series, load_episode(series, "2026-08-14"))["script_sha256"]
+    _script(ep, THREE.replace("That is the whole story.", "Something else."))
+    second = build_plan(series, load_episode(series, "2026-08-14"))["script_sha256"]
+    assert first != second
+
+
+# --- one read: two reads of one file is two sources of truth ------------------
+
+
+def test_metadata_and_beats_come_from_the_same_read(series, monkeypatch):
+    """build_plan read pace from episode.meta (in memory) and beats from a fresh
+    file read. A script saved between the two produced a plan mixing versions."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE, pace=1.0)
+    loaded = load_episode(series, "2026-08-14")
+    _script(ep, THREE, pace=2.0)          # disk now disagrees with the stale object
+    plan = build_plan(series, loaded)
+    assert plan["pace"] == 2.0            # disk wins; one read, one truth
+    assert plan["script_sha256"] == hashlib.sha256(
+        ep.script_path.read_bytes()
+    ).hexdigest()
+
+
+# --- formats do not overwrite each other -------------------------------------
+
+
+def test_write_plan_names_the_file_after_the_format(series):
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    path = write_plan(series, load_episode(series, "2026-08-14"))
+    assert path == ep.out_dir / "plan-vertical.json"
