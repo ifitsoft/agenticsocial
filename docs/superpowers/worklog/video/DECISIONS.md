@@ -216,6 +216,138 @@ touch `docs/superpowers/worklog/`, and nothing under `docs/` is ever staged by a
 task. Briefs from Task 2 onward say so explicitly, so the next agent does not
 spend attention on it.
 
+## D-018 · project-wide policy — raised by the Task 2 implementer
+**An addressed operation may raise. An enumerating operation must not die over
+one bad member.**
+
+`load_series("the-brief")` / `load_episode("2026-08-14")` name one thing — if it
+is corrupt, raise; there is no partial answer. But `agsoc series list` and
+`agsoc video list` are the *diagnostic* commands. An operator runs them precisely
+when something is broken and they do not know what. A single malformed file must
+not make the one tool that could say "the-brief is fine, cardio-weekly has a
+syntax error on line 4" refuse to say anything at all. A ten-series workspace
+becoming unlistable over one typo is the failure mode.
+
+Shape, with no duplicated directory logic:
+
+```python
+def series_slugs(ws) -> list[str]:      # cheap, cannot fail
+def list_series(ws) -> list[Series]:    # strict; == [load_series(ws, s) for s in series_slugs(ws)]
+```
+
+The CLI iterates the enumerator and loads each item in a try/except, so
+presentation policy stays out of `series.py` / `episode.py`. Exit code stays 0 —
+the command succeeded at answering the question it was asked.
+
+Applies to: `episode_ids` (Task 3, specified before dispatch) and `series_slugs`
+(Task 4, alongside the CLI that needs it).
+
+## D-019 · phase 1 / task 3 · leader caught this while writing the brief
+Drafting D-018's question for the Task 3 implementer surfaced a defect in my own
+design: `resolve_episode` was written to match over `list_episodes()`, the
+*strict* loader — so one corrupt episode would break resolving a **different,
+healthy** one. That is exactly the failure D-018 exists to prevent, reintroduced
+one function below it.
+
+Fixed before dispatch: `resolve_episode` matches over `episode_ids()` and calls
+`load_episode` only on the one it resolves. Resolving the corrupt episode itself
+still raises — that is an addressed operation. Two tests pin both halves.
+
+Worth noting the mechanism: the defect surfaced because I was writing a question
+for someone else rather than describing my own solution. Asking "is this a
+defect?" made me check, and it was.
+
+## D-020 · phase 1 / task 2 · QA adjudication 2026-08-16
+QA verdict on Task 2: **changes-required**. 34 mutants, 28 killed, 6 survived.
+QA confirmed the implementation was a character-exact transcription of the brief,
+so **every finding is a defect in my specification**, not implementer error.
+
+| # | Sev | Finding | Verdict |
+|---|---|---|---|
+| F1 | high | Hostile `name` corrupts both `series.toml` and `coverage.json`, misreports it as operator error, and leaves a partial dir that blocks retry | **fix-now** → 2b |
+| F2 | med | `enabled = [1,2]` raises `TypeError` from `join`; `enabled = "vertical"` iterates characters — both escape the `SeriesError` contract on the *strictly validated* path | **fix-now** → 2b |
+| F3 | med | `series = "hello"` → `AttributeError`; `series.toml` as a directory → `IsADirectoryError` | **fix-now** → 2b |
+| F4 | med | 4 loader defaults unreachable by tests + the on-disk dir name pinned only tautologically | **fix-now** → 2b |
+| F5 | low | `warm_acts` written by the scaffold, silently dropped by the loader | **fix-now** → 2b (one line) |
+| F6 | low | No slug validation: `slug="../escape"` writes outside `series_dir` | **fix-now** → 2b |
+| F7 | note | `bool`/`int` wart live (`target_sec = true` → a 1-second episode); `list_series` strictness | **fix-now** (bool) / **D-018** (list) |
+
+Everything is fix-now because this is the operator's first contact with the
+product, and because the whole set is one cohesive hardening pass over one file.
+Splitting it across phases would cost more than doing it now.
+
+**F1 is the important one.** Not because it is hard, but because of its shape: it
+corrupts data, then *misattributes the corruption to the operator*, then blocks
+the obvious recovery. A bug that lies about whose fault it is costs far more
+support than one that simply crashes.
+
+**Root-cause note on F4/mutant 6.** `assert s.dir == ws.series_dir / "the-brief"`
+compares an attribute against itself — renaming `series/` to `shows/` passed all
+130 tests. Spec §5 fixes that name; a test asserting a value against the same
+value it derives from asserts nothing. Watch for this shape in future reviews;
+it is invisible to coverage and to reading.
+
+## D-021 · process · the brief is now the main defect source
+Four of my briefs have contained defects (D-005, D-010, D-019, D-020) against
+zero implementer errors. Every implementation so far has been a faithful
+transcription; every bug has been mine, written upstream.
+
+That is the system working as designed — briefs are cheap to fix, and QA plus
+implementers have caught all of them before merge. But it locates the bottleneck:
+**reviewing my brief is worth more than reviewing the code it produces.**
+
+Consequences adopted: briefs carry the *whole* final file when a rewrite touches
+most of it (Task 2b does), rather than prose describing edits; and every brief
+now ends with questions that invite attack on the design rather than
+confirmation. D-019 was found precisely by writing such a question.
+
+## D-022 · phase 1 / task 2c · my fix for D-020 was itself broken
+Task 2b replaced naive interpolation with `json.dumps` as a TOML basic-string
+escaper, on my instruction. **That was wrong.** `json.dumps` defaults to
+`ensure_ascii=True`, which encodes non-BMP characters as UTF-16 surrogate pairs;
+TOML v1.0.0 requires every `\uXXXX` escape to name a Unicode *scalar* value, and
+surrogates are not.
+
+Leader-verified end to end — both fail against committed code:
+
+```
+--name "The Brief 😀"   → SeriesError: malformed series.toml — Escaped character
+--name "北京 𠀋"          is not a Unicode scalar value
+```
+
+Any emoji, historic script, or CJK extension-B ideograph makes
+`agsoc series new` impossible. **And it fails in the exact D-020 shape it was
+written to fix**: we write the file, then blame the operator for it being
+malformed. The `rmtree` cleanup from 2b downgrades it from *unrecoverable* to
+*permanently impossible*, which is not much of an improvement.
+
+The obvious correction is also wrong: `ensure_ascii=False` fixes non-BMP but
+emits raw U+007F, which TOML forbids in a basic string. Neither flag setting is
+correct alone. Task 2c writes an explicit escaper: literal UTF-8 for everything
+printable, escapes only for the quote, the backslash, C0 controls and U+007F.
+
+**How it was found.** Not by QA and not by me — by the Task 2b implementer
+answering the section-5 question *"is `json.dumps` genuinely safe as a TOML
+escaper? Name any input where TOML and JSON escaping diverge."* It went and
+looked, and found one.
+
+That is the third defect surfaced by an adversarial closing question (D-019,
+D-016, this). The questions are now the highest-yield part of the brief format,
+and they work because they ask for an attack rather than a confirmation. A brief
+ending "let me know if you have concerns" would have caught none of these.
+
+## D-023 · process · scope discipline on hardening chains
+Task 2 has now spawned 2b and 2c. That is a chain, and chains are where scope
+quietly doubles. Holding the line: 2c fixes the escaper and shape-validates the
+last two unvalidated fields, and Task 2 is then **done** regardless of what else
+turns up in `series.py`. Anything further becomes a Phase 1 follow-up item, not
+a 2d.
+
+Reason to be strict: every one of these findings is real, so there is no natural
+stopping point from correctness alone. The stopping point has to come from
+scope. `series.py` is 150 lines of config loading — if it needs a fourth pass,
+the problem is the design, not the coverage.
+
 ---
 
 ## Open risks carried from the spec
