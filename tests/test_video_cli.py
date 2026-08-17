@@ -325,15 +325,6 @@ def test_video_preview_render_failure_is_a_clean_error(ws, monkeypatch):
 # --- agsoc video ingest --------------------------------------------------------
 
 
-@pytest.fixture()
-def prepared(ws):
-    """An episode ready to ingest into. precondition for every test below:
-    the corpus is empty and brief.md does not exist."""
-    run("series", "new", "the-brief", "--name", "The Brief")
-    run("video", "new", "2026-08-17", "--series", "the-brief")
-    return ws.series_dir / "the-brief" / "episodes" / "2026-08-17"
-
-
 def _fake_ingest(keys, failures):
     """A stand-in for ingest.ingest_research. Patched at the module boundary so
     no test can reach the network — the CLI must never be the thing that
@@ -344,6 +335,27 @@ def _fake_ingest(keys, failures):
         return I.IngestResult(list(keys), list(failures), episode.dir / "brief.md")
 
     return fake
+
+
+@pytest.fixture()
+def no_network(monkeypatch):
+    """No test may reach the network, including when the thing under test is
+    wrong. Every --research test below patches ingest_research at the module
+    boundary by default, because a guard that stops the research branch from
+    running is exactly the code a mutant deletes -- and without this the test
+    would then fetch for real and hang rather than fail."""
+    from agenticsocial.video import ingest as I
+
+    monkeypatch.setattr(I, "ingest_research", _fake_ingest(["stub-source"], []))
+
+
+@pytest.fixture()
+def prepared(ws, no_network):
+    """An episode ready to ingest into. precondition for every test below:
+    the corpus is empty and brief.md does not exist."""
+    run("series", "new", "the-brief", "--name", "The Brief")
+    run("video", "new", "2026-08-17", "--series", "the-brief")
+    return ws.series_dir / "the-brief" / "episodes" / "2026-08-17"
 
 
 def test_ingest_requires_an_input_mode(prepared):
@@ -418,6 +430,9 @@ def test_ingest_paste_on_a_missing_file_is_a_clean_error(prepared, tmp_path):
     )
     assert result.exit_code == 1
     assert "nope.md" in result.output
+    # The generic OSError arm also names the file, so without this the specific
+    # arm can be deleted and the operator gets an errno string instead.
+    assert "no such file" in result.output.lower()
 
 
 def test_ingest_paste_on_a_non_utf8_file_is_a_clean_error(prepared, tmp_path):
@@ -440,6 +455,9 @@ def test_ingest_paste_on_a_directory_is_a_clean_error(prepared, tmp_path):
     result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--paste", str(d))
     assert result.exit_code == 1
     assert "adir" in result.output
+    # "cannot write the corpus" for a paste that could not be READ sends the
+    # operator to check permissions on the wrong directory.
+    assert "read" in result.output.lower()
 
 
 def test_ingest_reports_partial_failure_and_still_succeeds(prepared, monkeypatch):
@@ -482,7 +500,9 @@ def test_ingest_reports_how_many_sources_landed(prepared, monkeypatch):
     )
     result = run("video", "ingest", "2026-08-17", "--series", "the-brief", "--research", "x")
     assert result.exit_code == 0
-    assert "3" in result.output
+    # A bare "3" also matches a digit in the tmp path in the same output, so it
+    # asserts nothing; the count has to be read next to what it counts.
+    assert "3 source" in result.output
     assert "d.com/x" in result.output
     assert "timeout" in result.output
 
@@ -569,7 +589,7 @@ def test_ingest_from_an_empty_source_fails_rather_than_citing_nothing(prepared, 
     assert result.exit_code == 1
 
 
-def test_ingest_into_an_unknown_episode_is_a_clean_error(ws):
+def test_ingest_into_an_unknown_episode_is_a_clean_error(ws, no_network):
     run("series", "new", "the-brief")
     result = run(
         "video", "ingest", "1999-01-01", "--series", "the-brief", "--research", "x"
@@ -578,7 +598,7 @@ def test_ingest_into_an_unknown_episode_is_a_clean_error(ws):
     assert "agsoc video new" in result.output
 
 
-def test_ingest_into_an_unknown_series_is_a_clean_error(ws):
+def test_ingest_into_an_unknown_series_is_a_clean_error(ws, no_network):
     """R3, own sweep. The series is as typable as the episode."""
     result = run(
         "video", "ingest", "2026-08-17", "--series", "nope", "--research", "x"
