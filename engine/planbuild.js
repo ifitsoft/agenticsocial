@@ -38,13 +38,18 @@ function applyPlanDesign(design) {
  * check passes while the frame shows different words.
  *
  * The vocabulary is closed, not absent. Spec §7.1 gives `body` the field
- * `text` (bold via `**`); `**bold**` is the whole of it. A script.yaml is
- * written by an agent against a source, so its markup surface has to be
- * something this file grants, not something Chromium happens to accept.
+ * `text` (bold via `**`); D-080 adds `*accent*` for `<em>`, which scene.html
+ * styles as colour rather than italics — "a second emphasis that speaks in
+ * colour rather than weight, used exactly where each episode pivots". Those two
+ * markers are the whole vocabulary. A script.yaml is written by an agent
+ * against a source, so its markup surface has to be something this file grants,
+ * not something Chromium happens to accept.
  *
  * The ORDER is the trick, and it only works one way round: escape first, then
  * make the tag. Convert `**` first and the escape pass eats the `<b>` you just
- * built, so the reader sees the tag as literal text.
+ * built, so the reader sees the tag as literal text. `**` before `*` for the
+ * same reason in miniature: a single-asterisk pass run first would take the
+ * first `*` of every `**` opener and emphasise from there.
  *
  * `jumpChart.shown` is exempt — it is a documented HTML override and
  * content/2026-08-14.js relies on `<s>34.4</s> &rarr; 43.6`.
@@ -60,7 +65,9 @@ function proseHTML(t) {
   /* [\s\S] not . — YAML folds long strings, so a `**…**` an agent wrote
    * routinely arrives with a newline inside it. Lazy, so `**a** and **b**`
    * is two bold runs rather than one that swallows the middle. */
-  return escapeHTML(t).replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>');
+  return escapeHTML(t)
+    .replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>')
+    .replace(/\*([\s\S]+?)\*/g, '<em>$1</em>');
 }
 
 /* The prose counterpart of P(): use it for every operator-authored field. */

@@ -219,6 +219,26 @@ def test_two_bold_runs_stay_two():
 
 
 @needs_node
+def test_accent_produces_an_em():
+    """D-080. `<em>` and `warm-t` are "a second emphasis that speaks in colour
+    rather than weight, used exactly where each episode pivots", and nothing in
+    the vocabulary reached them. scene.html already styles `em` (colour, not
+    italics), so this adds a token, not CSS."""
+    assert prose_html("it *doubles* in 2027") == "it <em>doubles</em> in 2027"
+
+
+@needs_node
+def test_bold_and_accent_in_one_string_stay_one_of_each():
+    """The greedy-regex failure the sweep found in `**…**` applies here too, and
+    a single-asterisk pass is also the one that can eat the FIRST `*` of a `**`
+    opener. Both markers in one sentence, with the connective intact, is the
+    assertion that sees either mistake."""
+    assert prose_html("**half** the price, *twice* the speed") == (
+        "<b>half</b> the price, <em>twice</em> the speed"
+    )
+
+
+@needs_node
 def test_bold_markers_do_not_leak_when_unpaired():
     """A lone `**` is prose, not an unterminated tag. It must render as itself
     rather than swallowing the rest of the sentence."""
