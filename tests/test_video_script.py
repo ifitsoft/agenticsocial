@@ -179,11 +179,11 @@ def test_renderable_is_a_subset_of_the_catalogue():
 
 
 def test_renderable_is_exactly_this_phases_types():
-    """precondition: Phase 4 renders six of the ten catalogue types. This pins
-    the gate so that widening it is a deliberate edit — `kpis`, `jumpChart`,
-    `dumbbell` and `custom` still have no builder in planbuild.js."""
+    """precondition: Phase 4 renders eight of the ten catalogue types. This pins
+    the gate so that widening it is a deliberate edit — `dumbbell` and `custom`
+    still have no builder in planbuild.js."""
     assert S.RENDERABLE == frozenset(
-        {"statement", "body", "list", "quote", "title", "signoff"}
+        {"statement", "body", "list", "quote", "title", "signoff", "kpis", "jumpChart"}
     )
 
 
@@ -296,6 +296,218 @@ def test_a_bad_jumpchart_row_names_its_index(series):
     with pytest.raises(S.ScriptError) as e:
         _load(series, [beat])
     assert "[2]" in str(e.value)
+
+
+# --- Phase 4 Task 2, R2: every number the frame shows is a number the plan
+# --- carried ---------------------------------------------------------------------
+#
+# `src` and `quote` are not sufficient. The engine's `count()` takes `decimals`
+# and formats with `toFixed`, so `value: 0.756, decimals: 1` puts `0.8` on the
+# screen — a figure that is in no source, in no quote and in no plan. Phase 5
+# would verify 0.756 against the quote, pass, and ship a video showing a number
+# nobody checked. Display rounding is a number-inventing machine.
+#
+# The rule: refuse the beat when rounding to `decimals` would change the value.
+# If an author wants 0.8 on screen the script says 0.8, because the script is
+# what gets verified.
+
+
+def _kpis(*items, **over):
+    return dict(VALID["kpis"], items=list(items), **over)
+
+
+def test_a_kpi_value_display_rounding_would_change_is_refused(series):
+    """precondition: R2, and the whole reason this task exists. `count()` does
+    `v.toFixed(1)` — 0.756 reaches the frame as `0.8`."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [_kpis({"value": 0.756, "label": "per 1M tokens", "decimals": 1})])
+    msg = str(e.value)
+    assert "0.756" in msg and "0.8" in msg
+    assert "decimals" in msg
+
+
+def test_a_kpi_value_exact_at_its_decimals_is_accepted(series):
+    """precondition: R2 negative. The real 2026-08-14 pricing figures. Refusing
+    these would refuse the only kpis beat that has ever rendered."""
+    script = _load(
+        series,
+        [
+            _kpis(
+                {"value": 0.75, "label": "per 1M input tokens", "decimals": 2},
+                {"value": 3.75, "label": "per 1M output tokens", "decimals": 2},
+            )
+        ],
+    )
+    assert [i["value"] for i in script.beats[0].fields["items"]] == [0.75, 3.75]
+
+
+def test_a_kpi_value_with_no_decimals_must_already_be_whole(series):
+    """precondition: R2, at the field the brief does not mention. `decimals` is
+    OPTIONAL, and the engine treats absent exactly like 0 — `decimals ?
+    v.toFixed(decimals) : Math.round(v)`. So an omitted `decimals` is not "no
+    rounding", it is rounding to the nearest integer, and `value: 0.75` with no
+    `decimals` reaches the frame as `1`. Absent must be checked as 0 or the rule
+    has a hole the size of the default."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [_kpis({"value": 0.75, "label": "per 1M input tokens"})])
+    assert "0.75" in str(e.value)
+
+
+@pytest.mark.parametrize("value", [50, 2000, 1048576, 0])
+def test_a_whole_kpi_value_needs_no_decimals(series, value):
+    """precondition: R2 negative + the falsy rule. `0` is a legitimate KPI —
+    "0 seconds of downtime" is a headline figure — and a check written
+    `if value:` cannot draw it. `Math.round(0)` is `0`, so nothing is
+    invented."""
+    script = _load(series, [_kpis({"value": value, "label": "things"})])
+    assert script.beats[0].fields["items"][0]["value"] == value
+
+
+@pytest.mark.parametrize("value", [0, 0.0])
+def test_zero_is_a_legitimate_kpi_value_at_any_decimals(series, value):
+    """precondition: the falsy rule again, this time against a rounding check
+    written `if round(v, d) != v` with a truthiness shortcut in front of it."""
+    script = _load(series, [_kpis({"value": value, "label": "downtime", "decimals": 2})])
+    assert script.beats[0].fields["items"][0]["value"] == value
+
+
+def test_a_string_kpi_value_is_not_subject_to_rounding(series):
+    """precondition: R2's scope. `kpis()` prints a non-numeric value verbatim
+    rather than counting up to it — no `toFixed`, so no rounding, so nothing to
+    invent. A rounding check that calls `round()` on it would crash instead."""
+    script = _load(
+        series, [_kpis({"value": "half", "label": "the price", "decimals": 1})]
+    )
+    assert script.beats[0].fields["items"][0]["value"] == "half"
+
+
+def test_a_prefix_and_a_unit_are_presentation_not_invention(series):
+    """precondition: R2 NEGATIVE, and the half of the pair that is easy to get
+    backwards. A currency symbol changes how 0.75 READS, not what it IS: `$0.75`
+    and `0.75` are the same figure. Rounding invents a number; a symbol does
+    not."""
+    script = _load(
+        series,
+        [
+            _kpis(
+                {"value": 0.75, "prefix": "$", "label": "in", "decimals": 2},
+                {"value": 50, "unit": "%", "label": "cheaper"},
+            )
+        ],
+    )
+    items = script.beats[0].fields["items"]
+    assert items[0]["prefix"] == "$"
+    assert items[1]["unit"] == "%"
+
+
+@pytest.mark.parametrize("bad", [0, False, [], {}, None, 1.5])
+def test_a_non_string_prefix_is_refused(series, bad):
+    """precondition: M4 on the new field. `prefix: 0` would be interpolated into
+    the figure as the character `0`."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [_kpis({"value": 1, "label": "x", "prefix": bad})])
+    assert "prefix" in str(e.value)
+
+
+def test_the_refused_item_names_its_index(series):
+    """precondition: the same reason a bad jumpChart row names its index — a
+    six-figure KPI stack with one bad value must say which one."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(
+            series,
+            [
+                _kpis(
+                    {"value": 1, "label": "ok"},
+                    {"value": 2, "label": "ok too"},
+                    {"value": 0.756, "label": "bad", "decimals": 1},
+                )
+            ],
+        )
+    assert "[2]" in str(e.value)
+
+
+# --- Phase 4 Task 2, R4: a row outside the scale is refused, not clipped ---------
+#
+# `jumpChart` positions every dot as `from / max * 100 + '%'`. A row above the
+# scale is drawn past the right edge of its track — off the card, or clipped by
+# overflow — and a negative one is drawn to the left of zero. Either way the bar
+# on screen no longer encodes the number in the plan, which is R2's failure
+# wearing a geometry costume. Refuse it: silently clipping to the scale would
+# show a full-length bar for a value that is not the maximum.
+
+
+def _jump(*rows, **over):
+    return dict(VALID["jumpChart"], rows=list(rows), **over)
+
+
+@pytest.mark.parametrize("field", ["before", "after"])
+def test_a_row_value_above_the_scale_is_refused(series, field):
+    """precondition: R4 + M7. Both ends are drawn on the same track, so both
+    have to be checked — a rule written against `after` alone leaves the
+    baseline dot free to land off the card."""
+    row = {"label": "FrontierCode 1.1", "before": 34.4, "after": 43.6}
+    row[field] = 82.0
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [_jump(row, scale=70)])
+    msg = str(e.value)
+    assert "82" in msg and "70" in msg and field in msg
+
+
+@pytest.mark.parametrize("field", ["before", "after"])
+def test_a_row_value_equal_to_the_scale_is_accepted(series, field):
+    """precondition: R4 NEGATIVE. The bound is inclusive: a benchmark that hits
+    the top of the published scale is exactly the chart worth drawing, and it is
+    drawn at 100% of the track, which is on the card."""
+    row = {"label": "at the top", "before": 34.4, "after": 43.6}
+    row[field] = 70
+    script = _load(series, [_jump(row, scale=70)])
+    assert script.beats[0].fields["rows"][0][field] == 70
+
+
+@pytest.mark.parametrize("field", ["before", "after"])
+def test_a_negative_row_value_is_refused(series, field):
+    """precondition: R4's other end. `-4 / 70 * 100` is `-5.7%`, drawn off the
+    left of the track. The interval is [0, scale], not (-inf, scale]."""
+    row = {"label": "below zero", "before": 34.4, "after": 43.6}
+    row[field] = -4.0
+    with pytest.raises(S.ScriptError):
+        _load(series, [_jump(row, scale=70)])
+
+
+def test_zero_is_still_a_legitimate_row_value(series):
+    """precondition: the falsy rule inside R4. A range check written
+    `if not (0 < v <= scale)` refuses a benchmark that scored 0 before, which is
+    the most interesting bar on the chart."""
+    script = _load(
+        series, [_jump({"label": "from nothing", "before": 0, "after": 30.4}, scale=70)]
+    )
+    assert script.beats[0].fields["rows"][0]["before"] == 0
+
+
+def test_the_out_of_scale_refusal_names_the_row(series):
+    """precondition: same as the bad-row-index test — twelve bars, one bad."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(
+            series,
+            [
+                _jump(
+                    {"label": "ok", "before": 1, "after": 2},
+                    {"label": "ok too", "before": 1, "after": 2},
+                    {"label": "off the track", "before": 1, "after": 999},
+                    scale=70,
+                )
+            ],
+        )
+    assert "[2]" in str(e.value)
+
+
+def test_the_scale_is_read_from_the_beat_not_from_the_rows(series):
+    """precondition: R4 negative at the other end — a chart whose scale is
+    larger than any of its bars is the normal case (70 for a 65.3 maximum), and
+    a check that derived the scale from the rows would make every chart
+    full-width and this rule unfalsifiable."""
+    script = _load(series, [_jump({"label": "small", "before": 1, "after": 2}, scale=70)])
+    assert script.beats[0].fields["scale"] == 70
 
 
 @pytest.mark.parametrize("kind", sorted(VALID))

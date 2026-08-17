@@ -471,7 +471,14 @@ EXEMPLARS = {
         "items": ["Gemini API & AI Studio", "Antigravity", "The Spark agent"],
     },
     "kpis": {
-        "items": [{"value": 0.75, "unit": "$", "label": "per 1M input tokens"}],
+        # `decimals: 2`, and not optional decoration: with `decimals` absent the
+        # engine's count-up is `Math.round(v)`, so this exemplar rendered `1`
+        # for a value of 0.75. Phase 4 Task 2's R2 check refuses it — the first
+        # thing that rule caught was a fixture already in the tree.
+        "items": [
+            {"value": 0.75, "prefix": "$", "label": "per 1M input tokens",
+             "decimals": 2}
+        ],
         "src": "venturebeat",
         "quote": "priced at $0.75 per million input tokens",
     },
@@ -527,9 +534,9 @@ def test_a_full_catalogue_script_still_exits_zero(ws, series):
     episode(series, one_of_each())
     result = run("video", "review", "2026-08-17", "--series", "the-brief")
     assert result.exit_code == 0
-    # four of the ten catalogue types are still unbuilt after Phase 4:
-    # kpis, jumpChart, dumbbell, custom.
-    assert "4 beats" in result.output and "cannot" in result.output.lower()
+    # two of the ten catalogue types are still unbuilt after Phase 4:
+    # dumbbell and custom.
+    assert "2 beats" in result.output and "cannot" in result.output.lower()
 
 
 # --- R5: review never writes ----------------------------------------------------

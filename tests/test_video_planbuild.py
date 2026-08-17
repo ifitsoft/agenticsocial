@@ -114,17 +114,41 @@ HARNESS = textwrap.dedent(
 )
 
 
-def _node(plan: dict | None = None, expr: str | None = None) -> dict:
+def _run(plan: dict | None = None, expr: str | None = None):
     env = {**os.environ, "ENGINE": str(ENGINE)}
     if plan is not None:
         env["PLAN"] = json.dumps(plan)
     if expr is not None:
         env["EVAL"] = expr
-    proc = subprocess.run(
-        ["node", "-e", HARNESS], capture_output=True, text=True, env=env
-    )
+    return subprocess.run(["node", "-e", HARNESS], capture_output=True, text=True, env=env)
+
+
+def _node(plan: dict | None = None, expr: str | None = None) -> dict:
+    proc = _run(plan, expr)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
+
+
+def refuses(beats: list[dict], **plan) -> str:
+    """`buildFromPlan` alone must throw — the message, or an assertion failure.
+
+    Calling `buildFromPlan` and nothing else is the point: the check has to run
+    EAGERLY, while the plan is being walked, not inside the closure `seek()`
+    calls. A throw from inside a build closure happens at the frame that scene
+    first appears on, which for beat 14 of an 88-second video is thirty seconds
+    into a render that has already written nine hundred frames — and
+    `render.mjs` only inspects page errors after `goto`, which is `seek(0)`.
+    """
+    base = {"episode": "2026-08-16", "series": "the-brief", "byline": "A. B."}
+    payload = json.dumps({**base, **plan, "beats": beats})
+    msg = _node(
+        expr=(
+            "(() => { try { buildFromPlan(" + payload + "); }"
+            " catch (e) { return e.message } return null; })()"
+        )
+    )["value"]
+    assert msg, "buildFromPlan accepted the beat"
+    return msg
 
 
 def prose_html(raw: str) -> str:
@@ -284,6 +308,28 @@ def test_every_renderable_type_has_a_builder():
     assert set(builders) == set(RENDERABLE)
 
 
+KPIS = {
+    "items": [
+        {"value": 0.75, "prefix": "$", "label": "per 1M input tokens", "decimals": 2},
+        {"value": 3.75, "prefix": "$", "label": "per 1M output tokens", "decimals": 2},
+    ],
+    "src": "venturebeat",
+    "quote": "priced at $0.75 per million input tokens and $3.75 per million output",
+}
+
+JUMP = {
+    "rows": [
+        {"label": "FrontierCode 1.1", "before": 34.4, "after": 43.6,
+         "shown": "<s>34.4</s> &rarr; 43.6"},
+        {"label": "GDP.pdf", "before": 22.0, "after": 34.0,
+         "shown": "<s>22.0</s> &rarr; 34.0"},
+    ],
+    "scale": 70,
+    "footnote": "Scores as published by Google, on a common 0-70% scale.",
+    "src": "deepmind",
+    "quote": "FrontierCode 1.1 rises from 34.4 to 43.6",
+}
+
 RENDERABLE_BEATS = {
     "statement": {"text": "a statement"},
     "body": {"text": "a body line"},
@@ -291,6 +337,8 @@ RENDERABLE_BEATS = {
     "quote": {"text": "a quoted sentence", "attribution": "Someone"},
     "title": {},
     "signoff": {},
+    "kpis": KPIS,
+    "jumpChart": JUMP,
 }
 
 
@@ -434,6 +482,266 @@ def test_the_title_card_falls_back_to_the_slug_when_there_is_no_name():
     assert shown(find(tree, "big-title")[0]) == "THE-BRIEF"
 
 
+# --- Task 2: the two strictly verifiable types ----------------------------------
+#
+# Spec §7.2: "there is no path to rendering a number that isn't in a source."
+# The schema already requires `src` and `quote`, and that is NOT sufficient —
+# the renderer can manufacture a number the plan never carried. These tests are
+# the renderer's own half of the rule, and they matter because a plan can reach
+# the page without passing through Python at all: `render.mjs --plan` reads any
+# JSON file, and determinism.test.mjs writes its own `.plan.js` by hand.
+
+
+@needs_node
+@pytest.mark.parametrize("kind", ["kpis", "jumpChart"])
+@pytest.mark.parametrize("field", ["src", "quote"])
+def test_a_chart_refuses_to_render_without_a_citation(kind, field):
+    """R1 (M1). The schema's `cited` gate is on the Python path only. A chart
+    that reached the page uncited would draw numbers with nothing behind
+    them — which is the one thing spec §7.2 says there is no path to."""
+    fields = {k: v for k, v in RENDERABLE_BEATS[kind].items() if k != field}
+    msg = refuses([beat(kind, **fields)])
+    assert field in msg and kind in msg
+
+
+@needs_node
+@pytest.mark.parametrize("kind", ["kpis", "jumpChart"])
+@pytest.mark.parametrize("empty", ["", "   "])
+def test_a_citation_that_is_blank_is_not_a_citation(kind, empty):
+    """R1 + the falsy rule from the other direction: present-and-empty passes
+    `'src' in b` and cites nothing. `"   "` passes a truthiness check too."""
+    assert refuses([beat(kind, **{**RENDERABLE_BEATS[kind], "src": empty})])
+
+
+@needs_node
+@pytest.mark.parametrize("kind", ["title", "signoff", "statement", "body", "list"])
+def test_an_uncited_type_still_renders_without_src_or_quote(kind):
+    """R1 NEGATIVE (M2). `title` asserts nothing about the world. Making every
+    type demand a citation turns the rule into noise operators route around by
+    pasting a source in — and these beats never carry one."""
+    scene = build([beat(kind, **RENDERABLE_BEATS[kind])])[0]
+    assert scene["tree"]["kids"], f"{kind} appended nothing"
+
+
+@needs_node
+def test_the_kpi_figures_that_reach_the_screen_are_the_plan_s_own():
+    """R2, positive. The recorder runs every animation callback at p=1, so the
+    `.n` node holds the string the count-up ends on — the actual glyphs, not the
+    arguments. `$0.75` is `0.75` with a symbol in front of it; that is the same
+    figure, differently read."""
+    tree = build([beat("kpis", **KPIS)])[0]["tree"]
+    assert [shown(n) for n in find(tree, "n")] == ["$0.75", "$3.75"]
+
+
+@needs_node
+def test_a_kpi_value_display_rounding_would_change_is_refused():
+    """R2 (M3), and the heart of the task. `0.756` at `decimals: 1` reaches the
+    frame as `0.8` — a figure in no source, no quote and no plan. Phase 5 would
+    verify 0.756 against the quote, pass, and ship a video showing a number
+    nobody checked."""
+    msg = refuses(
+        [beat("kpis", **{**KPIS, "items": [
+            {"value": 0.756, "label": "per 1M tokens", "decimals": 1}
+        ]})]
+    )
+    assert "0.756" in msg and "0.8" in msg
+
+
+@needs_node
+def test_a_kpi_value_is_refused_when_decimals_are_absent_and_it_is_not_whole():
+    """R2 through the DEFAULT. `count()` is `decimals ? v.toFixed(decimals) :
+    Math.round(v)`, so an omitted `decimals` is not "print it as written", it is
+    rounding to the nearest integer: `0.75` reaches the frame as `1`. A rule
+    written only against a present `decimals` has a hole the size of the
+    default."""
+    msg = refuses(
+        [beat("kpis", **{**KPIS, "items": [{"value": 0.75, "label": "per 1M"}]})]
+    )
+    assert "0.75" in msg
+
+
+@needs_node
+def test_a_prefix_a_suffix_and_a_thousands_separator_are_not_inventions():
+    """R2 NEGATIVE (M4), the half of the pair that is easy to get backwards.
+    Rounding invents a number; a currency symbol does not. `2,000` and `2000`
+    are the same figure — the separator is how English writes it — and the
+    committed episode renders `~2,000` and `50%` exactly this way."""
+    tree = build([beat("kpis", **{**KPIS, "items": [
+        {"value": 2000, "prefix": "~", "label": "stories since May"},
+        {"value": 50, "unit": "%", "label": "cheaper than 3.6 Flash"},
+    ]})])[0]["tree"]
+    assert [shown(n) for n in find(tree, "n")] == ["~2,000", "50%"]
+
+
+@needs_node
+def test_a_zero_kpi_value_still_draws_a_row():
+    """The falsy rule. `0` is a legitimate headline figure and a truthiness
+    check on `value` drops the row entirely — or, worse, counts up to
+    `undefined` and prints `NaN`."""
+    tree = build([beat("kpis", **{**KPIS, "items": [
+        {"value": 0, "label": "seconds of downtime"},
+    ]})])[0]["tree"]
+    assert [shown(n) for n in find(tree, "n")] == ["0"]
+
+
+@needs_node
+def test_a_kpi_label_is_set_as_text_not_html():
+    """R3 (M6). The label is authored text like any other and is the field most
+    likely to carry an ampersand. Set through `innerHTML` a `<tag>` in it
+    vanishes from the frame while script.yaml still says it — the exact defect
+    Task 1 closed for prose."""
+    tree = build([beat("kpis", **{**KPIS, "items": [
+        {"value": 1, "label": "R&D on <tools>"},
+    ]})])[0]["tree"]
+    label = find(tree, "u")[0]
+    assert label["html"] is None, "the label went through innerHTML"
+    assert label["text"] == "R&D on <tools>"
+
+
+@needs_node
+def test_a_string_kpi_value_keeps_its_prefix_and_suffix():
+    """`kpis()` prints a non-numeric value verbatim and its own signature drops
+    prefix and suffix on that branch — it only reads them inside `count()`. A
+    builder that passes them anyway loses the symbol silently, which is R3's
+    failure (the plan carried something the frame does not show) rather than
+    R2's."""
+    tree = build([beat("kpis", **{**KPIS, "items": [
+        {"value": "half", "prefix": "~", "unit": " the price", "label": "vs 3.6"},
+    ]})])[0]["tree"]
+    assert [shown(n) for n in find(tree, "n")] == ["~half the price"]
+
+
+@needs_node
+def test_a_kpis_beat_renders_its_kicker_as_prose():
+    """The shared kicker path, on a type that did not exist when it was
+    written."""
+    tree = build([beat("kpis", **{**KPIS, "kicker": "R&D on **cost**"})])[0]["tree"]
+    assert shown(find(tree, "kicker")[0]) == "R&amp;D on <b>cost</b>"
+
+
+# --- jumpChart -------------------------------------------------------------------
+
+
+@needs_node
+def test_jumpchart_rows_render_in_the_order_they_were_authored():
+    """M9. The rows are a ranking as often as not, and a chart that reorders
+    them tells a different story with the same numbers. Nothing about the
+    rendered output makes a reordering look wrong."""
+    rows = [
+        {"label": "first", "before": 1, "after": 2},
+        {"label": "second", "before": 3, "after": 4},
+        {"label": "third", "before": 5, "after": 6},
+    ]
+    tree = build([beat("jumpChart", **{**JUMP, "rows": rows})])[0]["tree"]
+    assert [n["text"] for n in find(tree, "jlab")] == ["first", "second", "third"]
+
+
+@needs_node
+def test_jumpchart_shown_reaches_the_value_cell_as_html():
+    """R3 (M5). `shown` is the ONE field rendered as HTML — a documented display
+    override. The committed 2026-08-14 episode depends on both the
+    strikethrough and the entity: escaped, the tags land on screen."""
+    tree = build([beat("jumpChart", **JUMP)])[0]["tree"]
+    assert [n["html"] for n in find(tree, "jval")] == [
+        "<s>34.4</s> &rarr; 43.6",
+        "<s>22.0</s> &rarr; 34.0",
+    ]
+
+
+@needs_node
+def test_a_jumpchart_label_is_set_as_text_not_html():
+    """R3 NEGATIVE (M6). `shown` is the exemption, and an exemption that spread
+    to the labels would be the innerHTML defect again."""
+    tree = build([beat("jumpChart", **{**JUMP, "rows": [
+        {"label": "AT&T <legacy>", "before": 1, "after": 2},
+    ]})])[0]["tree"]
+    lab = find(tree, "jlab")[0]
+    assert lab["html"] is None and lab["text"] == "AT&T <legacy>"
+
+
+@needs_node
+def test_the_footnote_reaches_the_stage_as_text():
+    """M10. `footnote` is REQUIRED on a jumpChart — it is where "scores as
+    published, on a common 0-70% scale" lives, and it is what stops the chart
+    being read as something the series measured itself. Dropping it changes what
+    the chart claims."""
+    tree = build([beat("jumpChart", **JUMP)])[0]["tree"]
+    foot = find(tree, "foot")
+    assert foot, "the footnote never reached the stage"
+    assert foot[0]["html"] is None
+    assert foot[0]["text"] == JUMP["footnote"]
+
+
+@needs_node
+def test_the_footnote_is_animated_rather_than_left_at_opacity_zero():
+    """M10's quieter half: `.foot` is faded in, so a footnote that is appended
+    and never animated sits at whatever opacity the fade starts from. Appended
+    is not the same as visible."""
+    scene = build([beat("jumpChart", **JUMP)])[0]
+    assert scene["anims"], "nothing animated"
+
+
+@needs_node
+@pytest.mark.parametrize("field", ["before", "after"])
+def test_a_row_above_the_scale_is_refused_not_clipped(field):
+    """R4 (M7). Every dot is positioned as `value / max * 100 + '%'`, so a row
+    above the scale is drawn past the end of its track. Clipping it to the scale
+    would be worse than refusing: the bar would sit at 100% and read as the
+    maximum, which is a number the plan did not carry."""
+    row = {"label": "off the track", "before": 34.4, "after": 43.6}
+    row[field] = 82.0
+    msg = refuses([beat("jumpChart", **{**JUMP, "rows": [row], "scale": 70})])
+    assert "82" in msg and "70" in msg
+
+
+@needs_node
+@pytest.mark.parametrize("field", ["before", "after"])
+def test_a_row_equal_to_the_scale_renders(field):
+    """R4 NEGATIVE (M8). The bound is inclusive — a bar at 100% of the track is
+    on the card, and a benchmark that reaches the top of the published scale is
+    exactly the chart worth drawing."""
+    row = {"label": "at the top", "before": 34.4, "after": 43.6}
+    row[field] = 70
+    tree = build([beat("jumpChart", **{**JUMP, "rows": [row], "scale": 70})])[0]["tree"]
+    assert [n["text"] for n in find(tree, "jlab")] == ["at the top"]
+
+
+@needs_node
+def test_a_row_at_zero_still_renders():
+    """The falsy rule inside R4: a range check written `if (!v || v > scale)`
+    refuses a benchmark that scored 0 before, which is the most interesting bar
+    on the chart."""
+    tree = build([beat("jumpChart", **{**JUMP, "rows": [
+        {"label": "from nothing", "before": 0, "after": 30.4},
+    ]})])[0]["tree"]
+    assert [n["text"] for n in find(tree, "jlab")] == ["from nothing"]
+
+
+@needs_node
+def test_the_chart_is_drawn_into_the_class_the_stage_styles():
+    """`.chart` is what gives the rows their width and the footnote its top
+    margin. `jumpChart(rows, max, d0, parent)` takes its parent explicitly and
+    has no default — passing the wrong one puts four absolutely-positioned
+    tracks on top of each other."""
+    tree = build([beat("jumpChart", **JUMP)])[0]["tree"]
+    chart = find(tree, "chart")
+    assert chart, "no .chart"
+    assert len([n for n in flatten(chart[0]) if n["cls"] == "jrow"]) == 2
+
+
+@needs_node
+def test_the_scale_reaches_the_engine_as_the_track_maximum():
+    """The dot positions are the only place `scale` is used, and they are
+    percentages of it. A builder that dropped it would pass `undefined` and
+    every `left` would be the string `NaN%` — which CSS ignores, so all four
+    dots would silently stack at the left edge."""
+    tree = build([beat("jumpChart", **{**JUMP, "rows": [
+        {"label": "half way", "before": 0, "after": 35},
+    ], "scale": 70})])[0]["tree"]
+    dots = [n for n in flatten(tree) if n["cls"] == "dot to"]
+    assert dots and dots[0]["css"].get("left") == "50%"
+
+
 # --- R1 negative: the documented HTML override stays HTML ------------------------
 
 
@@ -480,8 +788,13 @@ def test_meta_pace_stays_one_however_the_plan_is_paced():
 @needs_node
 def test_an_unrenderable_type_still_fails_loudly():
     """R3's guard. Widening the builder table must not turn the gate into a
-    silent skip: a `kpis` beat that reaches Node is a plan.py bug, and a beat
-    quietly missing from the video is the hardest kind to notice."""
+    silent skip: a `dumbbell` beat that reaches Node is a plan.py bug, and a
+    beat quietly missing from the video is the hardest kind to notice.
+
+    `dumbbell`, not `kpis`: Phase 4 Task 2 draws kpis, and a `kpis` beat with no
+    items now fails the CITATION check instead — same exit code, different gate,
+    so the assertion would have gone vacuous. The exemplar moves with the gate,
+    the way test_video_review's does."""
     proc = subprocess.run(
         ["node", "-e", HARNESS],
         capture_output=True,
@@ -490,9 +803,14 @@ def test_an_unrenderable_type_still_fails_loudly():
             **os.environ,
             "ENGINE": str(ENGINE),
             "PLAN": json.dumps(
-                {"episode": "e", "series": "s", "byline": "", "beats": [beat("kpis")]}
+                {
+                    "episode": "e",
+                    "series": "s",
+                    "byline": "",
+                    "beats": [beat("dumbbell")],
+                }
             ),
         },
     )
     assert proc.returncode != 0
-    assert "kpis" in proc.stderr
+    assert "dumbbell" in proc.stderr

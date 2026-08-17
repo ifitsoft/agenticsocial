@@ -218,10 +218,10 @@ def test_building_a_plan_never_rewrites_the_script(series):
 
 
 def test_supported_beats_is_exactly_this_phases_types():
-    """Phase 4 widens the gate from one type to six. Pinned so that widening it
-    again is a deliberate edit and not a side effect of adding a builder."""
+    """Phase 4 widens the gate from one type to eight. Pinned so that widening
+    it again is a deliberate edit and not a side effect of adding a builder."""
     assert SUPPORTED_BEATS == frozenset(
-        {"statement", "body", "list", "quote", "title", "signoff"}
+        {"statement", "body", "list", "quote", "title", "signoff", "kpis", "jumpChart"}
     )
 
 
@@ -814,3 +814,86 @@ def test_the_plan_carries_the_series_display_name(series):
     plan = build_plan(series, load_episode(series, "2026-08-14"))
     assert plan["series"] == "the-brief"
     assert plan["series_name"] == "The Brief"
+
+
+# --- Phase 4 Task 2: the chart types reach the renderer whole -------------------
+#
+# A chart beat carries numbers, and spec §7.2 says there is no path to rendering
+# a number that isn't in a source. `planbuild.js` enforces that at the far end —
+# a plan can reach the page without passing through Python at all, which is
+# exactly what `determinism.test.mjs` does when it writes its own `.plan.js`. A
+# gate the renderer cannot see is a gate on the honest path only, so `quote` has
+# to travel with the beat it licences.
+
+CHARTS = """beats:
+  - type: kpis
+    hold: 4.6
+    kicker: And it costs half of what 3.6 Flash did
+    items:
+      - { value: 0.75, prefix: "$", label: per 1M input tokens, decimals: 2 }
+      - { value: 3.75, prefix: "$", label: per 1M output tokens, decimals: 2 }
+    src: venturebeat
+    quote: priced at $0.75 per million input tokens and $3.75 per million output
+  - type: jumpChart
+    hold: 5.4
+    rows:
+      - { label: FrontierCode 1.1, before: 34.4, after: 43.6, shown: "<s>34.4</s> &rarr; 43.6" }
+      - { label: GDP.pdf, before: 22.0, after: 34.0, shown: "<s>22.0</s> &rarr; 34.0" }
+    scale: 70
+    footnote: Scores as published by Google, on a common 0-70% scale.
+    src: deepmind
+    quote: FrontierCode 1.1 rises from 34.4 to 43.6
+"""
+
+
+def _charts(series):
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, CHARTS)
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    return {b["type"]: b for b in plan["beats"]}
+
+
+def test_a_kpis_beat_carries_its_items(series):
+    """M1 upstream of Node: a builder cannot render a field the plan dropped,
+    and `items` is the whole beat."""
+    b = _charts(series)["kpis"]
+    assert b["items"] == [
+        {"value": 0.75, "prefix": "$", "label": "per 1M input tokens", "decimals": 2},
+        {"value": 3.75, "prefix": "$", "label": "per 1M output tokens", "decimals": 2},
+    ]
+
+
+def test_a_jumpchart_beat_carries_its_rows_scale_and_footnote(series):
+    """M10 upstream of Node. `scale` is not decoration — the renderer positions
+    every dot as `value / scale`, so a plan that dropped it would draw NaN%."""
+    b = _charts(series)["jumpChart"]
+    assert [r["label"] for r in b["rows"]] == ["FrontierCode 1.1", "GDP.pdf"]
+    assert b["rows"][0]["shown"] == "<s>34.4</s> &rarr; 43.6"
+    assert b["scale"] == 70
+    assert b["footnote"] == "Scores as published by Google, on a common 0-70% scale."
+
+
+@pytest.mark.parametrize("kind", ["kpis", "jumpChart"])
+def test_a_cited_beat_carries_its_quote_to_the_renderer(series, kind):
+    """R1. `planbuild.js` refuses to draw a chart without `src` AND `quote`, and
+    it can only refuse on what the plan hands it. Without this the renderer's
+    gate is decoration: every chart would arrive quoteless and either all of
+    them fail or the check gets written against `src` alone."""
+    b = _charts(series)[kind]
+    assert b["src"] and b["quote"]
+
+
+def test_an_uncited_type_gains_no_quote_key(series):
+    """R1 NEGATIVE. `quote` travels because the type may not render without it;
+    a `statement` may, so a `quote` key on one is a field the renderer has no
+    business seeing — and `test_first_beat_carries_every_field` pins the exact
+    key set for precisely this reason."""
+    b = _beats_by_type(series)["body"]
+    assert "quote" not in b
+
+
+def test_the_quote_sits_beside_the_src_it_belongs_to(series):
+    """The documented key order, extended. `src` and `quote` are one citation in
+    two fields; splitting them across the beat makes a diff read as unrelated."""
+    b = _charts(series)["kpis"]
+    assert list(b)[-2:] == ["src", "quote"]
