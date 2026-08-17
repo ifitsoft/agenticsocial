@@ -1109,3 +1109,91 @@ two of those (this, and the zsh word-splitting probe that reported four working
 commands as MISSING).
 
 **The leverage in this process is reviewing briefs, not reviewing code.**
+
+## D-059 · PHASE 2 · a draft could be published. Fixed. v1 shipped with this.
+Leader-verified before the fix:
+
+```
+status on disk : draft
+tweets posted  : 2 ['tweet one', 'tweet two']
+status after   : published
+*** A DRAFT WAS PUBLISHED ***
+```
+
+The README's central promise — "Nothing goes live without you running
+`agsoc approve`" — was breakable. **This is the most serious defect the project
+has found, and it shipped in v1.**
+
+**The bypass laundered itself**, in three individually-defensible steps:
+
+1. `publish_variant` decided *whether to run the gate* from the in-memory object,
+   so a stale `Variant` claiming `PUBLISHING` skipped it entirely.
+2. The posting loop's `save_variant` stamped `status: publishing` onto the draft.
+3. The closing `set_status(PUBLISHED)` then passed **legitimately** — disk really
+   did say `publishing` by then.
+
+The final file state is indistinguishable from a properly approved publish. No
+trace.
+
+**Root cause, named by the Task 0 implementer:** `save_variant` was an *ungated
+status writer*. The video pipeline has exactly one writer of episode status and
+it is gated; the text pipeline had two, one of which wrote whatever the object
+claimed. That asymmetry was the bug — and my Task 0 fix hardened one writer while
+the other quietly undid it.
+
+Fixed: `set_status` is now the only writer of the status key; `save_variant`
+preserves what is on disk; both gate-skip decisions read the file. Verified by
+hand — refused before the first network call, zero tweets, status untouched.
+Both pipelines now have exactly one gated status writer each.
+
+## D-060 · phase 2 / task 0b · an existing test was using the defect as an API
+`test_post_stuck_publishing_requires_resume` forged its state with
+`v.status = PUBLISHING; ws.save_variant(v)` — precisely the ungated writer this
+task removed — so it broke.
+
+The implementer **did not edit it**. It analysed it, verified the asserted
+behaviour is intact when the state is reached legitimately by driving the real
+CLI, and corroborated the causal link by showing the test passes again under the
+mutant that restores the ungated writer. That is what "a failing test is a
+finding" is supposed to produce.
+
+Leader applied the two-line setup fix (`ws.set_status(v, Status.PUBLISHING)`, a
+legal approved→publishing move) rather than dispatching an agent for it, since
+the diagnosis was complete and a red suite blocks everything. Verified the test
+still earns its place: disabling the CLI's interrupted branch still fails it.
+
+**Worth recording as a category.** When a defect is removed, tests that *used*
+that defect to set up their fixtures break — and they break in a way that looks
+like the fix is wrong. The tell is that the test's *setup* touches the thing that
+was fixed, while its assertion is unrelated.
+
+## D-061 · OPEN DESIGN QUESTION · should `Variant.status` be mutable at all?
+The Task 0b implementer argued it should not, and the argument is strong enough
+to record verbatim in substance:
+
+> Three bypasses, one identical root cause — that's not three mistakes, it's a
+> design where the mistake is the natural thing to write. `v.status` and
+> `ws.disk_status(v)` look interchangeable at the call site; nothing in either
+> name says which one is a guess, and the security-relevant distinction is
+> invisible in the code. Worse, writability means it isn't a stale cache — it's a
+> **forgeable claim**, and until this commit `save_variant` persisted the forgery.
+
+Its conclusion: `disk_status` is the right mechanism and the **wrong stopping
+point** — it removes the third instance without removing the ability to write a
+fourth. The proposal is a frozen `Variant` (or a property with no setter) with
+`set_status` returning a fresh object, making all three bypasses *unrepresentable*
+rather than merely fixed — the same property the engine gets from `__seek(t)`
+being pure in `t`.
+
+`Episode.status` in the video pipeline has the identical shape, so a full fix
+spans both pipelines.
+
+**Raised with the human; not yet decided.** Also open, flagged by the same
+report: `set_status(FAILED)` inside `publish_variant`'s error handler can itself
+raise while reading the file, **masking the original exception** and leaving
+`posted_ids` one tweet behind reality. Pre-existing, fails in the safe direction
+(a duplicate on resume, never a lost tweet), and worth its own task.
+
+Also noted: mutant 3 (`cli.py` deciding from `v.status`) **survives** — equivalent
+under today's CLI, where `_load` always returns a fresh variant. Kept as defence
+in depth, recorded as unkilled rather than papered over.

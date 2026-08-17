@@ -194,8 +194,10 @@ def test_post_publishes_and_prints_url(approved, monkeypatch):
 def test_post_stuck_publishing_requires_resume(approved, monkeypatch):
     ws, src = approved
     v = ws.load_variant(src, "x")
-    v.status = Status.PUBLISHING
-    ws.save_variant(v)
+    # Reach the stuck state legitimately. This previously forged it with
+    # `v.status = PUBLISHING; ws.save_variant(v)` — the ungated status writer
+    # that let a draft be published (D-059). approved -> publishing is legal.
+    ws.set_status(v, Status.PUBLISHING)
     result = runner.invoke(app, ["post", "ready"])
     assert result.exit_code == 1
     assert "--resume" in result.output
