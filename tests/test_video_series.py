@@ -548,3 +548,15 @@ def test_episode_does_not_redeclare_the_length_limit():
     src = Path(E.__file__).read_text(encoding="utf-8")
     assert "from .series import MAX_NAME_LEN as MAX_ID_LEN" in src
     assert not re.search(r"^MAX_ID_LEN\s*=", src, re.MULTILINE)
+
+
+@pytest.mark.parametrize("field", ["name", "byline"])
+@pytest.mark.parametrize("bad", ["0", "false", "[]", "0.0"])
+def test_falsy_non_string_text_fields_are_rejected(ws, field, bad):
+    """Mutation sweep: `if value:` in place of `if value is not None:` survived
+    the brief's cases, because every one of them is truthy. `name = 0` would
+    then load and reach _toml_str on the next scaffold — the exact TypeError
+    the check exists to prevent."""
+    _write_series(ws, "bad", f'[series]\n{field} = {bad}\n')
+    with pytest.raises(SeriesError, match=field):
+        load_series(ws, "bad")
