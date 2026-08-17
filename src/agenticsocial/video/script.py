@@ -21,6 +21,7 @@ allowed. `read_script` hands us document 2 verbatim; we parse a copy.
 """
 from __future__ import annotations
 
+import decimal
 import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -36,14 +37,17 @@ DEFAULT_HOLD = 3.0
 # What plan.py can currently emit. Widening this is a rendering decision, not a
 # schema one — see the module docstring.
 #
-# Phase 4 added a builder in engine/planbuild.js for each of the five text
-# types alongside `statement`. The four that remain (`kpis`, `jumpChart`,
-# `dumbbell`, `custom`) are valid beats with no builder: they draw numbers or
-# arbitrary JS, and both need more than a text vocabulary. A name added here
+# Phase 4 Task 1 added a builder in engine/planbuild.js for each of the five
+# text types alongside `statement`; Task 2 added the two chart types spec §7.2
+# calls strictly verifiable. The two that remain (`dumbbell`, `custom`) are
+# valid beats with no builder — one needs a two-tone merged marker the engine
+# has CSS for and no function, the other runs arbitrary JS. A name added here
 # without a builder renders a blank card, so
 # tests/test_video_planbuild.py::test_every_renderable_type_has_a_builder holds
 # this set and `BUILDERS` to each other.
-RENDERABLE = frozenset({"statement", "body", "list", "quote", "title", "signoff"})
+RENDERABLE = frozenset(
+    {"statement", "body", "list", "quote", "title", "signoff", "kpis", "jumpChart"}
+)
 
 
 class ScriptError(Exception):
@@ -176,6 +180,44 @@ def jump_rows(v: Any) -> str | None:
     return None
 
 
+def jump_rows_within_scale(payload: dict) -> str | None:
+    """R4 — a row value outside `[0, scale]` is refused, not clipped.
+
+    A cross-field rule, so it cannot live in a per-field checker: `rows` and
+    `scale` only mean anything together. The engine positions every dot as
+    `value / max * 100 + '%'` and sizes the gain segment the same way, so a row
+    above the scale is drawn past the end of its track — off the card, or
+    clipped by whatever overflow the stage happens to have — and a negative one
+    is drawn to the left of zero.
+
+    Clipping to the scale would be worse than refusing: the bar would sit at
+    100% and read as the maximum, which is a number the plan did not carry.
+    That is R2's failure wearing a geometry costume, and it is silent.
+
+    The bound is INCLUSIVE at both ends. `0` is a benchmark that scored nothing
+    before — the most interesting bar on the chart — and a value equal to the
+    scale is drawn at 100% of the track, which is on the card.
+    """
+    scale = payload.get("scale")
+    if not _is_number(scale):
+        return None  # positive_number has already refused it, with a better message
+    for i, row in enumerate(payload.get("rows", [])):
+        for name in ("before", "after"):
+            value = row.get(name)
+            if not _is_number(value):
+                continue  # jump_rows has already refused it
+            if not 0 <= value <= scale:
+                return (
+                    f"`rows[{i}]` `{name}` is {value!r}, outside the chart's "
+                    f"`scale` of {scale} — the engine draws every dot at "
+                    f"`{name} / scale`, so this bar lands off its track. Raise "
+                    "`scale` or fix the value; it is not clipped, because a "
+                    "clipped bar reads as the maximum and that is a number "
+                    "nothing in the script says"
+                )
+    return None
+
+
 def series_pair(v: Any) -> str | None:
     """Exactly two named series — spec §7.1 writes it as `series[2]`."""
     if not isinstance(v, list):
@@ -188,13 +230,50 @@ def series_pair(v: Any) -> str | None:
     return None
 
 
+def _as_displayed(value: float, decimals: int) -> str:
+    """The glyphs `count()` would put on screen for this value.
+
+    Message-only, but it has to be right or the error tells an operator to look
+    for a number the frame never shows. `toFixed` and `Math.round` both round
+    half AWAY from zero on the decimal the operator wrote; Python's `round` and
+    `format` round half to EVEN, so `format(0.75, '.0f')` is `0` where the
+    engine renders `1`. `repr` first, so the value quantised is the one they
+    typed rather than its binary neighbour.
+    """
+    step = decimal.Decimal(1).scaleb(-decimals)
+    return str(decimal.Decimal(repr(value)).quantize(step, decimal.ROUND_HALF_UP))
+
+
 def kpi_items(v: Any) -> str | None:
-    """`items[{value, unit, label, decimals}]` — spec §7.1.
+    """`items[{value, unit, label, decimals}]` — spec §7.1, plus `prefix`.
 
     `value` may be a string: the engine's `kpis()` falls back to printing a
     non-numeric value rather than counting up to it. §7.2 constrains the numeric
     ones ("every numeric `value` must appear inside that `quote`"), which is
     Phase 5's check, not this one.
+
+    **R2 — display rounding is refused.** `count()` formats with
+    `decimals ? v.toFixed(decimals) : Math.round(v)`, so `value: 0.756,
+    decimals: 1` puts `0.8` on the screen. `0.8` is in no source, in no quote
+    and in no plan: Phase 5 would verify `0.756` against the quote, pass, and
+    ship a video showing a number nobody checked. If an author wants `0.8` on
+    screen the script says `0.8`, because the script is what gets verified.
+
+    Note where the hole is widest: `decimals` is OPTIONAL, and its absence is
+    not "print the value as written" — it is `Math.round(v)`. So absent is
+    checked as 0, and `value: 0.75` with no `decimals` is refused for reaching
+    the frame as `1`.
+
+    `prefix` and `unit` are the opposite case and are deliberately free:
+    `$0.75` and `0.75` are the same figure differently read, and so is `2,000`.
+    A symbol changes how a number reads, not what it is.
+
+    `prefix` is not in the spec's field list; `unit` alone cannot express the
+    committed episode, which renders `$0.75` AND `50%` from the same engine
+    call. `unit` is the SUFFIX and `prefix` the leading symbol — a fixed table
+    of "symbols that lead" would be a global that retroactively changes what
+    past episodes rendered, which is the class of failure this phase exists to
+    close.
     """
     if not isinstance(v, list):
         return f"must be a list, got {_type_name(v)}"
@@ -212,12 +291,21 @@ def kpi_items(v: Any) -> str | None:
             return f"[{i}] needs a `label`"
         if not _is_filled(item["label"]):
             return f"[{i}] `label` must be a non-empty string, got {_type_name(item['label'])}"
-        if "unit" in item and not _is_str(item["unit"]):
-            return f"[{i}] `unit` must be a string, got {_type_name(item['unit'])}"
-        if "decimals" in item:
-            d = item["decimals"]
-            if not _is_int(d) or d < 0:
-                return f"[{i}] `decimals` must be a non-negative integer, got {d!r}"
+        for name in ("unit", "prefix"):
+            if name in item and not _is_str(item[name]):
+                return f"[{i}] `{name}` must be a string, got {_type_name(item[name])}"
+        decimals = item.get("decimals", 0)
+        if "decimals" in item and (not _is_int(decimals) or decimals < 0):
+            return f"[{i}] `decimals` must be a non-negative integer, got {decimals!r}"
+        # Only numbers are formatted; a string value is printed verbatim.
+        if _is_number(val) and round(val, decimals) != val:
+            return (
+                f"[{i}] `value` {val!r} would reach the frame as "
+                f"{_as_displayed(val, decimals)} at `decimals: {decimals}`"
+                + ("" if "decimals" in item else " (the default)")
+                + " — display rounding invents a figure that is in no source, "
+                "no quote and no plan; write the number you want on screen"
+            )
     return None
 
 
@@ -247,6 +335,9 @@ BEAT_TYPES: dict[str, dict] = {
         },
         "optional": {},
         "cited": True,
+        # R4. Runs after every field has checked out, because it reads two of
+        # them at once. See `jump_rows_within_scale`.
+        "cross": jump_rows_within_scale,
     },
     "dumbbell": {
         "required": {
@@ -364,6 +455,15 @@ def _beat(raw: Any, index: int, where: Any) -> Beat:
         if reason:
             raise ScriptError(f"{at} `{name}` {reason}")
         payload[name] = raw[name]
+    # Rules that read more than one field at once, once every field is known to
+    # be well-formed on its own. Data, not a branch — `cross` is absent on the
+    # types that have no such rule.
+    cross = spec.get("cross")
+    if cross is not None:
+        reason = cross(payload)
+        if reason:
+            raise ScriptError(f"{at} {reason}")
+
     if "claim_override" in raw:
         payload["claim_override"] = raw["claim_override"]
 

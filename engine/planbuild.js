@@ -213,6 +213,166 @@ function buildSignoff(b) {
   };
 }
 
+/* ===================== the two strictly verifiable types =====================
+ *
+ * Spec §7.2: "there is no path to rendering a number that isn't in a source."
+ *
+ * Everything above is presentation. These two carry figures a viewer will
+ * believe, and the rules below are what make that belief earned. All of them
+ * are checked EAGERLY — while buildFromPlan walks the beats, not inside the
+ * closure seek() calls. A throw from inside a build closure fires at the frame
+ * that scene first appears on, and render.mjs only inspects page errors after
+ * goto (which is seek(0)) and again at the end: a bad beat 14 would be reported
+ * after nine hundred frames had already been written.
+ */
+
+/* R1. The schema refuses an uncited chart too, and that is not sufficient: a
+ * plan can reach the page without passing through Python at all. render.mjs
+ * --plan reads any JSON file, and determinism.test.mjs writes its own .plan.js.
+ * Blank is not a citation — `src: ""` satisfies every "is the key there" check
+ * and cites nothing. */
+function requireCitation(b) {
+  var missing = [];
+  for (var i = 0; i < 2; i++) {
+    var k = ['src', 'quote'][i];
+    if (typeof b[k] !== 'string' || !b[k].trim()) missing.push('`' + k + '`');
+  }
+  if (missing.length) {
+    throw new Error(
+      'a ' + b.type + ' beat has no ' + missing.join(' and ') +
+        ' — it renders numbers, and spec §7.2 allows no path to rendering a ' +
+        'number that is not in a source',
+    );
+  }
+}
+
+/* R2, and the heart of this file.
+ *
+ * count() formats with `decimals ? v.toFixed(decimals) : Math.round(v)`. So
+ * `value: 0.756, decimals: 1` puts 0.8 on the screen — a figure in no source,
+ * in no quote and in no plan. Phase 5 would verify 0.756 against the quote,
+ * pass, and ship a video showing a number nobody checked. Display rounding is a
+ * number-inventing machine.
+ *
+ * `decimals` is optional and its absence is NOT "print it as written": absent
+ * takes the Math.round branch, so it is checked as 0. That is where the hole is
+ * widest — `value: 0.75` with no `decimals` reaches the frame as `1`.
+ *
+ * The NEGATIVE half is just as load-bearing: a prefix, a suffix and a thousands
+ * separator change how a value READS, not what it IS. `$0.75` is 0.75. Refusing
+ * those would be the same mistake pointed the other way.
+ */
+function requireExactAtDecimals(value, decimals) {
+  if (Number(value.toFixed(decimals)) !== value) {
+    throw new Error(
+      'kpi value ' + value + ' would reach the frame as ' +
+        value.toFixed(decimals) + ' at decimals ' + decimals +
+        ' — display rounding invents a figure that is in no source, no quote ' +
+        'and no plan; write the number you want on screen',
+    );
+  }
+}
+
+function planKpiItems(b) {
+  var out = [];
+  var items = b.items || [];
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    /* typeof, not `||`: `prefix: ""` and an absent prefix are the same thing
+     * here, but `value: 0` is a legitimate headline figure — "0 seconds of
+     * downtime" — and `it.value || ''` would erase it. */
+    var prefix = typeof it.prefix === 'string' ? it.prefix : '';
+    var unit = typeof it.unit === 'string' ? it.unit : '';
+    if (typeof it.value === 'number') {
+      var decimals = typeof it.decimals === 'number' ? it.decimals : 0;
+      requireExactAtDecimals(it.value, decimals);
+      out.push([it.value, it.label, unit, decimals, prefix]);
+    } else {
+      /* kpis() prints a non-numeric value verbatim and reads prefix and suffix
+       * only inside count(), so on this branch the engine would drop them.
+       * Compose them here instead: dropping an authored symbol is the same
+       * divergence as inventing one, pointed the other way. */
+      out.push([prefix + String(it.value) + unit, it.label]);
+    }
+  }
+  return out;
+}
+
+/* The KPI stack. `kpis()` sets each label with `text:`, so it is text on the
+ * stage the way every other label in this file is (R3): the only field in
+ * either chart type that is HTML is `jumpChart.shown`.
+ *
+ * `tone` is the engine's blue/warm switch and no beat field names it — spec
+ * §7.1 gives kpis `items` and `kicker` and nothing else — so it stays 'blue',
+ * the palette's `accent`. */
+function buildKpis(b) {
+  requireCitation(b);
+  var items = planKpiItems(b);
+  return function () {
+    planKicker(b, 0.05);
+    kpis(items, 0.35, 'blue');
+  };
+}
+
+/* R4 — a row value outside [0, scale] is refused, not clipped.
+ *
+ * jumpChart() positions every dot at `value / max * 100 + '%'`, so a row above
+ * the scale is drawn past the end of its track and a negative one to the left
+ * of zero. Clipping would be worse than refusing: the bar would sit at 100% and
+ * read as the maximum, which is a number the plan did not carry. Inclusive at
+ * both ends — 0 is a benchmark that scored nothing before, and a value equal to
+ * the scale is drawn at 100% of the track, which is on the card. */
+function planJumpRows(b) {
+  var out = [];
+  var rows = b.rows || [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    for (var k = 0; k < 2; k++) {
+      var name = ['before', 'after'][k];
+      var v = r[name];
+      if (typeof v !== 'number' || !(v >= 0 && v <= b.scale)) {
+        throw new Error(
+          'jumpChart rows[' + i + '] ' + name + ' is ' + v + ', outside the ' +
+            'chart scale of ' + b.scale + ' — the engine draws every dot at ' +
+            name + ' / scale, so this bar lands off its track. It is not ' +
+            'clipped: a clipped bar reads as the maximum, and that is a ' +
+            'number nothing in the script says',
+        );
+      }
+    }
+    /* `shown` is the ONE field in either chart rendered as HTML — a documented
+     * display override that content/2026-08-14.js depends on for
+     * `<s>34.4</s> &rarr; 43.6`. Absent blanks the cell rather than printing
+     * `undefined`; `shown: ""` blanks it deliberately, the way `sub: ""`
+     * blanks a title card's subtitle, and the two are indistinguishable to the
+     * viewer by design. */
+    out.push([r.label, r.before, r.after, typeof r.shown === 'string' ? r.shown : '']);
+  }
+  return out;
+}
+
+/* The before-to-after chart. Rows keep the order they were authored in: they
+ * are a ranking as often as not, and a chart that reorders them tells a
+ * different story with the same numbers.
+ *
+ * The footnote is REQUIRED by the schema and drawn as TEXT. It is where "scores
+ * as published by Google, on a common 0-70% scale" lives, which is what stops
+ * the chart being read as something this series measured itself — dropping it
+ * changes what the chart claims. It fades in after the last bar has grown; the
+ * offset is per-row layout, not plan timing, so R5 still holds (the plan's
+ * `hold` is never read here). */
+function buildJumpChart(b) {
+  requireCitation(b);
+  var rows = planJumpRows(b);
+  return function () {
+    planKicker(b, 0.02);
+    var chart = E('div', 'chart');
+    jumpChart(rows, b.scale, 0.3, chart);
+    var ft = E('div', 'foot', { p: chart, text: b.footnote });
+    fade(ft, 0.3 + rows.length * 0.34 + 0.6, { dur: 0.5, dy: 10, blur: 0 });
+  };
+}
+
 /* Data, not branches — and the set of keys here is the same set as
  * script.py's RENDERABLE. A name in one and not the other is a beat that
  * validates, resolves, reaches the stage and draws nothing. */
@@ -223,6 +383,8 @@ var BUILDERS = {
   quote: buildQuote,
   title: buildTitle,
   signoff: buildSignoff,
+  kpis: buildKpis,
+  jumpChart: buildJumpChart,
 };
 
 function buildFromPlan(plan) {

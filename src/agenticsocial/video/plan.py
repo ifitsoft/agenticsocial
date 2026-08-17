@@ -231,6 +231,17 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
                 "kicker": beat.kicker,
                 **payload,
                 "src": beat.src,
+                # The citation travels only with the types that may not render
+                # without it, and it travels because `planbuild.js` enforces
+                # that rule at the far end. A plan can reach the page without
+                # passing through this module at all — `render.mjs --plan`
+                # reads any JSON file, and engine/determinism.test.mjs writes
+                # its own — so the renderer's gate is the one that holds for
+                # spec §7.2's "no path", and a gate cannot check a field it was
+                # never handed. On an uncited type there is nothing to enforce,
+                # and a `quote` key in front of the renderer would be one more
+                # field it has no business drawing.
+                **({"quote": beat.quote} if spec["cited"] else {}),
             }
         )
         at = end

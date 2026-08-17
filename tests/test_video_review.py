@@ -737,7 +737,10 @@ def test_review_shows_the_source_of_a_cited_beat(ws, series):
             {
                 "type": "kpis",
                 "hold": 4.0,
-                "items": [{"value": 0.75, "unit": "$", "label": "per 1M input tokens"}],
+                "items": [
+                    {"value": 0.75, "prefix": "$", "label": "per 1M input tokens",
+                     "decimals": 2}
+                ],
                 "src": "venturebeat",
                 "quote": "priced at $0.75 per million input tokens",
             }
@@ -790,3 +793,31 @@ def test_review_of_a_missing_series_fails(ws):
     result = run("video", "review", "2026-08-17", "--series", "nope")
     assert result.exit_code == 1
     assert "agsoc series new" in result.output
+
+
+def test_a_kpi_reads_on_the_review_line_the_way_it_reads_on_the_frame(ws, series):
+    """precondition: found by this task's sweep. `_kpi` positioned the symbol
+    from a table of currency characters — `$` in front, everything else
+    behind — while `planbuild.js` composes `prefix + value + unit` in the order
+    the script names them. A `unit: "$"` therefore read as `$0.75` here and
+    rendered as `0.75$` there. This line is what the operator approves, and a
+    review that reads differently from the render is a review of a different
+    video."""
+    episode(
+        series,
+        [
+            {
+                "type": "kpis",
+                "hold": 4.0,
+                "items": [
+                    {"value": 0.75, "prefix": "$", "label": "in", "decimals": 2},
+                    {"value": 50, "unit": "%", "label": "cheaper"},
+                ],
+                "src": "venturebeat",
+                "quote": "priced at $0.75 per million input tokens, 50% cheaper",
+            }
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    assert "$0.75" in out
+    assert "50%" in out
