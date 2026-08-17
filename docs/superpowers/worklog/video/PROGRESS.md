@@ -13,53 +13,46 @@ Spec: `docs/superpowers/specs/2026-08-15-agenticsocial-video-mvp-design.md`
 **Plan:** `docs/superpowers/plans/2026-08-16-phase-01-scaffolding.md`
 **Started:** 2026-08-16
 
-Task 1 — Video status machine: **implemented** (commit `41ad23e`), QA dispatched
-  Blocked once on a contradictory brief; resolved by Amendment 1 → see D-005.
-  Implementer correctly refused to edit an existing test and did not commit.
-  Leader-verified: `uv run pytest` → 106 passed; commit touches 3 files;
-  `tests/test_models.py` diff is 1 added line, snapshot still full-enum.
-  Carries D-003 (RENDERED → PUBLISHING → FAILED → RENDERING) to the human.
-Task 1 QA: **changes-required** — mutation testing found the suite asserted
-  forbidden transitions well and permitted ones barely at all. Breaking the
-  render path left all 106 tests green. 5 findings adjudicated in D-008
-  (3 fix-now → Task 1b, 1 resolved by D-006, 1 deferred).
-Task 1b — Cut RENDERED→PUBLISHING + close test gaps: **implemented**
-  (`1016c09` tests, `43799e5` impl), QA dispatched
-  First task under the two-commit rule (D-009). Leader-verified RED from git
-  history: old models.py + new tests → 3 failed / 16 passed, matching the
-  prediction. Restored → 112 passed.
-  Implementer caught a prose/code contradiction in my brief → D-010.
-Task 1b QA: **approve**. 12 mutants, 9 killed, 3 survived — all one class
-  (an edge added to a table no test forbids), incl. `DRAFT → RENDERING`, an
-  approval-gate bypass. Adjudicated in D-012 → Task 1c.
-Task 1c — Pin both transition tables: **complete** (`7e240eb`), 114 passed
-  First task under D-013 (guard tests justified by mutation kills, not RED).
-  All 3 mutants killed. Leader re-verified the gate bypass independently.
-  No separate QA pass — see D-015 for why, and why it is not a precedent.
-Task 2 — Series configuration: **complete** (`88752ac`, `52c3e4c`, `8a49f9a`)
-Task 2 QA: **changes-required** — 34 mutants, 6 survived. Found hostile names
-  corrupting both config files, misattributing it to the operator, and blocking
-  retry. All findings were brief defects faithfully implemented (D-020).
-Task 2b — Harden config: **complete** (`22a78c0`, `8af23fd`), 160 passed
-  All 5 surviving mutants killed. Found the D-022 bug in my own fix.
-Task 2c — Correct TOML escaper: **complete** (`a5d2ceb`, `2dbf3e9`), 184 passed
-  6/6 mutants killed. First task in the phase with no brief defect.
-  Leader-verified: emoji and CJK ext-B names now round-trip.
-  No per-task QA — narrow change, strong mutation evidence, covered by the
-  phase gate. See D-024; the phase gate is NOT optional as a result.
-Task 3 — Episode scaffolding: **dispatched**
-Task 4 — CLI wiring: not started (adds `series_slugs`, skip-and-warn listing,
-  and lone-surrogate rejection at the operator-input boundary — D-025)
-Task 5 — Config validation contract: created, runs after Task 4 (D-025)
+Planned 4 tasks. Ran 13. Every extra came from a defect an implementer or
+reviewer found — none from scope drift.
 
-Phase gate: not reached. Whole-branch QA over `series.py` is REQUIRED —
-  2c did not get a per-task review on the understanding that this covers it.
+| Task | Commits | Result |
+|---|---|---|
+| 1 — Video status machine | `41ad23e` | blocked once on a contradictory brief (D-005); QA: changes-required |
+| 1b — Cut RENDERED→PUBLISHING, close test gaps | `1016c09` `43799e5` | QA: approve. First two-commit task (D-009) |
+| 1c — Pin both transition tables | `7e240eb` | closed an approval-gate bypass QA found by mutation |
+| 2 — Series configuration | `88752ac` `52c3e4c` `8a49f9a` | QA: changes-required, 34 mutants / 6 survivors |
+| 2b — Harden config | `22a78c0` `8af23fd` | hostile names corrupted both config files (D-020) |
+| 2c — Correct TOML escaper | `a5d2ceb` `2dbf3e9` | my json.dumps fix was itself broken (D-022) |
+| 3 — Episode scaffolding | `98a6c7a` `512655e` | reproduced data loss in document 2 (D-027) |
+| 3b — Never parse/rewrite beats | `4084bbc` `e0c00da` | two-document YAML confirmed, new reason (D-026) |
+| 3c — Byte-exact preservation | `ff70230` `c47236b` | I had verified a proxy, not the guarantee (D-031) |
+| 3d — Fix separator arithmetic | `910c850` `7f09648` | mixed line endings ate a byte, silently (D-033) |
+| 4 — CLI wiring + input boundary | `37e2b75` `8343b15` `4f09274` | 14 tracebacks found; my CLI tests were vacuous (D-035) |
+| 4b — Complete the error surface | `9350dcc` `8bd2cb3` | fixed one module, forgot its sibling (D-036) |
+| 5 — Path safety | in flight | verified workspace escape (D-038) |
 
-### Phase 1 running notes
-- Two leader-authored brief defects so far (D-005, D-010). Both caught by
-  implementers rather than reaching QA. Briefs from Task 2 onward: code blocks
-  are authoritative, prose explains *why* and never restates *what*.
-- Mutation testing is earning its place in the QA brief. Keep it for all phases.
+### What this phase cost, and what it bought
+Four attempts were needed for one guarantee (byte preservation). Every failure
+was a different defect in *my* specification; implementers made zero errors and
+transcribed faithfully every time. The loop caught all of it before merge.
+
+Three findings would have shipped as real harm: an approval-gate bypass, config
+corruption that misattributed itself to the operator, and a workspace escape.
+
+### The generalisable lessons
+- **D-035** — a test whose own harness performs the transformation under test
+  cannot fail. Three instances. Check: *what would this test do if the code did
+  nothing?*
+- **D-036** — a guard added to one of a matched pair and not the other. Three
+  instances, all in `series.py`, all found late.
+- **D-021** — briefs are the main defect source. Code blocks authoritative,
+  prose explains *why* only.
+- **D-040** — before the gate fix harm, after the gate fix confusion. Without a
+  stated line the phase does not end.
+
+Phase gate: pending Task 5. Whole-branch QA over `series.py` is MANDATORY —
+2c skipped its per-task review on that promise (D-024).
 
 ---
 
