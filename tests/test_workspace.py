@@ -200,3 +200,33 @@ def test_set_status_rejects_an_unreadable_status_on_disk(tmp_path):
     )
     with pytest.raises(WorkspaceError, match="banana"):
         ws.set_status(v, Status.IN_REVIEW)
+
+
+def test_save_variant_does_not_change_status(tmp_path):
+    """save_variant persists body and metadata. Status belongs to set_status
+    alone — a second, ungated status writer is what let a draft be published."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+
+    v.status = Status.PUBLISHED          # a stale or hostile object
+    v.meta["posted_ids"] = ["1"]
+    ws.save_variant(v)
+
+    reloaded = ws.load_variant(src, "x")
+    assert reloaded.status is Status.DRAFT        # unchanged on disk
+    assert reloaded.meta["posted_ids"] == ["1"]   # metadata still persisted
+
+
+def test_disk_status_reports_the_file_not_the_object(tmp_path):
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+    v.status = Status.APPROVED
+    assert ws.disk_status(v) is Status.DRAFT

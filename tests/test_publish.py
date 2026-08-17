@@ -106,3 +106,64 @@ def test_publish_refuses_unapproved(tmp_path):
     from agenticsocial.models import TransitionError
     with pytest.raises(TransitionError):
         publish_variant(ws, v, FakeClient())
+
+
+def test_a_stale_variant_cannot_publish_a_draft(tmp_path):
+    """Leader-verified bypass: a Variant claiming PUBLISHING skipped the gate,
+    posted every tweet, and save_variant then stamped `publishing` onto the
+    draft so the closing transition passed too."""
+    import pytest
+
+    from agenticsocial.models import Status, TransitionError
+    from agenticsocial.workspace import Workspace
+    from agenticsocial.x.publish import publish_variant
+
+    class Client:
+        def __init__(self):
+            self.posted = []
+
+        def post_tweet(self, text, in_reply_to=None):
+            self.posted.append(text)
+            return str(len(self.posted))
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Unapproved")
+    v = ws.create_variant(src, "x", body="one\n\n---tweet---\n\ntwo")
+    v.status = Status.PUBLISHING          # the stale claim
+
+    client = Client()
+    with pytest.raises(TransitionError):
+        publish_variant(ws, v, client)
+
+    assert client.posted == []
+    assert ws.load_variant(src, "x").status is Status.DRAFT
+
+
+def test_resuming_a_genuinely_publishing_variant_still_works(tmp_path):
+    """The legitimate case the skip existed for: disk really says publishing."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+    from agenticsocial.x.publish import publish_variant
+
+    class Client:
+        def __init__(self):
+            self.posted = []
+
+        def post_tweet(self, text, in_reply_to=None):
+            self.posted.append(text)
+            return "id" + str(len(self.posted))
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Approved")
+    v = ws.create_variant(src, "x", body="one\n\n---tweet---\n\ntwo")
+    ws.set_status(v, Status.IN_REVIEW)
+    ws.set_status(v, Status.APPROVED)
+    ws.set_status(v, Status.PUBLISHING)
+    v.meta["posted_ids"] = ["id1"]        # one tweet already out
+    ws.save_variant(v)
+
+    client = Client()
+    url = publish_variant(ws, v, client)
+    assert client.posted == ["two"]       # only the remainder
+    assert ws.load_variant(src, "x").status is Status.PUBLISHED
+    assert url.endswith("id1")
