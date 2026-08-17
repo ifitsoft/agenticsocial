@@ -514,3 +514,40 @@ def test_an_all_lf_script_stays_all_lf(series):
     )
     set_status(load_episode(series, "ep"), Status.IN_REVIEW)
     assert b"\r" not in ep.script_path.read_bytes()
+
+
+def test_undecodable_script_raises_episode_error(series):
+    """Task 4's CLI catches EpisodeError. UnicodeDecodeError is a ValueError,
+    not an OSError, so it needs its own clause or it escapes the contract."""
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_bytes(b"---\nepisode: e\nname: caf\xe9\n---\nbeats: []\n")
+    with pytest.raises(EpisodeError, match="UTF-8"):
+        load_episode(series, "2026-08-14")
+
+
+@pytest.mark.parametrize(
+    "bad", ["../escape", "a/b", "", ".", "..", "Upper", "has space", "-leading"]
+)
+def test_invalid_episode_id_is_rejected(series, bad):
+    with pytest.raises(EpisodeError, match="episode id"):
+        create_episode(series, bad)
+
+
+def test_invalid_episode_id_is_rejected_before_any_write(series):
+    with pytest.raises(EpisodeError):
+        create_episode(series, "../escape")
+    assert not (series.episodes_dir.parent.parent / "escape").exists()
+
+
+def test_date_shaped_episode_ids_are_accepted(series):
+    for ok in ["2026-08-14", "2026.08.14", "ep-01"]:
+        create_episode(series, ok)
+
+
+def test_empty_metadata_document_keeps_its_beats(series):
+    """Pins the 3d mutant that survived: searching from start.end() instead of
+    start.end() - len(nl) discards the beats of an empty-metadata script."""
+    ep = create_episode(series, "2026-08-14")
+    ep.script_path.write_bytes(b"---\n---\nbeats:\n  - type: statement\n")
+    set_status(load_episode(series, "2026-08-14"), Status.IN_REVIEW)
+    assert b"- type: statement" in ep.script_path.read_bytes()

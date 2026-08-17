@@ -31,6 +31,8 @@ from .models import Episode, EpisodeError, Series
 
 SUBDIRS = ("sources", "out", "probe")
 
+EPISODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
+
 _DOC_START_RE = re.compile(r"\A---[ \t]*(\r\n|\r|\n)")
 _SEP_RE = re.compile(r"(\r\n|\r|\n)---[ \t]*(\r\n|\r|\n)")
 
@@ -85,6 +87,11 @@ def _read_meta(path: Path) -> tuple[dict, str | None, str]:
             text = f.read()
     except OSError as e:
         raise EpisodeError(f"{path}: cannot read script.yaml — {e}")
+    except UnicodeDecodeError as e:
+        raise EpisodeError(
+            f"{path}: script.yaml is not valid UTF-8 — {e}. "
+            "Re-save it as UTF-8; agsoc writes and expects UTF-8 everywhere."
+        )
     meta_text, beats_text, nl = _split(text)
     return _parse_meta(meta_text, path), beats_text, nl
 
@@ -97,6 +104,11 @@ def _compose(meta: dict, beats_text: str | None, nl: str = "\n") -> str:
 
 
 def create_episode(series: Series, ep_id: str) -> Episode:
+    if not EPISODE_ID_RE.match(ep_id):
+        raise EpisodeError(
+            f"invalid episode id {ep_id!r} — use lowercase letters, digits, dots "
+            "and hyphens, starting with a letter or digit (ids become directory names)"
+        )
     d = series.episodes_dir / ep_id
     if d.exists() or d.is_symlink():
         raise EpisodeError(f"episode already exists: {series.slug}/{ep_id}")
