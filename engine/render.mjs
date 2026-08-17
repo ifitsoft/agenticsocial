@@ -4,6 +4,11 @@
  *   node render.mjs --day 2026-08-14 --probe → ~1 frame per scene into probe/
  *   node render.mjs --day 2026-08-14 --at 34 → one frame at t=34s into probe/
  *   node render.mjs --day 2026-08-14 --pace 1.05  → override the read-speed knob
+ *   node render.mjs --plan <plan.json>       → render a resolved plan instead
+ *   node render.mjs --plan <plan.json> --out <dir>  → frames elsewhere
+ *
+ * --plan JSON.parses the plan and writes engine/.plan.js for the page, because
+ * fetch and ES modules are both CORS-blocked over file://.
  *
  * --day defaults to today. Frames are written to frames/; encode with ffmpeg
  * (see README) to the-brief-<day>.mp4.
@@ -24,8 +29,22 @@ const probe = argv.includes('--probe');
 const at = flag('at') !== null ? Number(flag('at')) : null;
 const pace = flag('pace') !== null ? Number(flag('pace')) : null;
 const day = flag('day') || new Date().toISOString().slice(0, 10);
+const planPath = flag('plan');
+const outDir = flag('out');
 
-const qs = new URLSearchParams({ day });
+const qs = new URLSearchParams();
+if (planPath) {
+  const { readFile, writeFile } = await import('node:fs/promises');
+  const plan = JSON.parse(await readFile(planPath, 'utf8'));
+  await writeFile(
+    join(HERE, '.plan.js'),
+    'window.__PLAN = ' + JSON.stringify(plan) + ';\n',
+    'utf8',
+  );
+  qs.set('plan', '1');
+} else {
+  qs.set('day', day);
+}
 if (pace) qs.set('pace', String(pace));
 
 const browser = await chromium.launch();
@@ -49,7 +68,7 @@ if (errors.length) {
 
 const total = await page.evaluate(() => window.__total);
 if (!total) {
-  console.error(`no scenes loaded — is content/${day}.js present?`);
+  console.error(planPath ? `no scenes in ${planPath}` : `no scenes loaded — is content/${day}.js present?`);
   await browser.close();
   process.exit(1);
 }
@@ -82,7 +101,7 @@ if (at !== null) {
   }
   console.log(`${mids.length} probe frames → ${dir}`);
 } else {
-  const dir = join(HERE, 'frames');
+  const dir = outDir || join(HERE, 'frames');
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
   const t0 = Date.now();
