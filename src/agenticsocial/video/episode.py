@@ -21,6 +21,7 @@ owns the real beats parser.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import yaml
@@ -234,13 +235,16 @@ def resolve_episode(series: Series, query: str) -> Episode:
     return load_episode(series, matches[0])
 
 
-def set_status(episode: Episode, target: Status) -> None:
-    """Move an episode to `target`.
+def set_status(episode: Episode, target: Status) -> Episode:
+    """Move an episode to `target`, gated on the status ON DISK.
 
     The gate is checked against the status ON DISK, not against `episode.status`.
     A caller holding a stale Episode must not be able to reach RENDERING from a
     file that says `draft` — spec §8.4 and §10 exist to make rendering
     unreachable without a human, and an in-memory check is not that guarantee.
+
+    Returns a NEW Episode; the argument is unchanged. See workspace.set_status
+    for why the dataclass is frozen.
     """
     meta, beats_text, nl = _read_meta(episode.script_path)
     raw = meta.get("status", Status.DRAFT.value)
@@ -254,5 +258,4 @@ def set_status(episode: Episode, target: Status) -> None:
     assert_transition(current, target, VIDEO_TRANSITIONS)
     meta["status"] = target.value
     atomic_write(episode.script_path, _compose(meta, beats_text, nl))
-    episode.status = target
-    episode.meta = meta
+    return replace(episode, status=target, meta=meta)

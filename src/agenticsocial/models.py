@@ -86,7 +86,7 @@ class Source:
     created: str = ""
 
 
-@dataclass
+@dataclass(frozen=True)
 class Variant:
     platform: str  # x | linkedin | youtube
     status: Status

@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import tempfile
 import tomllib
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -230,8 +231,13 @@ class Workspace:
         meta["status"] = self.disk_status(v).value
         self._write_variant(v, meta)
 
-    def set_status(self, v: Variant, target: Status) -> None:
+    def set_status(self, v: Variant, target: Status) -> Variant:
         """Move a variant to `target`, gated on the status ON DISK.
+
+        Returns a NEW Variant; the argument is unchanged. `Variant` is frozen
+        because a writable status is a forgeable claim, and three separate gate
+        bypasses came from one being trusted (D-045, D-049, D-059). Callers that
+        need the updated object must take the return value.
 
         Only the status is read from disk; `v.meta` is written as-is, because
         publish_variant sets `posted_url` in memory and relies on this call to
@@ -243,7 +249,7 @@ class Workspace:
             v.meta["approved_at"] = now
         if target is Status.PUBLISHED:
             v.meta["posted_at"] = now
-        v.status = target
         meta = dict(v.meta)
         meta["status"] = target.value
         self._write_variant(v, meta)
+        return replace(v, status=target)

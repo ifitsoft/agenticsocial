@@ -37,7 +37,7 @@ class Series:
         return self.dir / "episodes"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Episode:
     id: str
     series_slug: str
