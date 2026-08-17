@@ -52,6 +52,16 @@ OAuth 2.0 PKCE, public-client (no secret). Tokens live only in the OS keychain v
 
 v1 publishes to X only. `linkedin`/`youtube` exist in `PLATFORMS` and the voice template, but `post`/`approve` reject non-`x` platforms. `Status.SCHEDULED` is reserved and has no transitions.
 
-## workspace/brief-video/
+## engine/
 
-An unrelated standalone Node subproject (vertical news videos rendered frame-by-frame with Playwright + ffmpeg). It has its own README with the render workflow. Its invariant: `window.__seek(t)` must position everything purely as a function of `t` — no CSS keyframes, no `Date.now()`, no randomness, so renders are reproducible. Check `coverage.json` via `node coverage.mjs check <terms>` before writing a new episode.
+The video render engine — a Node subproject, and the target of the video MVP (see `docs/superpowers/specs/2026-08-15-agenticsocial-video-mvp-design.md`). Renders vertical news videos frame-by-frame with Playwright, then encodes with ffmpeg. It has its own README with the render workflow.
+
+**Its invariant is load-bearing:** `window.__seek(t)` must position every element purely as a function of `t` — no CSS keyframes, no `Date.now()`, no randomness. That purity is what makes renders reproducible and any single frame re-creatable for inspection. Anything touching it needs the determinism test green in the same commit.
+
+Tracked: `scene.html`, `engine.js`, `render.mjs`, `coverage.mjs`, `content/*.js`, `coverage.json`, `package*.json`. Ignored: `node_modules/`, `frames/`, `probe/`, `*.mp4`, `*.png`.
+
+Check `coverage.json` via `node coverage.mjs check <terms>` before writing a new episode — the series must never re-tell a story as if it were new.
+
+## workspace/ is gitignored
+
+`workspace/` holds the operator's own content (sources, drafts, and — from Phase 1 onward — series and episodes). It is deliberately not part of this repo. Consequence worth knowing: **nothing under `workspace/` is version controlled or backed up by this repo.** Content worth keeping needs its own git repo or backup.

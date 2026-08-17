@@ -1,0 +1,201 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>The Brief</title>
+<!--
+  Deterministic 9:16 stage. window.__seek(t) positions EVERY element from t alone.
+  No CSS keyframes, no Date.now(), no randomness — so any frame is reproducible.
+
+  This file is the STAGE (styles + markup) only. The engine is engine.js and the
+  script for a given day is content/<YYYY-MM-DD>.js. Pick a day with ?day=:
+      scene.html?day=2026-08-14
+  Drag the slider at the bottom to scrub (hidden during render).
+-->
+<style>
+  :root{
+    --paper:#F2F5F8; --paper-2:#E7ECF2;
+    --ink:#0B1B2B; --ink-2:#5A6B7C; --ink-3:#93A2B2;
+    --blue:#2E6BFF; --blue-lo:#A9C3FF; --cyan:#00C2D7; --warm:#FF6B4A;
+    --pad:96px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{background:#111;}
+  body{display:flex;align-items:flex-start;justify-content:center}
+
+  #stage{
+    position:relative;width:1080px;height:1920px;overflow:hidden;
+    background:var(--paper);color:var(--ink);
+    font-family:"SF Pro Display","Helvetica Neue",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  /* ---------- background ---------- */
+  #bg{position:absolute;inset:0;overflow:hidden}
+  #grid{position:absolute;inset:-200px;
+    background-image:linear-gradient(to right,rgba(11,27,43,.055) 1px,transparent 1px),
+                     linear-gradient(to bottom,rgba(11,27,43,.055) 1px,transparent 1px);
+    background-size:90px 90px;}
+  .blob{position:absolute;border-radius:50%;filter:blur(120px);opacity:.42}
+  #b1{width:900px;height:900px;background:radial-gradient(circle,#9CC3FF 0%,rgba(156,195,255,0) 70%)}
+  #b2{width:760px;height:760px;background:radial-gradient(circle,#9AF0FA 0%,rgba(154,240,250,0) 70%)}
+  #vig{position:absolute;inset:0;
+    background:radial-gradient(120% 80% at 50% 40%,rgba(242,245,248,0) 40%,rgba(216,226,236,.85) 100%)}
+
+  /* ---------- persistent chrome ---------- */
+  #prog{position:absolute;top:0;left:0;height:5px;width:100%;background:rgba(11,27,43,.07)}
+  #prog i{display:block;height:100%;width:100%;transform-origin:left center;
+    background:linear-gradient(90deg,var(--cyan),var(--blue))}
+  .chip{position:absolute;font-size:24px;font-weight:600;letter-spacing:.24em;
+    text-transform:uppercase;color:var(--ink-3)}
+  #brand{top:92px;left:var(--pad);color:var(--ink);}
+  #brand b{font-weight:700}
+  #date{top:92px;right:var(--pad)}
+  #act{position:absolute;top:250px;left:var(--pad);font-size:26px;font-weight:700;
+    letter-spacing:.28em;text-transform:uppercase;color:var(--blue)}
+  #act.warm{color:var(--warm)}
+  #tag{position:absolute;bottom:150px;left:var(--pad);font-size:24px;letter-spacing:.14em;
+    text-transform:lowercase;color:var(--ink-3);display:flex;align-items:center;gap:14px}
+  #tag:before{content:"";width:34px;height:2px;background:var(--ink-3);display:block}
+  #by{position:absolute;bottom:150px;right:var(--pad);font-size:24px;font-weight:600;
+    letter-spacing:.24em;text-transform:uppercase;color:var(--ink-3)}
+  .byline{display:flex;align-items:center;gap:20px;font-size:30px;font-weight:600;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2)}
+  .byline:before{content:"";width:56px;height:2px;background:var(--ink-3);display:block;flex:none}
+
+  /* ---------- scene body ---------- */
+  #scenes{position:absolute;left:0;right:0;top:400px;height:1180px;padding:0 var(--pad)}
+  .sc{position:relative;width:100%;height:100%;display:flex;flex-direction:column;
+    justify-content:center;will-change:opacity,transform,filter}
+
+  .kicker{font-size:26px;font-weight:700;letter-spacing:.28em;text-transform:uppercase;
+    color:var(--ink-3);margin-bottom:34px}
+  h1{font-size:104px;line-height:1.02;font-weight:700;letter-spacing:-.038em}
+  h2{font-size:76px;line-height:1.08;font-weight:700;letter-spacing:-.03em}
+  .lede{font-size:50px;line-height:1.22;font-weight:600;letter-spacing:-.02em}
+  .body{font-size:40px;line-height:1.4;font-weight:400;color:var(--ink-2);letter-spacing:-.01em}
+  .body b{font-weight:600;color:var(--ink)}
+  .sp{height:40px}.sp-s{height:26px}
+  .rule{height:3px;background:var(--ink);transform-origin:left center;border-radius:2px}
+  .rule.blue{background:var(--blue)}.rule.warm{background:var(--warm)}
+  em{font-style:normal;color:var(--blue)}
+  .warm-t{color:var(--warm)}
+  .mono{font-variant-numeric:tabular-nums}
+
+  /* masked word rise */
+  .wm{display:inline-block;overflow:hidden;vertical-align:bottom;
+      padding-bottom:.16em;margin-bottom:-.16em}
+  .wi{display:inline-block;will-change:transform}
+
+  /* ---------- title card ---------- */
+  .big-title{font-size:150px;font-weight:700;letter-spacing:-.05em;line-height:.94}
+
+  /* ---------- watermark motif ---------- */
+  .para{position:relative;font-size:36px;line-height:1.58;color:var(--ink-2);font-weight:400;
+    border-left:3px solid #C6D3E2;padding-left:36px}
+  .para span.w{transition:none}
+  .scan{position:absolute;left:-3px;right:0;height:3px;
+    background:linear-gradient(90deg,var(--cyan),rgba(46,107,255,0));opacity:.9}
+
+  /* ---------- image tile ---------- */
+  .tile{position:relative;width:100%;height:330px;border-radius:24px;overflow:hidden;
+    background:linear-gradient(145deg,#2F5FA8 0%,#4E90C9 38%,#79C6D9 68%,#BEE6EC 100%)}
+  .tile .sun{position:absolute;left:96px;top:64px;width:132px;height:132px;border-radius:50%;
+    background:radial-gradient(circle,rgba(255,255,255,.95),rgba(255,255,255,.15) 70%);filter:blur(2px)}
+  .tile .ridge{position:absolute;left:-40px;right:-40px;bottom:-90px;height:280px;border-radius:50% 50% 0 0;
+    background:rgba(11,27,43,.16)}
+  .tile .ridge.two{bottom:-140px;left:180px;height:300px;background:rgba(11,27,43,.10)}
+  .seal{position:absolute;right:28px;bottom:28px;display:flex;align-items:center;gap:16px;
+    background:rgba(255,255,255,.92);border:2px solid var(--blue);border-radius:100px;
+    padding:16px 30px 16px 22px;font-size:26px;font-weight:700;letter-spacing:.1em;
+    color:var(--blue);will-change:transform,opacity}
+  .seal svg{width:34px;height:34px;display:block}
+
+  /* ---------- dumbbell chart (two entities, one scale) ---------- */
+  .chart{width:100%}
+  .crow{position:relative;height:104px}
+  .crow .lab{font-size:31px;font-weight:600;color:var(--ink);position:absolute;top:6px;left:0}
+  .crow .note{position:absolute;top:8px;right:0;font-size:25px;font-weight:700;
+    letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+  .crow .note.up{color:var(--blue)}
+  .track{position:absolute;left:0;right:0;top:70px;height:3px;background:#D3DEEA;
+    border-radius:2px;transform-origin:left center}
+  .dot{position:absolute;top:57px;width:29px;height:29px;border-radius:50%;
+    margin-left:-14.5px;box-shadow:0 0 0 4px var(--paper);will-change:transform,opacity}
+  .dot.a{background:var(--blue)} .dot.b{background:var(--cyan)}
+  /* when the two ratings coincide, one two-tone marker — the absent gap IS the finding */
+  .dot.merged{width:38px;height:38px;top:52px;margin-left:-19px;
+    background:linear-gradient(90deg,var(--blue) 0 50%,var(--cyan) 50% 100%)}
+  .axis{display:flex;justify-content:space-between;font-size:25px;color:var(--ink-2);
+    letter-spacing:.1em;text-transform:uppercase;margin-top:10px}
+  .legend{display:flex;gap:38px;font-size:27px;font-weight:600;color:var(--ink);margin-bottom:26px}
+  .legend i{display:inline-block;width:20px;height:20px;border-radius:50%;margin-right:12px}
+  .legend i.split{background:linear-gradient(90deg,var(--blue) 0 50%,var(--cyan) 50% 100%)}
+  .foot{font-size:24px;color:var(--ink-2);line-height:1.4;margin-top:22px}
+  .div-line{height:2px;background:var(--paper-2);margin:6px 0 14px;transform-origin:left center}
+
+  /* ---------- before→after jump chart (one metric, two versions) ---------- */
+  .jrow{position:relative;height:120px}
+  .jhead{display:flex;justify-content:space-between;align-items:baseline;gap:24px}
+  .jlab{font-size:32px;font-weight:600;color:var(--ink)}
+  .jval{font-size:31px;font-weight:700;color:var(--blue);font-variant-numeric:tabular-nums;
+    white-space:nowrap}
+  .jval s{color:var(--ink-3);font-weight:600;text-decoration:none}
+  .jtrack{position:absolute;left:0;right:0;top:82px;height:3px;background:#D3DEEA;
+    border-radius:2px;transform-origin:left center}
+  .jgain{position:absolute;top:78px;height:11px;border-radius:6px;
+    background:linear-gradient(90deg,var(--blue-lo),var(--blue))}
+  .jrow .dot{top:69px}
+  .dot.from{background:var(--blue-lo)} .dot.to{background:var(--blue)}
+
+  /* ---------- headline figures ---------- */
+  .kpi{display:flex;align-items:baseline;gap:30px;padding:26px 0}
+  .kpi .n{font-size:132px;font-weight:700;letter-spacing:-.05em;color:var(--blue);
+    font-variant-numeric:tabular-nums;line-height:1}
+  .kpi.warm .n{color:var(--warm)}
+  .kpi .u{font-size:34px;font-weight:600;color:var(--ink-2);letter-spacing:-.01em}
+  .kpi-rule{height:2px;background:rgba(46,107,255,.26);transform-origin:left center}
+  .kpi-rule.warm{background:rgba(255,107,74,.28)}
+  .kpi.sm .n{font-size:96px}
+
+  /* ---------- stack list ---------- */
+  .stack{display:flex;flex-direction:column;gap:20px}
+  .item{font-size:52px;font-weight:700;letter-spacing:-.025em;display:flex;align-items:center;gap:24px}
+  .item i{width:14px;height:14px;border-radius:50%;background:var(--blue);flex:none}
+  .stack.warm .item i{background:var(--warm)}
+  .item .sub{font-size:32px;font-weight:400;color:var(--ink-2);letter-spacing:-.01em}
+  .stack.sm{gap:14px}
+  .stack.sm .item{font-size:42px}
+  .stack.defs .item{display:block;font-size:44px}
+  .stack.defs .item .sub{display:block;margin-top:6px}
+
+  /* scrubber (render hides it) */
+  #ui{position:fixed;left:0;right:0;bottom:0;padding:10px;background:#111;z-index:99}
+  #ui input{width:100%}
+  body.render #ui{display:none}
+</style>
+
+<div id="stage">
+  <div id="bg">
+    <div class="blob" id="b1"></div>
+    <div class="blob" id="b2"></div>
+    <div id="grid"></div>
+    <div id="vig"></div>
+  </div>
+  <div id="prog"><i></i></div>
+  <div class="chip" id="brand"><b>THE BRIEF</b></div>
+  <div class="chip" id="date"></div>
+  <div id="act"></div>
+  <div id="scenes"></div>
+  <div id="tag"></div>
+  <div id="by"></div>
+</div>
+
+<div id="ui"><input type="range" id="sl" min="0" max="1000" value="0"></div>
+
+<script src="engine.js"></script>
+<script>
+  /* Load the day's script synchronously so its scene() calls land before init().
+     Classic <script src> works over file://; ES modules would be CORS-blocked. */
+  var __day=new URLSearchParams(location.search).get('day')||'2026-08-14';
+  document.write('<scr'+'ipt src="content/'+encodeURIComponent(__day)+'.js"><\/scr'+'ipt>');
+</script>
+<script>init();</script>

@@ -222,3 +222,10 @@ workspace/
 
 # macOS
 .DS_Store
+
+# video engine: track source, ignore rendered output and deps
+engine/node_modules/
+engine/frames/
+engine/probe/
+engine/*.mp4
+engine/*.png

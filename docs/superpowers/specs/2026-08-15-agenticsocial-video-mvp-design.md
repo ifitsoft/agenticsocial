@@ -52,7 +52,9 @@ need it to be beautiful, and who will personally be blamed if it isn't.
 
 This matters because the MVP is mostly connective tissue, not greenfield.
 
-**`workspace/brief-video/` — a working deterministic render engine.**
+**`engine/` — a working deterministic render engine.**
+*(Relocated 2026-08-16 from `workspace/brief-video/`, which was gitignored — the
+engine source had no version history and Phase 4 modifies it on a branch.)*
 `scene.html` exposes `window.__seek(t)` which positions every element purely as a
 function of `t`: no CSS keyframes, no `Date.now()`, no randomness. `render.mjs`
 drives Playwright to screenshot each frame; ffmpeg encodes. Two full 120s episodes
@@ -160,7 +162,7 @@ workspace/
   series/
     the-brief/
       series.toml                   identity + structure + formats + cadence
-      coverage.json                 dedup ledger (relocated from brief-video/)
+      coverage.json                 dedup ledger (relocated from engine/ in Phase 11)
       episodes/
         2026-08-14/
           brief.md                  assembled input, human-readable
@@ -486,10 +488,24 @@ Reuses the existing `Status` enum and adds two states. Text variants never enter
 them; a second transition table keyed by kind keeps the two lifecycles honest.
 
 ```
-draft ──→ in_review ──→ approved ──→ rendering ──→ rendered ──→ published
+draft ──→ in_review ──→ approved ──→ rendering ──→ rendered   (terminal in MVP)
              ↑              │            │
              └──────────────┘            └──→ failed ──→ rendering   (retry)
 ```
+
+**`rendered` is terminal for the MVP.** An earlier draft of this spec drew
+`rendered → published`, anticipating the staged video-publishing work. That edge
+was cut on 2026-08-16 (decision D-006) because it was reachable but never
+exercised, and it made `failed` ambiguous: with `failed → rendering` as the only
+recovery edge, a *publish* failure could only be recovered by re-running the
+expensive render of an artifact already sitting on disk. A state machine whose
+only edge out of a state is the wrong one is worse than a state machine that
+refuses to model the state at all.
+
+When video publishing lands, this table gains `rendered → publishing` **and**
+`failed → publishing` together, so recovery matches what actually failed.
+`publishing` and `published` stay in `VIDEO_TRANSITIONS` as unreachable empty
+sets purely so the table remains total.
 
 - Only the CLI moves status. The agent writes `status: in_review` and stops.
 - `approved → rendering` is gated on `claims.json` being clean (§8.4).
