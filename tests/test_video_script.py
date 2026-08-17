@@ -205,6 +205,20 @@ def test_a_non_string_or_missing_type_is_refused(series, bad):
         _load(series, [{"type": bad, "text": "x"}])
 
 
+@pytest.mark.parametrize("bad", [0, False, "", [], {}, 3.5])
+def test_a_present_but_falsy_type_is_unknown_not_missing(series, bad):
+    """precondition: M4 applied to `type` itself. Added after the mutation
+    sweep: `if not kind:` in place of `if kind is None:` still raised, so the
+    sibling test above could not see it — and it tells an operator who wrote
+    `type: 0` to add a `type` key that is already on the line in front of
+    them. Refusing for the wrong reason is its own defect."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [{"type": bad, "text": "x"}])
+    msg = str(e.value)
+    assert "unknown type" in msg
+    assert "no `type`" not in msg
+
+
 def test_a_beat_with_no_type_key_says_so(series):
     """precondition: R1/R3. "unknown type None" is a worse message than "no
     type"; the two failures have different fixes."""
@@ -603,11 +617,14 @@ def test_no_acts_at_all_is_fine():
     S.validate_acts([], "series.toml")
 
 
-@pytest.mark.parametrize("bad", [0, False, "", [], {}, None, 3.5, ["01"]])
+@pytest.mark.parametrize("bad", [0, False, [], {}, None, 3.5, ["01"]])
 def test_an_act_with_a_non_string_id_is_refused(bad):
     """precondition: R5 + M4/M8. Falsy ids (0, False, []) are the ones a
     truthiness check silently rejects for the wrong reason and a missing check
-    accepts."""
+    accepts. `""` is deliberately NOT in this list — it is a string, R5 asks for
+    a string, and it is the falsy-but-valid case that separates
+    `isinstance(id, str)` from `if id:` (see the sibling test below). Having it
+    in both lists was a contradiction in the RED commit; this is the fix."""
     with pytest.raises(S.ScriptError) as e:
         S.validate_acts([{"id": bad}], "series.toml")
     assert "id" in str(e.value)
