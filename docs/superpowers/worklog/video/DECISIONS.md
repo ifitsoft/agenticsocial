@@ -1379,3 +1379,65 @@ test patches `R.subprocess.run`, but that is *convention* — exactly where
 **Generalisable:** an isolation guarantee must sit on a boundary you control. A
 guard on someone else's abstraction holds only until they change how they reach
 the network — and it fails silently, which is the worst way to learn.
+
+## D-068 · SPEC DEFECT · jumpChart's schema cannot describe the only jumpChart
+Spec §7.1 gave `jumpChart` the fields `before`, `after`, `scale`, `footnote` —
+a single bar. Leader-verified against the episode that actually rendered:
+
+```
+engine.js  : function jumpChart(rows, max, d0, parent)
+2026-08-14 : jumpChart([['FrontierCode 1.1', 34.4, 43.6, '<s>34.4</s> → 43.6'],
+                        ... four rows ...], 70, .5, chart)
+```
+
+**The spec's shape cannot express it.** Corrected to
+`rows[{label,before,after,shown}]`, `scale`, `footnote`.
+
+Found because the Task 1 brief pointed the implementer at the two committed
+episodes as *evidence*, not background — "a field neither the spec names nor a
+committed episode uses does not go in". It followed §7.1 as written, flagged the
+contradiction, and did not quietly invent a better shape. That is the correct
+behaviour and the reason the instruction was there.
+
+**The lesson for the rest of the spec:** I wrote §7.1 from the *design* of the
+beats, not from the code that renders them. Every other row in that table is
+suspect for the same reason, and Phase 4 will find out which. The catalogue in
+`script.py` currently encodes the wrong jumpChart shape — fixed in Phase 3 Task 2
+Step 0, before anything writes a script against it.
+
+## D-069 · phase 3 / task 1 · what is speculative in the catalogue
+Asked which fields it had to invent, the implementer produced the list Phase 4
+will need. Recording it so those failures are expected rather than surprising:
+
+- **`jumpChart`** — the spec defect above (D-068).
+- **`quote`** — `text`/`attribution`. **Neither committed episode has a quote
+  beat**; the whole type is spec-only, and `attribution` being *required* is a
+  reading, not a fact.
+- **`dumbbell.caption`** — nothing in `2026-08-12.js` plays that role.
+- **`kpis` item optionality** — `value`/`label` required, `unit`/`decimals`
+  optional is the implementer's split; the spec marks none.
+- **`custom.js`** — §7.1 also says "manual attestation required", which implies a
+  field nobody has named.
+
+It deliberately left `dumbbell.rows`' column shape unvalidated rather than invent
+it. Correct: an unvalidated field is a known gap, an invented one is a wrong
+answer that looks authoritative.
+
+## D-070 · phase 3 / task 1 · warm_acts stays unenforced, for a good reason
+Task 0 flagged `warm_acts` as the only cross-field invariant in `series.toml`.
+Task 1 declined to enforce it and the reasoning is right:
+
+> `2026-08-12.js` has `warmActs:['03 — Agents']` — that is the act **label**,
+> while `series.toml` would join on **id** (`"03"`). Enforcing a rule whose key
+> is ambiguous turns a soft problem into a hard failure on the wrong side.
+
+The join column is genuinely unsettled, and it is the *same* decision that gates
+validating a beat's `act` against the declared acts. Both wait for Phase 4 to
+decide whether beats name acts by id or by label. A warning, not an error, once
+it does.
+
+Also from that report, self-caught: its **first** edit to a plan test passed on
+the unfixed tree because the old message already contained both names it
+asserted — the same vacuity class as my interned-small-int defect two tasks ago.
+It noticed, strengthened the assertion to the phrase that actually distinguishes
+the two gates, and left a comment saying why.

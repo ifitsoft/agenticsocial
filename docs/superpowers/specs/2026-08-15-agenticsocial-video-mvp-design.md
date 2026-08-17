@@ -312,7 +312,7 @@ composition of existing primitives.
 | `body` | `text` (bold via `**`) | blur-to-sharp fade | yes |
 | `list` | `lead?`, `items[]`, `kicker?` | staggered slide from left | yes |
 | `kpis` | `items[{value,unit,label,decimals}]`, `kicker?` | eased count-up | **yes, strictly** |
-| `jumpChart` | `before`, `after`, `scale`, `footnote` | value morph on a common scale | **yes, strictly** |
+| `jumpChart` | `rows[{label,before,after,shown}]`, `scale`, `footnote` | value morph on a common scale | **yes, strictly** |
 | `dumbbell` | `rows[]`, `series[2]`, `caption`, `footnote` | dots apart → together | direction only |
 | `quote` | `text`, `attribution` | fade + rule draw | **yes, verbatim** |
 | `title` | `sub?` | title card composition | no |

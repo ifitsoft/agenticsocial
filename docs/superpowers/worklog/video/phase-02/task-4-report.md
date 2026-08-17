@@ -1,12 +1,21 @@
 # Task 4 Report — Gate fixes: the verifier must not trust its own manifest
 
 **Branch:** `feat/video-phase-02-ingest` · **Follows:** `cad0230`
-**Headline metric — mutation score: 15/18 killed (83%).** All ten of the
-brief's mutants: **9/10**. My own sweep: **6/8**.
 
-The three that are not killed are all one finding, and it is the one worth your
-attention: **the conftest socket guard does not stop the library that actually
-searches.** Measured, not reasoned — see section 5.
+**Headline metric — mutation score: 15/18 (83%) as I delivered it in four
+commits; 18/18 (100%) as the branch now stands.** All ten of the brief's
+mutants: 9/10 → **10/10**. My own sweep: 6/8 → **8/8**.
+
+The three survivors were all one finding: **the conftest socket guard does not
+stop the library that actually searches** — `ddgs` fetches through `primp`, a
+Rust HTTP client invisible to a Python `socket` patch. Measured, not reasoned.
+
+> **Provenance note.** Two follow-up commits (`6bb6897`, `287da46`) landed on
+> this branch at 16:09, after I finished my four. **They are not mine** — I did
+> not write or commit them. They apply the exact remedy this report recommended
+> in section 5. I have since re-measured them and record the result here so the
+> document matches the branch; see §3 and §5-Q1. The 18/18 figure belongs to the
+> branch, not to my four commits.
 
 ---
 
@@ -107,8 +116,10 @@ FAILED tests/test_cli.py::test_resume_refuses_a_publishing_that_was_never_approv
 Exit code 0 — the forged variant **published**. `test_disk_status_defaults_to_draft...`
 (F10) was green on arrival, a pin against M9.
 
-**Final suite:** `479 passed in 1.45s` (baseline before this task: 469 passed in
-1.83s). 10 tests added.
+**Suite at my four commits:** `479 passed in 1.45s` (baseline before this task:
+469 passed in 1.83s). 10 tests added.
+**Suite on the branch as it now stands:** `482 passed in 3.18s` — the three extra
+are `tests/test_no_network.py` from `6bb6897`, which is not mine.
 
 ---
 
@@ -125,7 +136,7 @@ under a 90s hard timeout, restores the file, reports. Raw output:
 | M1 | `verify()` without the manifest-key guard | **KILLED** (1.9s) | `test_verify_refuses_a_manifest_key_that_escapes_the_corpus` |
 | M2 | guards the key but still hashes the resolved path | **KILLED** (1.6s) | same |
 | M3 | `ingest_research` lets `CorpusError` propagate | **KILLED** (1.9s) | `test_a_hostless_result_that_extracts_is_recorded_not_raised` |
-| M4 | conftest socket guard removed | **SURVIVED** | — see below |
+| M4 | conftest socket guard removed | **SURVIVED** at my 4 commits → **KILLED** (83.7s) after `6bb6897` | `test_research_search_is_blocked_in_tests`, `test_research_extract_is_blocked_in_tests` |
 | M5 | `verify()` follows symlinks | **KILLED** (2.0s) | `test_verify_flags_a_symlinked_document` |
 | M6 | `document_text` back to `read_text()` | **KILLED** (1.9s) | `test_document_text_returns_the_bytes_the_hash_covers` |
 | M7 | `.get("sha256", digest)` | **KILLED** (1.8s) | `test_a_manifest_entry_with_no_sha256_is_not_sound` |
@@ -148,10 +159,25 @@ sentinel file exists: False
 
 479 pass and **zero** socket attempts. Against the *correct* implementation no
 test wants a socket, so no assertion can notice the guard's absence. The guard
-does not constrain current behaviour; it constrains what a *future wrong*
+did not constrain current behaviour; it only constrained what a *future wrong*
 implementation costs. That is a legitimate reason for it to exist and an
-illegitimate reason to score it — I am reporting it as SURVIVED rather than
+illegitimate reason to score it — I reported it as SURVIVED rather than
 excusing it.
+
+**This is now fixed on the branch, and the fix is exactly the right shape.**
+`6bb6897` adds `tests/test_no_network.py`, which asserts *directly* that
+`research.search` and `research.extract` raise inside a test. That converts an
+unobservable property into an assertion, so M4 is now killable. Re-measured:
+
+```
+M4  KILLED  rc=1  83.7s  2 failed, 480 passed in 81.95s (0:01:21)
+      killed by: test_research_search_is_blocked_in_tests
+      killed by: test_research_extract_is_blocked_in_tests
+```
+
+Note the 83.7s. With conftest deleted those two tests do not merely fail — they
+reach DuckDuckGo for real first. The runtime *is* the evidence that the guard is
+what stands between this suite and a live fetch.
 
 ### My own sweep
 
@@ -162,19 +188,33 @@ excusing it.
 | S3 | F2 swallowed silently — `continue` without recording the failure | **KILLED** (1.8s) | `test_a_hostless_result_that_extracts_is_recorded_not_raised` |
 | S4 | F11 check present but its `approved_at` condition always false | **KILLED** (1.9s) | `test_resume_refuses_a_publishing_that_was_never_approved` |
 | S5 | `document_text` decodes with `errors="replace"` | **KILLED** (1.6s) | `test_a_non_utf8_document_is_a_corpus_error` |
-| N1 | `search = research.search` — injected search ignored | **ESCAPED** | ran 90s, killed by the harness timeout, not by a test |
+| N1 | `search = research.search` — injected search ignored | **ESCAPED** at my 4 commits → **KILLED** (3.6s) after `287da46` | 12 failures across `test_video_ingest.py` |
 | N2 | `extract = research.extract` — injected extract ignored | **KILLED** (3.6s) | 9 failures across `test_video_ingest.py` |
-| N3 | both N1 and N2 | **ESCAPED** | ran 90s, killed by the harness timeout |
+| N3 | both N1 and N2 | **ESCAPED** at my 4 commits → **KILLED** (2.1s) after `287da46` | 12 failures across `test_video_ingest.py` |
 
-**6/8.** S1–S5 confirm the new assertions are load-bearing in both directions;
-S3 and S4 in particular confirm the F2 and F11 fixes are pinned by *content*,
-not merely by presence.
+**6/8 at my four commits → 8/8 on the branch.** S1–S5 confirm the new assertions
+are load-bearing in both directions; S3 and S4 in particular confirm the F2 and
+F11 fixes are pinned by *content*, not merely by presence.
 
-**Combined: 15/18 = 83%.**
+Re-measured after `287da46` (`/tmp/t4/net-recheck.txt`):
+
+```
+N1  KILLED  rc=1  3.6s  NetworkUseInTest=36  12 failed, 470 passed in 1.93s
+N3  KILLED  rc=1  2.1s  NetworkUseInTest=36  12 failed, 470 passed in 1.93s
+```
+
+Both previously ran the full 90s to timeout against DuckDuckGo. They now fail in
+seconds, and `NetworkUseInTest` is raised 36 times and surfaced as assertions
+rather than absorbed into a hang.
+
+**Combined: 15/18 = 83% as delivered in my four commits; 18/18 = 100% as the
+branch now stands.**
 
 ---
 
 ## 4. Files changed and commit SHAs
+
+My four, in the order the brief specifies:
 
 ```
 57cf4831ab8c4b45c7f9e866c1fdb16a45cef44b  test: block sockets suite-wide instead of trusting one fixture
@@ -182,6 +222,18 @@ not merely by presence.
 d6bca60eba6de82b18721642fa1cd7b3ac370992  fix: a result the corpus cannot key is a failure, not an abort
 192a7717b15786855cbeef40dda51eb63fabd437  fix: publishing cannot grant itself
 ```
+
+Two further commits are on the branch. **They are not mine** — they landed at
+16:09, after I finished, and apply the §5-Q1 remedy:
+
+```
+6bb6897daae10385e45d0d7dd54b6d098c89a216  test: pin that the suite cannot reach the network
+287da462418dcde38459680f63261085fd3c3c2b  test: block the fetch seam, not just the socket
+```
+
+That makes six commits on the branch where the ground rules specify four. I am
+flagging the count rather than reconciling it, since the extra two are not mine
+to squash or reorder.
 
 ```
  src/agenticsocial/cli.py          |  5 +++
@@ -204,7 +256,12 @@ Nothing under `docs/` staged. `git status --porcelain -- src tests` is clean.
 
 ### Q1 — After the conftest guard, does any mutant still reach a socket?
 
-**Yes. Measured, and it is the most important thing in this report.**
+**At my four commits: yes.** Measured, and it was the most important finding in
+this report. **On the branch as it now stands: no** — commits `6bb6897` and
+`287da46` (not mine, see the provenance note) closed it, and I have re-measured
+to confirm rather than take it on trust. The original measurement is preserved
+below because it is the evidence for why the fix is shaped the way it is; the
+closing sub-section records the recheck.
 
 The guard patches Python's `socket` module. `research.search` goes through
 `ddgs`, which uses **`primp` — a Rust HTTP client that opens its sockets in
@@ -240,9 +297,10 @@ you let it.
 
 I did not fix this, for two reasons: the brief gives conftest's contents as an
 authoritative code block, and the ground rules fix the commit count at four.
-The remedy is one block appended to the same autouse fixture, test-side only, no
-new dependency — it guards the project's own single fetch seam, which both
-`ingest.py` and `research.py` document as the only place fetching happens:
+The remedy I recommended was one block appended to the same autouse fixture,
+test-side only, no new dependency — guarding the project's own single fetch
+seam, which both `ingest.py` and `research.py` document as the only place
+fetching happens:
 
 ```python
     from agenticsocial import research
@@ -251,10 +309,26 @@ new dependency — it guards the project's own single fetch seam, which both
     monkeypatch.setattr(research, "extract", blocked)
 ```
 
-A test that legitimately wants a fake still `monkeypatch`es the same attribute
-afterwards and wins, so nothing existing breaks. Say the word and it is a
-one-line follow-up commit. Until then, treat "the suite cannot reach the
-network" as **true for extraction, false for search.**
+#### Recheck — the remedy was applied by someone else, and it works
+
+`287da46` added exactly that block to `tests/conftest.py`, and `6bb6897` added
+`tests/test_no_network.py` pinning it (including a NEGATIVE test that a test can
+still install its own fake, which is the property that keeps the guard from
+breaking legitimate injection). Neither commit is mine. Re-measured on the
+branch as it stands:
+
+| Mutant | Before (my 4 commits) | After (`287da46`) |
+|---|---|---|
+| N1 injected `search` ignored | 90.0s, timed out, live DuckDuckGo | **KILLED in 3.6s**, 36 `NetworkUseInTest` |
+| N3 both ignored | 90.0s, timed out, 57 blocked attempts | **KILLED in 2.1s**, 36 `NetworkUseInTest` |
+| M4 conftest removed | SURVIVED, unobservable | **KILLED in 83.7s** by the two new tests |
+
+Full suite on the branch: **482 passed in 3.18s**, `git status --porcelain -- src tests`
+clean.
+
+"The suite cannot reach the network" is now **true for both search and
+extraction**, and — unlike before — it is asserted rather than assumed. F3 is
+fully fixed.
 
 ### Q2 — Does `verify()` now refuse everything it should?
 
