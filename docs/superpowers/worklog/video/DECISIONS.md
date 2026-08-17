@@ -790,3 +790,32 @@ refusing the id.
 
 None causes harm. All are recorded for Phase 2. **No Task 5b — the phase gate
 runs next.**
+
+## D-043 · roadmap · Phase 1.5 vertical slice — HUMAN DECISION 2026-08-16
+Added a vertical slice between Phases 1 and 2: a hand-written three-beat
+`script.yaml` rendered to a watchable ~10s MP4.
+
+**Why, in the human's own framing:** they asked at what point they could validate
+progress by testing it manually. Honest answer was "Phase 1 today, but nothing
+visual until Phase 8." Phases 2–7 all build toward a render nobody has seen work
+— a long time to carry an unvalidated assumption, and Phase 4 is already the
+project's highest-uncertainty work (retrofitting a declarative layer onto a
+working hand-written engine).
+
+**Scope is a proof, not a product.** One beat type (`statement`), vertical only,
+no ingest, no verification, no approve gate, three beats, ~10 seconds.
+
+**The real deliverable is an architectural decision, not the video.**
+`script.yaml` is two-document YAML and Node has no YAML parser without a new
+dependency. Rather than add one, **Python parses and emits `plan.json`; Node
+consumes it.** That holds the D-007 boundary exactly where it was argued to
+belong — Python orchestrates, Node stays a pure renderer, the handoff is a file,
+which is this project's existing idea of state. Phase 4 inherits that format, so
+settling it against a real render now is most of the value.
+
+**Non-negotiable:** `window.__seek(t)` purity. The determinism test ships green
+in the same commit as any engine change, or the phase does not gate.
+
+Cost: roughly one phase. Buys: the human sees output after Phase 1 instead of
+Phase 8, and the riskiest integration in the project gets exercised while it is
+still cheap to change.

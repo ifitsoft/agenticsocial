@@ -175,6 +175,7 @@ test of whether the split is real.
 | # | Phase | Ships | Depends on |
 |---|---|---|---|
 | 1 | **Series & episode scaffolding** | `agsoc series new/list`, `agsoc video new`; video status machine | — |
+| **1.5** | **Vertical slice — `script.yaml` → MP4** | **a watchable 10s video from a hand-written script** | **1** |
 | 2 | **Ingest** | corpus on disk from research / paste / existing source, with `_manifest.json` | 1 |
 | 3 | **Script schema** | `script.yaml` parse + validate + runtime estimation; `agsoc video review` | 1 |
 | 4 | **Declarative engine (vertical)** | beat types render from `script.yaml`; probe frames | 3 |
@@ -187,9 +188,43 @@ test of whether the split is real.
 | 11 | **Coverage ledger** | relocation to series, `agsoc coverage check/add` | 1 |
 | 12 | **Review console** | the UI of spec §12 | 8,9 |
 
-**First demonstrable end-to-end video: after Phase 8.** Phases 1–8 are the
-critical path; 9–12 harden and extend it. If the project has to stop early,
-stopping after 8 leaves something that works.
+### Phase 1.5 — the vertical slice (added 2026-08-16, human decision)
+
+**Purpose: move the human's first "watch a video come out of this" from Phase 8
+to immediately after Phase 1.** Phases 2–7 all build toward a render nobody has
+seen work. That is a long time to carry an unvalidated assumption, and Phase 4 —
+retrofitting a declarative layer onto a working hand-written engine — is already
+flagged as the project's highest-uncertainty work.
+
+Ruthlessly minimal. It is a **proof, not a product**:
+
+- **One beat type**, `statement`. It is the most common and its masked word rise
+  already exists in `engine.js`.
+- **Vertical only.** No `wide` layout.
+- **No ingest, no verification, no approve gate.** Read a hand-written
+  `script.yaml` directly.
+- **Three beats, ~10 seconds.** Long enough to see pacing, short enough to render
+  in seconds.
+
+**The architectural question it settles early — how Node reads the script.**
+`script.yaml` is two-document YAML, and Node has no YAML parser without a new
+dependency. Rather than add one, **Python parses and emits a `plan.json`**, and
+`render.mjs` consumes that. This keeps the D-007 boundary exactly where it was
+argued to belong: Python orchestrates, Node stays a pure renderer, and the
+handoff is a file. Settling that handoff format now is most of the value of this
+phase, because Phase 4 inherits it.
+
+**Non-negotiable:** `window.__seek(t)` stays pure. The determinism test ships
+green in the same commit as any engine change, or the phase does not gate.
+
+Three tasks, planned when the phase starts: the `plan.json` schema and Python
+emitter; the engine building `statement` beats from a plan; and
+`agsoc video render` wiring plan → node → ffmpeg.
+
+**First demonstrable end-to-end video: after Phase 1.5.** Full-fidelity rendering
+still lands at Phase 8; Phases 1–8 remain the critical path, and 9–12 harden and
+extend it. If the project has to stop early, stopping after 8 leaves something
+that works — but stopping after 1.5 at least leaves something you can watch.
 
 **Concurrency:** 4 and 5 both depend only on 3 and touch disjoint files (Node
 engine vs. Python verifier). They are the one safe parallel pair.
