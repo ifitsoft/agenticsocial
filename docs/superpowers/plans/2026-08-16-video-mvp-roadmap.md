@@ -83,16 +83,25 @@ docs/superpowers/
     2026-08-16-phase-01-scaffolding.md                  executable plan, Phase 1
     …one per phase, written just before the phase starts
 
-.superpowers/sdd/video/
-  PROGRESS.md              leader-owned. one line per task, one block per phase.
-  DECISIONS.md             every adjudicated QA finding + every deviation from spec
-  phase-01/
-    task-1-brief.md        leader → implementer
-    task-1-report.md       implementer → leader (RED/GREEN evidence)
-    task-1-review.md       QA → leader
-    …
-    phase-review.md        whole-branch QA before the PR
+  worklog/video/
+    PROGRESS.md            leader-owned. one line per task, one block per phase.
+    DECISIONS.md           every adjudicated QA finding + every deviation from spec
+    phase-01/
+      task-1-brief.md      leader → implementer
+      task-1-report.md     implementer → leader (RED/GREEN evidence)
+      task-1-review.md     QA → leader
+      …
+      phase-review.md      whole-branch QA before the PR
 ```
+
+**The worklog is committed.** v1 kept its equivalent in `.superpowers/sdd/`,
+which carries a `*` gitignore — so that audit trail exists only on one machine
+and dies with it. Reports carrying RED/GREEN evidence are the record of *how*
+the software was built; they are worth more than the scratch space they were
+written in. They are small markdown and they ship with the phase's commits.
+
+Not committed: `.diff` files. Git history already holds every diff, and storing
+them twice invites the two copies to disagree.
 
 Plans are written **just before their phase starts**, not all up front. Phase 6's
 plan depends on what Phases 1–5 actually built; writing it now would be fiction.

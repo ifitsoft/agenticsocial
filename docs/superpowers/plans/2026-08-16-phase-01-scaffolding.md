@@ -1161,7 +1161,10 @@ Beyond the standard gate in the roadmap §4:
 - [ ] `agsoc series new the-brief --name "The Brief"` produces a `series.toml` a human can read and edit without documentation.
 - [ ] `agsoc video new 2026-08-14 --series the-brief` produces the directory layout of spec §5 (minus `claims.json` and `brief.md`, which later phases write).
 - [ ] The status machine refuses `draft → rendering` and `in_review → rendering`, and permits `approved → rendering`.
-- [ ] No existing test file was modified.
+- [ ] No existing test was modified except where this plan explicitly authorises
+      it. Authorised: `tests/test_models.py::test_status_values_match_spec`, a
+      whole-enum snapshot that Task 1 deliberately invalidates (see
+      `DECISIONS.md` D-005). Any other change to an existing test is a finding.
 
 ## Notes for the QA reviewer
 
