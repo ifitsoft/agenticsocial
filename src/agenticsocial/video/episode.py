@@ -104,6 +104,15 @@ def _read_meta(path: Path) -> tuple[dict, str | None, str]:
     return meta, beats_text, nl
 
 
+def read_script(path: Path) -> tuple[dict, str | None, str]:
+    """Read `script.yaml`: (metadata, verbatim beats text, newline).
+
+    READ ONLY. The beats text is returned exactly as written and must never be
+    re-serialised — see this module's docstring and DECISIONS D-026.
+    """
+    return _read_meta(path)
+
+
 def _compose(meta: dict, beats_text: str | None, nl: str = "\n") -> str:
     head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
     head = head.replace("\n", nl)
