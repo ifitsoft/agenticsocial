@@ -316,3 +316,94 @@ def test_warm_acts_is_loaded(ws):
         ws, "warm", '[series]\nname = "W"\n\n[structure]\nwarm_acts = ["03"]\n'
     )
     assert load_series(ws, "warm").warm_acts == ["03"]
+
+
+# --- TOML basic-string escaping ------------------------------------------------
+# json.dumps was wrong: ensure_ascii=True emits UTF-16 surrogate pairs for
+# non-BMP characters, and TOML requires \uXXXX escapes to be Unicode scalar
+# values. ensure_ascii=False is also wrong: it emits raw U+007F, which TOML
+# forbids in a basic string. Hence an explicit escaper.
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "The Brief 😀",            # non-BMP: emoji
+        "北京 𠀋",                  # non-BMP: CJK extension B
+        "Ünïcödé BMP",             # BMP non-ASCII
+        "Ω≈ç√∫",                   # BMP symbols
+        "del\x7fhere",             # U+007F, forbidden raw in TOML
+        "bell\x07here",            # C0 control with no short escape
+        "null\x00byte",            # U+0000
+        "esc\x1bseq",              # U+001B
+        'quote" and \\slash',
+        "line\nbreak\ttab\r\n",
+        "\x0c formfeed \x08 backspace",
+        "mixed 😀 \x07 \"q\" \\s ünïcödé",
+    ],
+)
+def test_any_name_round_trips_through_toml(ws, hostile):
+    """A name is operator input. Every string must survive scaffold -> load."""
+    scaffold_series(ws, "hostile", name=hostile)
+    assert load_series(ws, "hostile").name == hostile
+
+
+def test_every_codepoint_below_0x100_round_trips(ws):
+    """Sweep the whole C0/C1 + Latin-1 range rather than sampling it."""
+    name = "".join(chr(c) for c in range(1, 0x100))
+    scaffold_series(ws, "sweep", name=name)
+    assert load_series(ws, "sweep").name == name
+
+
+def test_non_bmp_name_produces_a_literal_utf8_file(ws):
+    """The escaper must pass non-ASCII through literally, not escape it.
+    TOML files are UTF-8; escaping is only for what UTF-8 cannot carry safely."""
+    s = scaffold_series(ws, "emoji", name="The Brief 😀")
+    raw = (s.dir / "series.toml").read_text(encoding="utf-8")
+    assert "😀" in raw
+    assert "\\ud83d" not in raw
+
+
+def test_del_and_control_chars_are_escaped_not_literal(ws):
+    s = scaffold_series(ws, "ctrl", name="del\x7fhere")
+    raw = (s.dir / "series.toml").read_text(encoding="utf-8")
+    assert "\x7f" not in raw
+    assert "\\u007F" in raw or "\\u007f" in raw
+
+
+def test_hostile_name_round_trips_through_coverage_json_too(ws):
+    import json as _json
+
+    name = "😀 \"q\" \\s \x07"
+    s = scaffold_series(ws, "both", name=name)
+    data = _json.loads((s.dir / "coverage.json").read_text(encoding="utf-8"))
+    assert data["series"] == name
+
+
+# --- acts / warm_acts were the last unvalidated fields -------------------------
+
+
+@pytest.mark.parametrize("bad", ['"not a list"', "5", "{a = 1}", '["a", "b"]'])
+def test_wrong_shaped_acts_is_rejected(ws, bad):
+    _write_series(ws, "bad", f'[series]\nname = "B"\n\n[structure]\nacts = {bad}\n')
+    with pytest.raises(SeriesError, match="acts"):
+        load_series(ws, "bad")
+
+
+def test_wellformed_acts_still_loads(ws):
+    _write_series(
+        ws,
+        "good",
+        '[series]\nname = "G"\n\n'
+        '[[structure.acts]]\nid = "01"\nlabel = "One"\nbeats = 6\n',
+    )
+    assert load_series(ws, "good").acts == [{"id": "01", "label": "One", "beats": 6}]
+
+
+@pytest.mark.parametrize("bad", ['"03"', "[3]", "5"])
+def test_wrong_shaped_warm_acts_is_rejected(ws, bad):
+    _write_series(
+        ws, "bad", f'[series]\nname = "B"\n\n[structure]\nwarm_acts = {bad}\n'
+    )
+    with pytest.raises(SeriesError, match="warm_acts"):
+        load_series(ws, "bad")
