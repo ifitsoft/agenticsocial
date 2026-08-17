@@ -61,6 +61,12 @@ def read_manifest(episode: Episode) -> dict:
         raise CorpusError(f"{path}: cannot read {MANIFEST_NAME} — {e}")
     if not isinstance(data, dict):
         raise CorpusError(f"{path}: {MANIFEST_NAME} must be an object")
+    for key, entry in data.items():
+        if not isinstance(entry, dict):
+            raise CorpusError(
+                f"{path}: manifest entry {key!r} must be an object, got "
+                f"{type(entry).__name__}"
+            )
     return data
 
 
@@ -127,7 +133,9 @@ def verify(episode: Episode) -> list[tuple[str, str]]:
     manifest = read_manifest(episode)
     problems: list[tuple[str, str]] = []
     if not episode.sources_dir.is_dir():
-        return [("missing", k) for k in sorted(manifest)]
+        # The manifest lives in this directory, so if it is gone `manifest` is
+        # already empty. This guard exists only to stop iterdir() raising.
+        return problems
 
     for key in sorted(manifest):
         path = episode.sources_dir / (key + SUFFIX)
