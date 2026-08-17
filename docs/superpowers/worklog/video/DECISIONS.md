@@ -819,3 +819,82 @@ in the same commit as any engine change, or the phase does not gate.
 Cost: roughly one phase. Buys: the human sees output after Phase 1 instead of
 Phase 8, and the riskiest integration in the project gets exercised while it is
 still cheap to change.
+
+## D-044 · PHASE GATE · verdict merge-after-fixes. 87 mutants, 4 blocking findings
+The whole-branch review ran 87 mutants across four modules. **`series.py`: 34
+mutants, 30 killed** — the D-024 debt is honoured by the code. Every
+`_assert_safe_name` weakening, both limits, the symlink guard, `rmtree`,
+`_table`, all format validation, and *every* `_toml_str` escaping branch died.
+It found **no way to escape the workspace with any string an operator can type**.
+
+Blocking findings, all leader-verified:
+
+| # | Sev | Finding | Verdict |
+|---|---|---|---|
+| F1 | high | `--series` is the one operator input never passed through `_text()` — a traceback on non-UTF-8 | **fix-now** → Task 6. Fourth D-036 instance |
+| F2 | high | **The approval gate can be walked past with a stale object** | **fix-now** → Task 6 |
+| F3 | med | A `script.yaml` with no separator has operator beats reflowed into document 1 and replaced with a fabricated `beats: []` | **fix-now** → Task 6 |
+| F4 | med | The tripwire for the 3d mutant does not fire | **fix-now** → Task 6 |
+| F5 | med-low | Concurrent `video new`: the loser's cleanup deletes the winner's episode | **fix-now** → Task 6 (cheap, and it is data loss) |
+| F6–F10 | low | `list_series` leniency unpinned, two vacuous location assertions, `is_file()`→`exists()` survives in both modules, untested error branches, cosmetic asymmetries | **Phase 2** — none is harm |
+
+## D-045 · phase 1 · I MIS-ADJUDICATED THE APPROVAL GATE
+Leader-verified:
+
+```
+on disk now      : draft
+stale object says: approved
+after set_status : rendering        *** GATE BYPASSED ***
+```
+
+`set_status` gates on `episode.status` (memory) and writes against the file it
+reads two lines later.
+
+**D-032 recorded a weaker form of this (F6: "stale Episode can regress
+approved → in_review") and I sent it to Phase 7.** That was wrong twice over:
+
+1. It understated the consequence. The bug is not a status regression, it is
+   **reaching `RENDERING` from a file that says `draft`** — the single invariant
+   spec §8.4 and §10 exist to guarantee.
+2. It assigned the fix to a component that would *call* the broken function.
+   Phase 7's approve gate would have been built on top of a `set_status` that
+   does not actually gate.
+
+The fix is three lines and `_read_meta` was already reading the file two lines
+later. I deferred a free fix to the wrong phase because I filed it under
+"freshness" rather than "the gate".
+
+**Lesson: when a finding touches the product's central invariant, severity is not
+inherited from how the reporter phrased it.** D-032 took the reviewer's framing
+("stale object") and adjudicated that, instead of asking what the stale object
+could reach.
+
+## D-046 · phase 1 · D-035 reappeared inside the fix for D-035
+`test_empty_metadata_document_keeps_its_beats` was added in Task 4 Step 0
+specifically to pin the 3d mutant that survived. **Leader-verified: applying that
+mutant leaves all 311 tests green.** Its substring-anywhere assertion is
+satisfied by the corrupted output too.
+
+So the test written to close D-035's third instance is itself a fourth instance.
+That is not irony, it is evidence the failure mode is genuinely hard to see: I
+wrote it *while thinking about this exact problem* and still reached for
+`in raw` instead of `raw.endswith(...)`.
+
+**Strengthened rule:** a test written to kill a specific mutant must be *run
+against that mutant* before it is committed. Asserting the right property is not
+enough; the assertion has to be tight enough to distinguish. Task 6's brief
+requires its implementer to audit its own new tests by this standard.
+
+## D-047 · phase 1 · reviewer's challenge to D-040 — ACCEPTED
+The gate review argued my D-040 deferral list was right except in one place:
+"document 1 comments and block scalars reflowed by `safe_dump`" is correctly
+deferred *for metadata the tool writes itself*, but the same `safe_dump` reaches
+**operator-written beats** whenever the separator is missing — and there it is
+not cosmetic.
+
+Correct, and I accept it. That case is F3, now fixed in Task 6 rather than
+deferred. The deferral stands only for document 1, which is machine-written.
+
+Worth noting the reviewer volunteered this: it was asked whether anything on the
+deferred list was harm rather than confusion, and rather than answering "no" it
+found the one seam where my own rule had been applied too broadly.
