@@ -386,6 +386,120 @@ it would surface as a raw `UnicodeEncodeError` traceback from inside
 `atomic_write` — the D-020 shape once more. The fix belongs at the boundary where
 operator input enters, which is the CLI.
 
+## D-026 · phase 1 / task 3 · two documents CONFIRMED — with a different reason
+The Task 3 implementer argued for collapsing `script.yaml` to a single document
+and demolished my stated rationale, correctly. I had written: "beats is
+structured data, so parse it with YAML rather than `frontmatter.parse`." That
+argues *YAML over markdown* and says **nothing** about one document versus two.
+It also found my claim "these are not frontmatter" is false at the byte level —
+this repo's own `frontmatter.parse` reads a `script.yaml` **successfully**,
+returning correct metadata and the beats as an unparsed string.
+
+**Decision: keep two documents. The real reason is byte preservation.**
+
+- Spec §10 binds approval to `script_sha256` and refuses to render a changed
+  script. Re-serialising beats on a status write fires drift detection on churn
+  we caused ourselves.
+- The Phase 2 `storyboard` skill writes deliberate formatting and comments;
+  `yaml.safe_dump` destroys both. `agsoc video approve` must not reflow an
+  operator's script.
+- A beats syntax error must not stop you reading the status — D-018 one level
+  down.
+
+None of those held, because `_read` parsed document 2 and `_dump` re-serialised
+it. The implementer's diagnosis was exact: **"the current shape has the costs of
+one design and the benefits of neither."** Task 3b makes Phase 1 never parse
+document 2 — split textually, re-emit verbatim. Simpler than what existed, and
+it actually delivers the isolation the form was supposed to buy.
+
+The `frontmatter.parse` trap stays real. Mitigated with a loud module docstring;
+Phase 3's brief must name the correct parser explicitly.
+
+## D-027 · phase 1 / task 3 · data loss, reproduced
+`_read` substituted `{"beats": []}` whenever document 2 was not a mapping — which
+includes beats written as a bare YAML **sequence**, a natural shape — and
+`set_status` then wrote the substitute to disk. A third document vanished the
+same way. Silently, with no error.
+
+The tell the implementer named: `set_status` guaranteed byte-identity when a
+transition was *rejected*, but destroyed document 2 when it was *accepted*. My
+docstring claimed document 2 "must survive every write here untouched." It was
+aspirational.
+
+Related, and the reason the suite did not catch it: **every corrupt-episode
+fixture I wrote used `status: banana`, which is valid YAML.** Nothing in 210
+tests ever handed the parser something unparseable, so `_read`'s missing
+try/except was invisible — and Task 4's `except EpisodeError` would have
+tracebacked on `ScannerError` in `agsoc video list`, the exact command D-018
+exists to keep alive.
+
+**Lesson for future briefs: a "corrupt input" fixture that is still
+syntactically valid tests the validator, not the parser.** Check that
+distinction when writing negative tests.
+
+## D-028 · process · scope cap on Task 3
+Task 3 → 3b, and that is where it stops, same rule as D-023. 3b fixes the data
+loss, the error contract, `create_episode` cleanup, and the `.exists()`/`.is_file()`
+inconsistency. Anything further about `episode.py` joins Task 5's consolidated
+validation pass rather than becoming a 3c.
+
+## D-029 · phase 1 / task 3b · verified, closed. 224 tests, 6/6 mutants killed
+`_compose` re-serialising beats and `_split` collapsing to one document are each
+killed by multiple independent tests. Document 2 is now split textually and
+re-emitted byte-for-byte; Phase 1 never parses it.
+
+**One reported finding is wrong, and checking it mattered.** The implementer
+reported that CRLF line endings break `_split` — "a Windows editor save bricks
+the episode". Leader-verified through the production path: it works.
+`Path.read_text()` opens in text mode with universal newlines, so `\r\n` becomes
+`\n` before `_split` sees anything. It presumably tested `_split` in isolation
+rather than through `_read_meta`.
+
+| Case | PyYAML | Ours | Verdict |
+|---|---|---|---|
+| LF | 2 docs | OK | — |
+| CRLF | 2 docs | **OK** | **not a defect** — universal newlines |
+| `--- ` trailing space | 2 docs | `EpisodeError` | real, → Task 5 |
+| no leading `---` | 2 docs | `EpisodeError` | real, → Task 5 |
+
+Second time a subagent's headline claim did not survive verification (D-014 was
+the first). Both times the *conclusion* was partly right and the *reasoning* was
+not. The rule holds: run it before acting on it, including — especially — when
+the finding is alarming and the agent sounds certain.
+
+The two genuine cases are "we reject a file PyYAML accepts". No data loss (the
+read fails before any write), but the error blames the operator's file for a
+YAML bug that does not exist — the D-020 shape yet again. Fix is a multiline
+`^---[ \t]*$` regex instead of a literal `find`.
+
+**Routed to Task 5, not a 3c** (D-028). Task 5's charter widens from "config
+validation" to **"input robustness and validation"**, covering: the four
+unvalidated `series.toml` fields (D-025), lone surrogates if Task 4 does not
+close them, these two separator cases, and `_compose`'s `beats: []` default.
+
+## D-030 · phase 1 / task 3b · two accepted design costs, stated plainly
+Both are consequences of the D-026 design, not defects, but they should be
+written down rather than discovered later:
+
+1. **Document 1's comments and formatting are destroyed on every status change.**
+   `_compose` runs `safe_dump` over the metadata dict. The "operator formatting
+   survives" guarantee covers *beats only*. Acceptable: document 1 is
+   machine-written (episode id, series, status, pace); document 2 is the human
+   and agent artefact. Worth saying because the docstring could be read as
+   promising more than it delivers.
+2. **`set_status` will approve an episode whose beats are syntactically broken**,
+   re-emitting the broken bytes unchanged. Correct under this design — Phase 1
+   does not own beats — but it means *`set_status` succeeding does not imply a
+   renderable script*. The approve gate in Phase 7 must validate the script
+   itself, not infer validity from a successful transition. Carried forward as a
+   Phase 7 requirement.
+
+The implementer also flagged that
+`test_status_is_readable_even_when_beats_is_unparseable` does not kill mutant 1,
+because unparseable beats never reach a write path anywhere in the suite. True,
+and honest of it to report a gap in its own evidence rather than let the mutant
+table look cleaner than it is.
+
 ---
 
 ## Open risks carried from the spec
