@@ -308,3 +308,67 @@ def test_a_manifest_that_is_a_json_array_is_a_corpus_error(episode):
     (episode.sources_dir / C.MANIFEST_NAME).write_text("[]", encoding="utf-8")
     with pytest.raises(C.CorpusError):
         C.read_manifest(episode)
+
+
+# --- the verifier must not trust its own manifest (F1, F4, F5, F8, F9) --------
+
+
+def test_verify_refuses_a_manifest_key_that_escapes_the_corpus(episode):
+    """precondition: sources/ contains no documents at all. F1 — verify()
+    reported SOUND while hashing a file outside the workspace."""
+    import hashlib, json
+
+    outside = episode.dir.parent.parent.parent / "outside.txt"
+    outside.write_text("bytes nobody vouched for", encoding="utf-8")
+    key = "/".join([".."] * 6) + "/outside"
+    (episode.sources_dir / C.MANIFEST_NAME).write_text(
+        json.dumps({key: {"url": "", "title": "", "fetched_at": "",
+                          "sha256": hashlib.sha256(outside.read_bytes()).hexdigest(),
+                          "bytes": outside.stat().st_size}}),
+        encoding="utf-8",
+    )
+    problems = C.verify(episode)
+    assert problems, "a traversing manifest key must never verify as sound"
+    assert problems[0][0] == "unsafe"
+
+
+def test_verify_flags_a_symlinked_document(episode, tmp_path):
+    """precondition: blog-google is a real file. F4 — vouched-for bytes must be
+    owned by the corpus, not pointed at from it."""
+    C.write_document(episode, "one", url="https://blog.google/x")
+    real = episode.sources_dir / "blog-google.txt"
+    outside = tmp_path / "elsewhere.txt"
+    outside.write_text(real.read_text(encoding="utf-8"), encoding="utf-8")
+    real.unlink()
+    real.symlink_to(outside)
+    assert ("symlink", "blog-google") in C.verify(episode)
+
+
+def test_document_text_returns_the_bytes_the_hash_covers(episode):
+    """precondition: the document was written with CRLF. F5 — read_text applies
+    universal newline translation, so the returned text is not what sha256
+    covers. Same defect c47236b fixed for beats."""
+    C.write_document(episode, "x", url="https://blog.google/x")
+    (episode.sources_dir / "blog-google.txt").write_bytes(b"line one\r\nline two\r\n")
+    assert C.document_text(episode, "blog-google") == "line one\r\nline two\r\n"
+
+
+def test_a_manifest_entry_with_no_sha256_is_not_sound(episode):
+    """precondition: the document is intact. F8 — `.get("sha256", digest)`
+    compares a missing hash to itself and passes."""
+    import json
+
+    C.write_document(episode, "one", url="https://blog.google/x")
+    m = json.loads((episode.sources_dir / C.MANIFEST_NAME).read_text(encoding="utf-8"))
+    del m["blog-google"]["sha256"]
+    (episode.sources_dir / C.MANIFEST_NAME).write_text(json.dumps(m), encoding="utf-8")
+    assert C.verify(episode) == [("modified", "blog-google")]
+
+
+def test_padding_a_document_is_a_modification(episode):
+    """precondition: the document has no surrounding whitespace. F9 —
+    sha256(raw.strip()) survives every existing test."""
+    C.write_document(episode, "one", url="https://blog.google/x")
+    p = episode.sources_dir / "blog-google.txt"
+    p.write_bytes(b"  " + p.read_bytes() + b"\n")
+    assert C.verify(episode) == [("modified", "blog-google")]

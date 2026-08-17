@@ -76,7 +76,9 @@ def document_text(episode: Episode, key: str) -> str:
     if not path.is_file():
         raise CorpusError(f"no source {key!r} in this episode's corpus")
     try:
-        return path.read_text(encoding="utf-8")
+        # Bytes, not read_text: universal newline translation would return text
+        # that is not what the manifest's sha256 covers (c47236b, for beats).
+        return path.read_bytes().decode("utf-8")
     except UnicodeDecodeError as e:
         raise CorpusError(f"{path}: corpus documents must be UTF-8 — {e}")
     except OSError as e:
@@ -134,9 +136,11 @@ def write_document(
 def verify(episode: Episode) -> list[tuple[str, str]]:
     """Check the corpus against its manifest. Empty list means sound.
 
-    Problems: `("missing", key)` — recorded but absent; `("modified", key)` —
-    bytes no longer hash to what was recorded; `("orphan", filename)` — a
-    document nothing recorded.
+    Problems: `("unsafe", key)` — a manifest key that addresses a path outside
+    the corpus; `("symlink", key)` — a document the corpus does not own the
+    bytes of; `("missing", key)` — recorded but absent; `("modified", key)` —
+    bytes no longer hash to what was recorded, or no hash was recorded at all;
+    `("orphan", filename)` — a document nothing recorded.
     """
     manifest = read_manifest(episode)
     problems: list[tuple[str, str]] = []
@@ -146,12 +150,25 @@ def verify(episode: Episode) -> list[tuple[str, str]]:
         return problems
 
     for key in sorted(manifest):
+        try:
+            assert_safe_name(key, "source key", CorpusError)
+        except CorpusError:
+            # A manifest that names a path outside the corpus cannot be used to
+            # vouch for anything. verify() must not resolve it -- doing so
+            # reported a corpus SOUND while hashing a file outside the
+            # workspace entirely.
+            problems.append(("unsafe", key))
+            continue
         path = episode.sources_dir / (key + SUFFIX)
+        if path.is_symlink():
+            # The corpus must own the bytes it vouches for, not point at them.
+            problems.append(("symlink", key))
+            continue
         if not path.is_file():
             problems.append(("missing", key))
             continue
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != manifest[key].get("sha256"):
+        recorded = manifest[key].get("sha256")
+        if recorded is None or hashlib.sha256(path.read_bytes()).hexdigest() != recorded:
             problems.append(("modified", key))
 
     known = {k + SUFFIX for k in manifest}
