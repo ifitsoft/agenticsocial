@@ -30,6 +30,7 @@ class Series:
     formats: list[str] = field(default_factory=lambda: ["vertical", "wide"])
     design: dict = field(default_factory=dict)
     acts: list[dict] = field(default_factory=list)
+    warm_acts: list[str] = field(default_factory=list)
 
     @property
     def episodes_dir(self) -> Path:
