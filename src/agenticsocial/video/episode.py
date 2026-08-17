@@ -32,15 +32,22 @@ from .models import Episode, EpisodeError, Series
 SUBDIRS = ("sources", "out", "probe")
 
 _DOC_START_RE = re.compile(r"\A---[ \t]*(\r\n|\r|\n)")
-_SEP_RE = re.compile(r"(\r\n|\r|\n)---[ \t]*(?=\r\n|\r|\n)")
+_SEP_RE = re.compile(r"(\r\n|\r|\n)---[ \t]*(\r\n|\r|\n)")
 
 
 def _split(text: str) -> tuple[str, str | None, str]:
     """Split into (metadata text, verbatim remainder, newline).
 
-    Purely textual — nothing here parses YAML. The newline is returned so the
-    metadata block can be re-emitted using the file's own line ending; the
-    remainder is never touched at all.
+    Purely textual — nothing here parses YAML. The separator's trailing newline
+    is consumed by the match, so the remainder begins at the first byte the
+    operator wrote. Do NOT reintroduce a lookahead and compute the offset from
+    the leading newline's length: the two newlines can differ (CRLF metadata,
+    LF beats) and that arithmetic silently ate the first byte of beats. See
+    D-033.
+
+    The search begins at `start.end() - len(nl)` so the newline ending the
+    opening `---` can serve as the separator's leading newline when the
+    metadata document is empty.
     """
     start = _DOC_START_RE.match(text)
     if not start:
@@ -49,7 +56,7 @@ def _split(text: str) -> tuple[str, str | None, str]:
     sep = _SEP_RE.search(text, start.end() - len(nl))
     if not sep:
         return text[start.end() :], None, nl
-    return text[start.end() : sep.start()], text[sep.end() + len(sep.group(1)) :], nl
+    return text[start.end() : sep.start()], text[sep.end() :], nl
 
 
 def _parse_meta(meta_text: str, path: Path) -> dict:
