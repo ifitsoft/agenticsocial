@@ -1703,3 +1703,77 @@ Two out-of-scope defects the render surfaced, recorded not fixed: **`date_long`
 never reaches the screen** (the title card shows `2026-08-17`, not
 `Monday, 17 August 2026` — `script.py` does not read it), and **`warm_acts` is
 dropped on the floor** by `planbuild.js`.
+
+## D-082 · phase 4 / task 2 · a too-short beat ends on a number nobody authored
+Leader-verified against the real renderer, sampling the last frame `render.mjs`
+actually captures:
+
+```
+hold 2.0s -> last rendered frame: $0.75 in  $3.75 out  40% cheaper
+hold 3.0s -> last rendered frame: $0.75 in  $3.75 out  50% cheaper
+```
+
+**At a 2-second hold the video's final frame reads 40% for an authored 50%.**
+That figure is in no source, no quote and no plan. R2 — "every number the frame
+displays is a number the plan carried" — is defeated not by rounding but by
+*running out of time*.
+
+Predicted by the Task 2 implementer before I measured it:
+
+> The count must finish inside the hold, or the mid-count value **is** the
+> terminal value and all three arguments collapse.
+
+**Fix: the renderer refuses a beat whose count-up cannot complete within its
+hold**, the same way it refuses an uncited chart. It owns both the animation
+constants and the hold, so it is the only layer that can know. Task 3 Step 0.
+
+## D-083 · phase 4 / task 2 · why mid-count frames are acceptable and rounding is not
+I asked whether `__seek(t)` sampling mid-count defeats the verified-numbers
+guarantee. The answer is the most rigorous argument an implementer has given on
+this project, and it is worth keeping in full because Phase 5 depends on it:
+
+> A mid-count value is never **stable** — a count-up's convention is "arriving",
+> and the claim is what it stops on. `count()` is `to * EZ.quint(p)`, monotone
+> with no overshoot, so it **cannot over-claim**, only under-claim on the way.
+> And every intermediate is a function of the authored value alone — lossy,
+> never different.
+>
+> `0.756 → $0.8` is the inverse on all three: **stable, unbounded, and a
+> replacement.**
+
+Three properties — stability, boundedness, derivation — separate motion from
+misstatement. Adopted as the standing test for any future animation that touches
+a figure.
+
+**Consequence for Phase 5:** a frame reader must sample **past the count**, never
+mid-beat. Recorded because a verifier that samples the midpoint would report
+every KPI in the series as wrong.
+
+## D-084 · SPEC · kpis field names corrected
+The engine's `kpis` slot `[1]` is called `unit` in its own signature but holds
+what the schema calls `label`, and one `unit` field cannot express both `$0.75`
+and `50%` — which the committed episode renders from a single call.
+
+Resolved: **`unit` is a suffix, `prefix` is a leading symbol**, both optional.
+Spec §7.1 and its example updated; the example previously said `unit: "$"`, which
+under the corrected mapping would render `0.75$`.
+
+A currency-symbol lookup table was considered and **rejected**: it would
+retroactively change past renders the day someone adds `₹`. The implementer
+removed one that already existed in `cli.py`.
+
+## D-085 · carried to Phase 5 · what a chart can show that nothing can verify
+Ranked by the Task 2 implementer, and the first is unclosable by design:
+
+1. **`jumpChart.shown`** — free HTML, the only digits a viewer actually reads,
+   with **no enforced relation** to `before`/`after`. It cannot be closed
+   mechanically, because `before: 48.0` with `shown: "48–49 → 65.3"` is the
+   committed episode being *honest about a published range*.
+2. **`scale`** — 0–70 scores on `scale: 100` shifts every bar with no wrong digit
+   anywhere.
+3. The `gain` segment is a computed delta rendered as a **length**.
+4. Footnote text.
+
+And the one that matters most, stated plainly: **nothing anywhere yet checks that
+a `value` appears in its `quote`.** R1 only checks the quote exists. That is
+Phase 5's central job and it is correctly still undone.

@@ -288,8 +288,8 @@ beats:
     hold: 4.6
     kicker: "And it costs half of what 3.6 Flash did"
     items:
-      - { value: 0.75, unit: "$", label: "per 1M input tokens",  decimals: 2 }
-      - { value: 3.75, unit: "$", label: "per 1M output tokens", decimals: 2 }
+      - { value: 0.75, prefix: "$", label: "per 1M input tokens",  decimals: 2 }
+      - { value: 3.75, prefix: "$", label: "per 1M output tokens", decimals: 2 }
     src: venturebeat
     quote: "priced at $0.75 per million input tokens and $3.75 per million output"
 
@@ -311,7 +311,7 @@ composition of existing primitives.
 | `statement` | `text`, `kicker?` | masked word rise | yes |
 | `body` | `text` (bold via `**`) | blur-to-sharp fade | yes |
 | `list` | `lead?`, `items[]`, `kicker?` | staggered slide from left | yes |
-| `kpis` | `items[{value,unit,label,decimals}]`, `kicker?` | eased count-up | **yes, strictly** |
+| `kpis` | `items[{value,label,prefix?,unit?,decimals?}]`, `kicker?` | eased count-up | **yes, strictly** |
 | `jumpChart` | `rows[{label,before,after,shown}]`, `scale`, `footnote` | value morph on a common scale | **yes, strictly** |
 | `dumbbell` | `rows[]`, `series[2]`, `caption`, `footnote` | dots apart → together | direction only |
 | `quote` | `text`, `attribution` | fade + rule draw | **yes, verbatim** |
