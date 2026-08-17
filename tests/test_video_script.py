@@ -363,11 +363,15 @@ def test_a_known_but_unrenderable_type_still_loads(series, kind):
 
 
 def test_plan_refuses_an_unrenderable_type_with_a_different_message(series):
-    """precondition: R1 negative + M2. `title` is a valid beat and an
+    """precondition: R1 negative + M2. `custom` is a valid beat and an
     unrenderable one. The two failures must not read the same, or an operator
-    cannot tell a typo from a not-yet-built feature."""
+    cannot tell a typo from a not-yet-built feature.
+
+    Phase 4 draws `title`, which this test used to use. The exemplar moved to
+    `custom` rather than the assertion being deleted: the gate has to keep
+    saying two different things while ANY catalogue type is still unbuilt."""
     ep = create_episode(series, "2026-08-14")
-    _write(ep, [VALID["title"]])
+    _write(ep, [VALID["custom"]])
     e = load_episode(series, "2026-08-14")
 
     S.load_script(e)  # the schema accepts it
@@ -375,7 +379,7 @@ def test_plan_refuses_an_unrenderable_type_with_a_different_message(series):
     with pytest.raises(PlanError) as err:
         build_plan(series, e)
     msg = str(err.value)
-    assert "title" in msg
+    assert "custom" in msg
     assert "cannot be rendered yet" in msg
     assert "statement" in msg          # what this phase CAN render
     assert "unknown type" not in msg   # the other failure, with the other fix

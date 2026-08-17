@@ -30,6 +30,7 @@ from pathlib import Path
 from ..workspace import atomic_write
 from .models import Episode, Series, SeriesError
 from .script import (
+    BEAT_TYPES,
     DEFAULT_HOLD,
     RENDERABLE,
     Script,
@@ -197,6 +198,20 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
                 f"one frame at {FPS}fps — it would not appear in the render"
             )
         start, end = round(at, 3), round(at + hold, 3)
+        # The type's own fields, in catalogue order (required, then optional),
+        # and only the ones the operator actually wrote — script.py keeps
+        # "absent" and "written empty" distinct and a plan that blanks the
+        # difference hands the renderer a decision the operator did not make.
+        #
+        # Driven off BEAT_TYPES rather than dumping `beat.fields`: `fields` also
+        # carries `claim_override`, which is Phase 5's verification input and not
+        # content. Nothing the renderer cannot draw belongs in front of it.
+        spec = BEAT_TYPES[beat.type]
+        payload = {
+            name: beat.fields[name]
+            for name in (*spec["required"], *spec["optional"])
+            if name in beat.fields
+        }
         # emit in the documented order
         beats_out.append(
             {
@@ -214,7 +229,7 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
                 "start_frame": round(start * FPS),
                 "end_frame": round(end * FPS),
                 "kicker": beat.kicker,
-                "text": beat.fields["text"],
+                **payload,
                 "src": beat.src,
             }
         )
@@ -223,6 +238,10 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
     return {
         "episode": episode.id,
         "series": series.slug,
+        # The display name, next to the slug it belongs to. `title` and
+        # `signoff` render it at 150px; the slug is a filesystem key and
+        # `the-brief` is not what the brand card says.
+        "series_name": series.name,
         "byline": series.byline,
         "script_sha256": digest,
         "format": {"name": fmt, **FORMATS[fmt]},

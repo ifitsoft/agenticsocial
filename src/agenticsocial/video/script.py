@@ -35,7 +35,15 @@ DEFAULT_HOLD = 3.0
 
 # What plan.py can currently emit. Widening this is a rendering decision, not a
 # schema one — see the module docstring.
-RENDERABLE = frozenset({"statement"})
+#
+# Phase 4 added a builder in engine/planbuild.js for each of the five text
+# types alongside `statement`. The four that remain (`kpis`, `jumpChart`,
+# `dumbbell`, `custom`) are valid beats with no builder: they draw numbers or
+# arbitrary JS, and both need more than a text vocabulary. A name added here
+# without a builder renders a blank card, so
+# tests/test_video_planbuild.py::test_every_renderable_type_has_a_builder holds
+# this set and `BUILDERS` to each other.
+RENDERABLE = frozenset({"statement", "body", "list", "quote", "title", "signoff"})
 
 
 class ScriptError(Exception):

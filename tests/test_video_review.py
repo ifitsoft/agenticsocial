@@ -387,16 +387,14 @@ def test_review_names_the_unrenderable_beats(ws, series):
     this phase cannot draw gets a render missing most of the episode, and the
     only place they could have found out is here."""
     beats = statements([3.0]) + [
-        {
-            "type": "quote",
-            "hold": 4.0,
-            "text": "Gemini 3.7 Flash is our new workhorse model",
-            "attribution": "Google",
-        }
+        # `custom`, not `quote`: Phase 4 draws quotes. The exemplar moves with
+        # the gate rather than the assertion being deleted — the warning has to
+        # keep working while ANY catalogue type is still unbuilt.
+        {"type": "custom", "hold": 4.0, "js": "const h = E('h2', null, P('x'));\n"}
     ]
     episode(series, beats)
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
-    assert "quote" in out
+    assert "custom" in out
     assert "cannot" in out.lower() and "render" in out.lower()
 
 
@@ -426,15 +424,22 @@ def test_review_counts_the_unrenderable_beats_by_type(ws, series):
     """precondition: R4. "some beats cannot render" is not actionable; which
     types, and how many of each, is."""
     beats = statements([3.0, 3.0]) + [
-        {"type": "quote", "hold": 3.0, "text": "a", "attribution": "b"},
-        {"type": "quote", "hold": 3.0, "text": "c", "attribution": "d"},
-        {"type": "title", "hold": 3.0},
+        {"type": "custom", "hold": 3.0, "js": "x\n"},
+        {"type": "custom", "hold": 3.0, "js": "y\n"},
+        {
+            "type": "dumbbell",
+            "hold": 3.0,
+            "rows": [["History-taking", 0.72, 0.72, "on par"]],
+            "series": ["AMIE (video)", "Primary care physician"],
+            "caption": "Evaluator ratings",
+            "footnote": "Direction only.",
+        },
     ]
     episode(series, beats)
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
     assert "3 beats" in out and "cannot" in out.lower()
-    assert "quote (2)" in out
-    assert "title (1)" in out
+    assert "custom (2)" in out
+    assert "dumbbell (1)" in out
 
 
 def test_review_says_nothing_about_rendering_when_everything_renders(ws, series):
@@ -522,7 +527,9 @@ def test_a_full_catalogue_script_still_exits_zero(ws, series):
     episode(series, one_of_each())
     result = run("video", "review", "2026-08-17", "--series", "the-brief")
     assert result.exit_code == 0
-    assert "9 beats" in result.output and "cannot" in result.output.lower()
+    # four of the ten catalogue types are still unbuilt after Phase 4:
+    # kpis, jumpChart, dumbbell, custom.
+    assert "4 beats" in result.output and "cannot" in result.output.lower()
 
 
 # --- R5: review never writes ----------------------------------------------------
@@ -662,7 +669,7 @@ def test_the_margin_marks_only_the_unrenderable_rows(ws, series):
         series,
         [
             {"type": "statement", "hold": 3.0, "text": "this one renders"},
-            {"type": "quote", "hold": 3.0, "text": "this one", "attribution": "does not"},
+            {"type": "custom", "hold": 3.0, "js": "this one does not\n"},
         ],
     )
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
