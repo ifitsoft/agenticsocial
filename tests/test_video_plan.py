@@ -66,6 +66,7 @@ def test_first_beat_carries_every_field(series):
     assert b == {
         "type": "statement",
         "act": "01",
+        "act_label": "01",
         "hold": 3.5,
         "start": 0.0,
         "end": 3.5,
@@ -252,6 +253,7 @@ def test_beat_keys_are_emitted_in_the_documented_order(series):
     assert list(b) == [
         "type",
         "act",
+        "act_label",
         "hold",
         "start",
         "end",
@@ -273,6 +275,7 @@ def test_written_json_preserves_the_documented_key_order(series):
     assert list(loaded["beats"][0]) == [
         "type",
         "act",
+        "act_label",
         "hold",
         "start",
         "end",
@@ -437,3 +440,173 @@ def test_a_beat_shorter_than_one_frame_is_refused(series):
     _script(ep, "beats:\n  - type: statement\n    text: blink\n    hold: 0.01\n")
     with pytest.raises(PlanError, match="one frame"):
         build_plan(series, load_episode(series, "2026-08-14"))
+
+
+# --- Phase 4 Task 0: nothing the renderer interpolates may go unvalidated ------
+
+
+def _series_with(series, **overrides):
+    """A Series carrying values load_series would now refuse. build_plan must
+    not trust its caller: `write_plan` is the last gate before plan.json exists
+    on disk and Node is started."""
+    import dataclasses
+
+    return dataclasses.replace(series, **overrides)
+
+
+def _with_acts(ws, series, acts_toml):
+    """Append [[structure.acts]] blocks to the scaffolded series.toml and
+    reload, so the acts under test came through the real loader."""
+    from agenticsocial.video.series import load_series
+
+    path = series.dir / "series.toml"
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\n" + acts_toml, encoding="utf-8"
+    )
+    return load_series(ws, series.slug)
+
+
+@pytest.mark.parametrize("token", ["surface", "ink", "ink_muted", "accent", "accent_alt", "accent_warm"])
+@pytest.mark.parametrize("bad", [5, "", True, False, 0, [], 0.0, "blue", "#12345"])
+def test_write_plan_refuses_a_non_colour_before_the_file_exists(series, token, bad):
+    """R2 (M6). Validation must happen BEFORE plan.json is written — not in
+    planbuild.js, where the operator has already waited for a render, and not
+    in CSS, which discards the declaration without saying anything.
+
+    precondition: the script and every other design token are valid, so `token`
+    is the only thing that can fail."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    s = _series_with(series, design={**series.design, token: bad})
+    path = ep.out_dir / "plan-vertical.json"
+    assert not path.exists()
+    with pytest.raises(PlanError, match=token):
+        write_plan(s, load_episode(series, "2026-08-14"))
+    assert not path.exists(), "plan.json was written despite an invalid palette"
+
+
+@pytest.mark.parametrize("bad", [5, "", True, [], "blue"])
+def test_build_plan_refuses_a_non_colour(series, bad):
+    """The check lives in build_plan, so every caller inherits it — write_plan
+    today, and whatever Phase 8's gated `render` becomes."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    s = _series_with(series, design={**series.design, "accent": bad})
+    with pytest.raises(PlanError, match="accent"):
+        build_plan(s, load_episode(series, "2026-08-14"))
+
+
+def test_typography_tokens_reach_the_plan_untouched(series):
+    """R1 NEGATIVE (M5). planbuild.js maps six tokens; these two are not among
+    them and are not colours."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    plan = build_plan(series, load_episode(series, "2026-08-14"))
+    assert plan["design"]["type_scale"] == "default"
+    assert "SF Pro Display" in plan["design"]["type_family"]
+
+
+# --- act id -> label resolution happens in Python (R3) -------------------------
+
+ACTS = (
+    '[[structure.acts]]\nid = "01"\nlabel = "01 — The headline"\nbeats = 6\n\n'
+    '[[structure.acts]]\nid = "03"\nlabel = "03 — Agents"\nbeats = 4\n'
+)
+
+
+def test_a_beat_resolves_its_act_id_to_the_declared_label(ws, series):
+    """R3. A beat names its act by ID. The label is display text, resolved once
+    here so planbuild.js does no lookup — and so renaming an act in series.toml
+    does not silently unwire every beat pointing at it."""
+    s = _with_acts(ws, series, ACTS)
+    ep = create_episode(s, "2026-08-14")
+    _script(ep, THREE)
+    b = build_plan(s, load_episode(s, "2026-08-14"))["beats"][0]
+    assert b["act"] == "01"
+    assert b["act_label"] == "01 — The headline"
+
+
+def test_an_undeclared_act_id_renders_as_the_raw_string(ws, series):
+    """R3 NEGATIVE (M7). A script written before its series declared acts must
+    still render — spec §6 marks act `beats` counts advisory, and refusing here
+    would make a soft rule hard. The raw value falls through to the chip."""
+    s = _with_acts(ws, series, '[[structure.acts]]\nid = "01"\nlabel = "One"\n')
+    ep = create_episode(s, "2026-08-14")
+    _script(
+        ep,
+        "beats:\n  - type: statement\n    act: 07 — Nowhere\n    text: still renders\n",
+    )
+    b = build_plan(s, load_episode(s, "2026-08-14"))["beats"][0]
+    assert b["act"] == "07 — Nowhere"
+    assert b["act_label"] == "07 — Nowhere"
+
+
+def test_a_beat_with_no_act_stays_empty_on_both_keys(ws, series):
+    """A cold open has no act chip. `""` must not resolve to anything."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    b = build_plan(series, load_episode(series, "2026-08-14"))["beats"][1]
+    assert b["act"] == "" and b["act_label"] == ""
+
+
+def test_no_acts_declared_at_all_falls_back_rather_than_failing(series):
+    """The scaffold declares no acts. Every episode written against it must
+    still build."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    b = build_plan(series, load_episode(series, "2026-08-14"))["beats"][0]
+    assert b["act"] == "01" and b["act_label"] == "01"
+
+
+def test_an_act_declared_without_a_label_falls_back_to_its_id(ws, series):
+    """`label` is optional in spec §6 and validate_acts does not require it."""
+    s = _with_acts(ws, series, '[[structure.acts]]\nid = "01"\n')
+    ep = create_episode(s, "2026-08-14")
+    _script(ep, THREE)
+    b = build_plan(s, load_episode(s, "2026-08-14"))["beats"][0]
+    assert b["act_label"] == "01"
+
+
+def test_an_act_declared_with_an_empty_label_keeps_it_empty(ws, series):
+    """R3 NEGATIVE, falsy edge. The spec's own cold-open row carries
+    `label = ""`. Falling back on falsiness rather than on absence would print
+    the id on a chip the operator deliberately blanked."""
+    s = _with_acts(ws, series, '[[structure.acts]]\nid = "01"\nlabel = ""\n')
+    ep = create_episode(s, "2026-08-14")
+    _script(ep, THREE)
+    b = build_plan(s, load_episode(s, "2026-08-14"))["beats"][0]
+    assert b["act"] == "01"
+    assert b["act_label"] == ""
+
+
+def test_a_non_string_label_falls_back_instead_of_reaching_json(ws, series):
+    """validate_acts checks `id`, not `label`. A number here would land in
+    plan.json and be interpolated into the chip as `5`."""
+    s = _series_with(series, acts=[{"id": "01", "label": 5}])
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE)
+    b = build_plan(s, load_episode(series, "2026-08-14"))["beats"][0]
+    assert b["act_label"] == "01"
+
+
+def test_the_resolved_label_survives_serialisation(ws, series):
+    """The resolution is only useful if it reaches Node."""
+    s = _with_acts(ws, series, ACTS)
+    ep = create_episode(s, "2026-08-14")
+    _script(ep, THREE)
+    path = write_plan(s, load_episode(s, "2026-08-14"))
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    assert loaded["beats"][0]["act_label"] == "01 — The headline"
+
+
+def test_planbuild_consumes_the_resolved_label_and_does_no_lookup(ws):
+    """R2, structurally. If planbuild.js still passed `b.act`, the resolution
+    would be dead weight and the chip would print a bare id."""
+    from pathlib import Path
+
+    import agenticsocial
+
+    src = (
+        Path(agenticsocial.__file__).resolve().parents[2] / "engine" / "planbuild.js"
+    ).read_text(encoding="utf-8")
+    assert "act_label" in src

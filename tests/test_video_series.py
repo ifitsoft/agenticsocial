@@ -1,5 +1,6 @@
 import json
 import re
+import warnings
 
 import pytest
 
@@ -560,3 +561,189 @@ def test_falsy_non_string_text_fields_are_rejected(ws, field, bad):
     _write_series(ws, "bad", f'[series]\n{field} = {bad}\n')
     with pytest.raises(SeriesError, match=field):
         load_series(ws, "bad")
+
+
+# --- design.* becomes a CSS custom property (Phase 4 Task 0) -------------------
+#
+# The failure this closes: `accent = 5` reaches `--blue` in planbuild.js, CSS
+# silently DISCARDS the invalid declaration, and the render comes out
+# correct-looking with the wrong palette and no error anywhere. Every check
+# below therefore runs at LOAD time, in Python, long before a frame exists.
+
+COLOUR_TOKENS = ["surface", "ink", "ink_muted", "accent", "accent_alt", "accent_warm"]
+
+# Every entry is written as a TOML literal. The first four are FALSY on purpose:
+# three tasks running, mutants survived because every bad value chosen was
+# truthy, and `if value and not COLOUR_RE.match(value)` passes all of them.
+BAD_COLOURS = [
+    "5",  # M2 — an int reaches CSS as `--blue:5` and is discarded
+    '""',  # M3 — falsy, and `--blue:` is a discarded declaration too
+    "true",  # falsy-adjacent: bool is an int subclass, so `isinstance(v, int)` lies
+    "0",  # falsy int
+    "false",  # falsy bool
+    "[]",  # falsy list
+    "0.0",  # falsy float
+    '"blue"',  # M4 — valid CSS, wrong format for this palette
+    '"rgb(0,0,255)"',  # valid CSS, wrong format
+    '"#12345"',  # five digits is neither #RGB nor #RRGGBB
+    '"#GGGGGG"',  # right length, not hex
+    '"2E6BFF"',  # the hash is not optional
+    '"#2E6BFF "',  # trailing space; CSS would tolerate it, our scaffold never writes it
+]
+
+
+@pytest.mark.parametrize("token", COLOUR_TOKENS)
+@pytest.mark.parametrize("bad", BAD_COLOURS)
+def test_non_colour_design_token_is_rejected(ws, token, bad):
+    """precondition: every other field is absent or valid, so `token` is the
+    only thing that can fail — the error naming `token` proves the check found
+    it rather than tripping over something else.
+
+    R1. Six of the eight design tokens become CSS custom properties in
+    planbuild.js. CSS discards an invalid declaration in silence, so a value
+    that is not a colour produces a wrong render and no error."""
+    _write_series(ws, "bad", f'[series]\nname = "B"\n\n[design]\n{token} = {bad}\n')
+    with pytest.raises(SeriesError, match=token):
+        load_series(ws, "bad")
+
+
+@pytest.mark.parametrize(
+    "good", ['"#fff"', '"#FFF"', '"#FFFFFF"', '"#ffffff"', '"#2E6BFF"', '"#aBcDeF"']
+)
+@pytest.mark.parametrize("token", COLOUR_TOKENS)
+def test_hex_colours_in_both_lengths_and_either_case_are_accepted(ws, token, good):
+    """#RGB and #RRGGBB, case-insensitive — the two forms the scaffold and both
+    committed episodes actually write."""
+    _write_series(ws, "ok", f'[series]\nname = "O"\n\n[design]\n{token} = {good}\n')
+    assert load_series(ws, "ok").design[token] == good.strip('"')
+
+
+def test_the_scaffolded_palette_still_loads(ws):
+    """The check must accept the file agsoc itself writes. A rule the scaffold
+    violates is a rule that gets deleted."""
+    s = scaffold_series(ws, "the-brief", name="The Brief")
+    assert s.design["accent"] == "#2E6BFF"
+    assert s.design["accent_warm"] == "#FF6B4A"
+
+
+@pytest.mark.parametrize("token", ["type_family", "type_scale"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        '"SF Pro Display, Helvetica Neue, system-ui"',
+        '"default"',
+        '"compact"',
+        '"blue"',
+        '""',
+    ],
+)
+def test_typography_tokens_are_not_colour_checked(ws, token, value):
+    """R1 NEGATIVE (M5). `type_family` and `type_scale` are not colours. A
+    colour check applied to the whole [design] table rejects the scaffold's own
+    font stack — the rule would be strictly worse than no rule."""
+    _write_series(ws, "ok", f'[series]\nname = "O"\n\n[design]\n{token} = {value}\n')
+    assert load_series(ws, "ok").design[token] == value.strip('"')
+
+
+def test_a_design_token_nobody_maps_is_left_alone(ws):
+    """Only the six tokens PLAN_TOKENS maps become CSS. An unknown key is an
+    operator's note to themselves, not a colour."""
+    _write_series(ws, "ok", '[series]\nname = "O"\n\n[design]\nnote = "wip"\n')
+    assert load_series(ws, "ok").design["note"] == "wip"
+
+
+def test_the_error_says_why_a_valid_css_colour_is_refused(ws):
+    """`"blue"` IS valid CSS. Refusing it without saying why reads as a bug in
+    agsoc; the reason is palette drift, and the message has to carry it."""
+    _write_series(ws, "bad", '[series]\nname = "B"\n\n[design]\naccent = "blue"\n')
+    with pytest.raises(SeriesError) as e:
+        load_series(ws, "bad")
+    msg = str(e.value)
+    assert "accent" in msg
+    assert "#" in msg  # shows the form it wants
+    assert re.search(r"named colour|rgb\(", msg)
+
+
+# --- warm_acts joins on act id, and a miss is a WARNING (D-070) ----------------
+
+
+def test_warm_acts_naming_an_undeclared_act_warns_and_still_loads(ws):
+    """R4 (M9). D-070 keeps this soft: the operator is told, and the series
+    loads. Silence is the failure — nothing else in the pipeline will ever
+    mention that `accent_warm` is wired to an act that does not exist."""
+    _write_series(
+        ws,
+        "warm",
+        '[series]\nname = "W"\n\n'
+        '[structure]\nwarm_acts = ["99"]\n\n'
+        '[[structure.acts]]\nid = "01"\nlabel = "One"\n',
+    )
+    with pytest.warns(UserWarning, match="warm_acts"):
+        s = load_series(ws, "warm")
+    assert s.warm_acts == ["99"]
+    assert s.acts == [{"id": "01", "label": "One"}]
+
+
+def test_warm_acts_mismatch_names_the_offending_id(ws):
+    _write_series(
+        ws,
+        "warm",
+        '[series]\nname = "W"\n\n'
+        '[structure]\nwarm_acts = ["99"]\n\n'
+        '[[structure.acts]]\nid = "01"\n',
+    )
+    with pytest.warns(UserWarning, match="99"):
+        load_series(ws, "warm")
+
+
+def test_warm_acts_mismatch_does_not_raise(ws):
+    """R4 NEGATIVE (M8). Hardening the warning into a refusal turns a soft
+    problem hard on the wrong side: it would refuse to load a series whose
+    only fault is an act renamed in a file the loader cannot see."""
+    _write_series(
+        ws,
+        "warm",
+        '[series]\nname = "W"\n\n[structure]\nwarm_acts = ["99", "98"]\n',
+    )
+    with pytest.warns(UserWarning):
+        s = load_series(ws, "warm")
+    assert s.warm_acts == ["99", "98"]
+
+
+def test_warm_acts_naming_a_declared_act_is_silent(ws):
+    """A warning that fires on every healthy series is one operators learn to
+    scroll past."""
+    _write_series(
+        ws,
+        "warm",
+        '[series]\nname = "W"\n\n'
+        '[structure]\nwarm_acts = ["03"]\n\n'
+        '[[structure.acts]]\nid = "03"\nlabel = "03 — Agents"\n',
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert load_series(ws, "warm").warm_acts == ["03"]
+
+
+def test_warm_acts_joins_on_id_not_label(ws):
+    """The decision this task was asked to make. `2026-08-12.js` carries
+    `warmActs:['03 — Agents']` — a LABEL — because content/*.js had no
+    series.toml to join against. An id is stable under rewording; a label is
+    display text an operator edits, and joining on it silently unwires every
+    reference the moment an act is renamed."""
+    _write_series(
+        ws,
+        "warm",
+        '[series]\nname = "W"\n\n'
+        '[structure]\nwarm_acts = ["03 — Agents"]\n\n'
+        '[[structure.acts]]\nid = "03"\nlabel = "03 — Agents"\n',
+    )
+    with pytest.warns(UserWarning, match="03 — Agents"):
+        load_series(ws, "warm")
+
+
+def test_an_empty_warm_acts_is_silent(ws):
+    """The scaffold writes `warm_acts = []`. Every new series must be quiet."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        scaffold_series(ws, "the-brief")
