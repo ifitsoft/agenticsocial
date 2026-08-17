@@ -366,3 +366,94 @@ def test_episode_ids_ignores_a_directory_where_the_script_should_be(series):
     d = series.episodes_dir / "weird"
     (d / "script.yaml").mkdir(parents=True)
     assert episode_ids(series) == ["2026-08-14"]
+
+
+# --- byte-level preservation ---------------------------------------------------
+# The existing preservation tests use write_text/read_text, which apply universal
+# newline translation on BOTH sides — so they pin content, not bytes, and a CRLF
+# script had every byte rewritten while they stayed green. These use bytes.
+
+
+def _write_bytes(ep, meta_lines, beats, nl):
+    body = nl.join(meta_lines).encode() + nl.encode()
+    ep.script_path.write_bytes(
+        b"---" + nl.encode() + body + b"---" + nl.encode() + beats
+    )
+
+
+def _beats_bytes(ep, nl):
+    raw = ep.script_path.read_bytes()
+    return raw.split(b"---" + nl.encode(), 2)[-1]
+
+
+META = ["episode: e", "series: the-brief", "status: draft"]
+
+
+@pytest.mark.parametrize("nl", ["\n", "\r\n", "\r"])
+def test_beats_bytes_survive_a_status_change(series, nl):
+    ep = create_episode(series, "ep")
+    beats = nl.join(["beats:", "  # a comment", "  - type: statement", ""]).encode()
+    _write_bytes(ep, META, beats, nl)
+    set_status(load_episode(series, "ep"), Status.IN_REVIEW)
+    assert _beats_bytes(ep, nl) == beats
+
+
+@pytest.mark.parametrize("nl", ["\n", "\r\n"])
+def test_beats_bytes_survive_repeated_status_changes(series, nl):
+    """script_sha256 must not drift across a draft -> review -> approve run."""
+    ep = create_episode(series, "ep")
+    beats = nl.join(["beats:", "  - type: kpis", "    hold:  4.6", ""]).encode()
+    _write_bytes(ep, META, beats, nl)
+    for target in (Status.IN_REVIEW, Status.APPROVED, Status.IN_REVIEW):
+        set_status(load_episode(series, "ep"), target)
+    assert _beats_bytes(ep, nl) == beats
+
+
+def test_trailing_whitespace_and_tabs_in_beats_are_preserved(series):
+    ep = create_episode(series, "ep")
+    beats = b"beats:\n\t- type: statement   \n\n\n  # trailing blank lines\n\n"
+    _write_bytes(ep, META, beats, "\n")
+    set_status(load_episode(series, "ep"), Status.IN_REVIEW)
+    assert _beats_bytes(ep, "\n") == beats
+
+
+def test_beats_without_a_trailing_newline_is_preserved(series):
+    ep = create_episode(series, "ep")
+    beats = b"beats:\n  - type: statement"
+    _write_bytes(ep, META, beats, "\n")
+    set_status(load_episode(series, "ep"), Status.IN_REVIEW)
+    assert _beats_bytes(ep, "\n") == beats
+
+
+# --- the error contract Task 4's `except EpisodeError` depends on --------------
+
+
+def test_unreadable_episodes_dir_raises_episode_error(series):
+    import os
+    import stat
+
+    create_episode(series, "2026-08-14")
+    d = series.episodes_dir
+    mode = d.stat().st_mode
+    os.chmod(d, 0)
+    try:
+        if os.access(d, os.R_OK):  # running as root; the probe is meaningless
+            pytest.skip("cannot revoke read permission as this user")
+        with pytest.raises(EpisodeError):
+            episode_ids(series)
+    finally:
+        os.chmod(d, stat.S_IMODE(mode))
+
+
+def test_create_over_a_dangling_symlink_raises_episode_error(series):
+    (series.episodes_dir).mkdir(parents=True, exist_ok=True)
+    (series.episodes_dir / "ghost").symlink_to(series.episodes_dir / "nowhere")
+    with pytest.raises(EpisodeError):
+        create_episode(series, "ghost")
+
+
+def test_empty_query_does_not_resolve_an_episode(series):
+    """`agsoc video review ""` must not silently pick the only episode."""
+    create_episode(series, "2026-08-14")
+    with pytest.raises(EpisodeError):
+        resolve_episode(series, "")
