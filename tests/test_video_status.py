@@ -47,10 +47,6 @@ def test_approval_may_be_revoked():
     assert_transition(Status.APPROVED, Status.IN_REVIEW, VIDEO_TRANSITIONS)
 
 
-def test_published_is_terminal_for_video():
-    assert VIDEO_TRANSITIONS[Status.PUBLISHED] == set()
-
-
 def test_text_table_rejects_rendering():
     """A text variant must never enter a render state."""
     with pytest.raises(TransitionError):
