@@ -204,7 +204,27 @@ class Workspace:
         atomic_write(v.path, frontmatter.dump(v.meta, v.body))
 
     def set_status(self, v: Variant, target: Status) -> None:
-        assert_transition(v.status, target)
+        """Move a variant to `target`.
+
+        The gate is checked against the status ON DISK, not `v.status`: a caller
+        holding a stale Variant must not be able to move a variant the file says
+        is a draft. Same reasoning as video/episode.py::set_status (D-045/D-049).
+
+        Only the status is taken from disk. `v.meta` is written as-is, because
+        publish_variant sets `posted_url` in memory and expects this call to
+        persist it — replacing meta with the disk copy would silently break the
+        resume invariant.
+        """
+        disk_meta, _ = frontmatter.parse(v.path.read_text(encoding="utf-8"))
+        raw = disk_meta.get("status", Status.DRAFT.value)
+        try:
+            current = Status(raw)
+        except ValueError:
+            raise WorkspaceError(
+                f"{v.path}: invalid status '{raw}' — one of: "
+                f"{', '.join(s.value for s in Status)}"
+            )
+        assert_transition(current, target)
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         if target is Status.APPROVED:
             v.meta["approved_at"] = now
