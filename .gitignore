@@ -219,3 +219,6 @@ __marimo__/
 
 # agenticsocial content workspace (personal content, not part of the repo)
 workspace/
+
+# macOS
+.DS_Store
