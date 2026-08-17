@@ -17,7 +17,7 @@ class EpisodeError(Exception):
     pass
 
 
-@dataclass
+@dataclass(frozen=True)
 class Series:
     slug: str
     name: str
