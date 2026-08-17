@@ -407,3 +407,40 @@ def test_wrong_shaped_warm_acts_is_rejected(ws, bad):
     )
     with pytest.raises(SeriesError, match="warm_acts"):
         load_series(ws, "bad")
+
+
+# --- path safety: what agsoc will TOUCH, distinct from what it will CREATE -----
+
+UNSAFE = ["../../outside", "..", ".", "", "a/b", "a\\b", "/abs", "sub/dir"]
+
+
+@pytest.mark.parametrize("bad", UNSAFE)
+def test_load_series_refuses_unsafe_names(ws, bad):
+    """scaffold_series validated its slug; load_series did not, and
+    `video new --series ../../outside` reaches create_episode through it."""
+    with pytest.raises(SeriesError, match="unsafe"):
+        load_series(ws, bad)
+
+
+@pytest.mark.parametrize("bad", UNSAFE)
+def test_scaffold_series_refuses_unsafe_names(ws, bad):
+    with pytest.raises(SeriesError):
+        scaffold_series(ws, bad)
+
+
+def test_load_series_still_accepts_a_hand_made_directory_name(ws):
+    """Path safety is not a naming rule. A directory a human called `My-Show`
+    must stay loadable even though agsoc would not have created it."""
+    d = ws.series_dir / "My-Show"
+    (d / "episodes").mkdir(parents=True)
+    (d / "series.toml").write_text('[series]\nname = "Mine"\n', encoding="utf-8")
+    assert load_series(ws, "My-Show").name == "Mine"
+
+
+def test_scaffold_series_detects_a_dangling_symlink(ws):
+    """create_episode checks is_symlink(); its sibling did not, so Path.exists()
+    followed the link and mkdir reported [Errno 17] instead of a clean error."""
+    ws.series_dir.mkdir(parents=True, exist_ok=True)
+    (ws.series_dir / "ghost").symlink_to(ws.series_dir / "nowhere")
+    with pytest.raises(SeriesError, match="already exists"):
+        scaffold_series(ws, "ghost")

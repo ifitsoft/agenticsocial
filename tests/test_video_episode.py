@@ -551,3 +551,31 @@ def test_empty_metadata_document_keeps_its_beats(series):
     ep.script_path.write_bytes(b"---\n---\nbeats:\n  - type: statement\n")
     set_status(load_episode(series, "2026-08-14"), Status.IN_REVIEW)
     assert b"- type: statement" in ep.script_path.read_bytes()
+
+
+# --- path safety: shared with series.py, distinct from the naming rules --------
+
+
+@pytest.mark.parametrize(
+    "bad", ["../../outside", "..", ".", "", "a/b", "a\\b", "/abs", "sub/dir"]
+)
+def test_load_episode_refuses_unsafe_ids(series, bad):
+    with pytest.raises(EpisodeError, match="unsafe"):
+        load_episode(series, bad)
+
+
+@pytest.mark.parametrize("bad", ["../../outside", "..", "a/b", "/abs"])
+def test_resolve_episode_refuses_unsafe_ids(series, bad):
+    create_episode(series, "2026-08-14")
+    with pytest.raises(EpisodeError):
+        resolve_episode(series, bad)
+
+
+def test_load_episode_still_accepts_a_hand_made_directory_name(series):
+    d = series.episodes_dir / "Ep_01"
+    (d / "sources").mkdir(parents=True)
+    (d / "script.yaml").write_text(
+        "---\nepisode: Ep_01\nseries: the-brief\nstatus: draft\n---\nbeats: []\n",
+        encoding="utf-8",
+    )
+    assert load_episode(series, "Ep_01").status is Status.DRAFT

@@ -186,7 +186,7 @@ def test_over_long_name_fails_cleanly(ws, cmd):
     the length, and mkdir raises OSError: File name too long at NAME_MAX + 1."""
     result = run(*cmd, "a" * 300)
     assert result.exit_code == 1
-    assert "too long" in result.output.lower() or "length" in result.output.lower()
+    assert "limit 64" in result.output
 
 
 def test_series_list_survives_a_non_utf8_series_toml(ws):
@@ -266,3 +266,16 @@ def test_series_list_reports_an_unknown_episode_count_rather_than_zero(ws):
         assert "0 episodes" not in result.output
     finally:
         os.chmod(eps, stat.S_IMODE(mode))
+
+
+def test_video_new_cannot_escape_the_workspace(ws, tmp_path):
+    """Verified escape: --series ../../outside wrote a real episode outside the
+    workspace whenever the traversal target was itself a valid series."""
+    outside = tmp_path / "outside"
+    (outside / "episodes").mkdir(parents=True)
+    (outside / "series.toml").write_text('[series]\nname = "O"\n', encoding="utf-8")
+    depth = len(ws.series_dir.parts) - len(tmp_path.parts)
+    traversal = "/".join([".."] * depth) + "/outside"
+    result = run("video", "new", "2026-08-14", "--series", traversal)
+    assert result.exit_code == 1
+    assert not (outside / "episodes" / "2026-08-14").exists()
