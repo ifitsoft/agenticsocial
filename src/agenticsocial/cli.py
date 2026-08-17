@@ -199,6 +199,11 @@ def post(
         typer.echo(f"would post {len(tweets)} tweets:\n")
         typer.echo(format_review(tweets))
         return
+    if ws.disk_status(v) is Status.PUBLISHING and not v.meta.get("approved_at"):
+        raise _fail(
+            f"{src.id} is marked publishing but was never approved — "
+            "publishing cannot grant itself. Reset status to in_review and approve it."
+        )
     if v.status in (Status.FAILED, Status.PUBLISHING) and not resume:
         raise _fail(
             f"{src.id} was interrupted after {len(v.meta.get('posted_ids') or [])} tweets — "

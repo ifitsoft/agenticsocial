@@ -255,3 +255,49 @@ def test_research_extract_failure_degrades_to_warning(ws, monkeypatch):
     assert result.exit_code == 0
     assert "warning: could not extract" in result.output
     assert (src.dir / "brief.md").exists()
+
+
+def _fake_x(monkeypatch):
+    from agenticsocial.x import auth as x_auth
+
+    monkeypatch.setattr(x_auth, "load_token", lambda: {"access_token": "tok"})
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.n = 0
+
+        def post_tweet(self, text, in_reply_to=None):
+            self.n += 1
+            return f"id{self.n}"
+
+    import agenticsocial.cli as cli_mod
+
+    monkeypatch.setattr(cli_mod, "XClient", FakeClient)
+
+
+def test_resume_refuses_a_publishing_that_was_never_approved(ws, monkeypatch):
+    """precondition: status is publishing on disk and approved_at is null. F11 —
+    publishing was self-granting: --resume honoured the status without asking
+    who granted it, so a hand-edited draft published."""
+    src = ws.create_source("Forged", created="2026-07-13")
+    v = ws.create_variant(src, "x", body="One")
+    v.path.write_text(
+        "---\nplatform: x\nstatus: publishing\napproved_at: null\nposted_ids: []\n---\nOne",
+        encoding="utf-8",
+    )
+    _fake_x(monkeypatch)
+    result = runner.invoke(app, ["post", "forged", "--resume"])
+    assert result.exit_code == 1
+    assert "never approved" in result.output
+    assert ws.disk_status(ws.load_variant(src, "x")) is Status.PUBLISHING  # not published
+
+
+def test_a_legitimately_approved_publishing_still_resumes(approved, monkeypatch):
+    """precondition: approved_at is set and status reached publishing through
+    the gate. F11's fix must not break the resume it exists to protect."""
+    ws, src = approved
+    ws.set_status(ws.load_variant(src, "x"), Status.PUBLISHING)
+    _fake_x(monkeypatch)
+    result = runner.invoke(app, ["post", "ready", "--resume"])
+    assert result.exit_code == 0
+    assert ws.load_variant(src, "x").status is Status.PUBLISHED

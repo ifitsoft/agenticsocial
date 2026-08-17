@@ -265,3 +265,16 @@ def test_set_status_returns_a_new_variant_and_leaves_the_argument_alone(tmp_path
     assert moved is not v
     assert moved.status is Status.IN_REVIEW
     assert v.status is Status.DRAFT          # the argument is untouched
+
+
+def test_disk_status_defaults_to_draft_not_something_permissive(tmp_path):
+    """precondition: the file has no status key. F10 — defaulting to APPROVED
+    passes all 469 tests."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("x")
+    v = ws.create_variant(src, "x", body="hi")
+    v.path.write_text("---\nplatform: x\n---\nhi", encoding="utf-8")
+    assert ws.disk_status(v) is Status.DRAFT
