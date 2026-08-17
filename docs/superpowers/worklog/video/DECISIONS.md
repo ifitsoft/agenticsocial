@@ -1197,3 +1197,61 @@ raise while reading the file, **masking the original exception** and leaving
 Also noted: mutant 3 (`cli.py` deciding from `v.status`) **survives** — equivalent
 under today's CLI, where `_load` always returns a fresh variant. Kept as defence
 in depth, recorded as unkilled rather than papered over.
+
+## D-062 · phase 2 · "unrepresentable" RETRACTED. Freezing is a correctness fix, not a security one.
+I told the human that freezing `Variant`/`Episode` would make a forged status
+*unrepresentable*. **That was wrong, and I verified it myself:**
+
+```
+frozen=True deleted from Variant  ->  379 passed        (nothing enforced it)
+replace(v, status=PUBLISHING)     ->  forged: publishing | disk says: draft
+```
+
+The Task 0c implementer said so before I checked, unprompted, rather than letting
+my framing stand: *"freezing did not make a forged Variant unconstructible, it
+made it unconstructible by accident — `replace` is now the forgery tool, one
+line."*
+
+**The accurate position**, argued by the Task 0d implementer when asked to
+disagree with me rather than agree:
+
+- Freezing stops **accidental** forging. `v.status = APPROVED` is one invisible
+  token and is the exact shape of all three historical bypasses — every one an
+  accident of convenience. `replace(v, status=...)` names the module and the
+  field and is greppable. It raises the intent floor; it is not a boundary.
+- **The load-bearing defence is that no gate reads the object.** A forged status
+  buys nothing regardless of how it was forged. If only one mechanism could be
+  kept, keep the disk read.
+- **Add no further mechanism.** A custom `__setattr__` is defeated by
+  `object.__setattr__` one line later; a disk-reading property costs I/O per
+  access and trades a hypothetical bypass for real staleness bugs. Python has no
+  in-process boundary and pretending otherwise is a category error.
+
+**Freezing stays, on the correctness argument rather than the security one:** a
+snapshot that mutates lies about its file. That applies to `body` and
+`target_sec` as much as to `status`, and it survives the concession.
+
+Task 0d made the guarantee actually enforced — five mutants, five kills, 383
+tests. Before it, deleting the decorator passed everything.
+
+## D-063 · FORWARD WARNING · where the fourth instance will come from
+The Task 0d implementer's most useful output was not about this task:
+
+> The next bypass probably won't be a forged field. It'll be a Phase 3 gate that
+> reads `episode.status` or a stale `series.target_sec` instead of re-reading
+> disk — and `frozen=True` is completely inert against that.
+
+Correct, and it reframes the whole family. All three bypasses were *writes* to a
+trusted object; the next is likelier to be a *read* of a stale one. Freezing
+prevents the former and does nothing about the latter.
+
+**Standing requirement: every new gate gets a stale-object test.** Phase 3's
+duration gate (`abs(dur - target_sec) > tolerance_sec`) is the first one due, and
+it must have a test that loads an object, changes the file underneath it, and
+asserts the gate follows the file. Rated by its author above anything else in
+that report, and I agree.
+
+`Source` stays mutable — no gate reads it, and grep confirms nothing assigns to
+it. Recommended to freeze opportunistically during ingest, since Phase 2 is the
+phase most likely to start passing `Source` around and `Source.dir` is a `Path`
+consumed by filesystem operations.
