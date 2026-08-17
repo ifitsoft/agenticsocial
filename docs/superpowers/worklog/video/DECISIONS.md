@@ -1314,3 +1314,68 @@ fetch-order-dependent, so a corpus rebuild can silently re-point `blog-google-2`
 at the *other* article. That is the one failure mode in this module that yields a
 **wrong fact-check rather than a loud one**, and the fix belongs in ingestion —
 look the URL up in the manifest, reuse its key or refuse, never re-derive.
+
+## D-066 · PHASE 2 GATE · merge-after-fixes → fixed. The gate itself held.
+Thirteen forgery attacks, every one refused: `replace()` to APPROVED and to
+PUBLISHING, a mutated `meta` laundered through `save_variant`, stale objects over
+reverted files, the video equivalents, and the real CLI in a subprocess. The four
+bypasses closed in this phase stay closed under attack.
+
+**F1 — the verifier trusted its own manifest.** Leader-reproduced: a manifest key
+of `../../../../../../outside` made `verify()` report a corpus **SOUND** while
+`sources/` held no documents at all, having hashed a file outside the workspace
+to say so. `document_text` refused the identical key. Fixed; now
+`[('unsafe', ...)]`.
+
+*My first probe of F1 used the wrong traversal depth and came back clean.* I
+nearly filed it as not-reproducing — the same error as D-031, dismissing a real
+finding on a bad probe of my own. Re-ran with the depth computed rather than
+guessed and it reproduced immediately. **A failed probe is not a refutation.**
+
+Also fixed: hostless hrefs recorded rather than aborting the run (F2); symlinked
+documents flagged (F4); `document_text` returns the bytes its hash covers, not
+newline-translated text (F5, the same defect `c47236b` fixed for beats); a
+*missing* `sha256` no longer compares equal to itself (F8); padded bytes are a
+modification (F9); `disk_status`'s fallback is pinned to DRAFT — flipping it to
+APPROVED had passed all 469 tests (F10); and **publishing can no longer grant
+itself** (F11).
+
+Deferred with reasons: F18 (post-approval body swap) belongs to Phase 7, which
+owns the approve gate and whose contract it changes. Hardlinked documents still
+verify sound — weaker than the symlink case, since edits through the other name
+still change the hash, and `st_nlink > 1` would flag innocent files.
+
+## D-067 · you cannot guard a boundary you do not own
+Task 4 added an autouse socket guard. It half worked. Leader-verified:
+
+```
+urllib : blocked (RuntimeError)
+ddgs   : *** REACHED NETWORK *** 2 results
+```
+
+`ddgs` fetches through **`primp`, a Rust HTTP client that opens sockets in native
+code and never touches Python's `socket` module.** The guard is invisible to it.
+`trafilatura` uses urllib3 — pure Python — so extraction was guarded and search
+was not. Two mutants ran **90 seconds to timeout** against duckduckgo rather than
+failing.
+
+**The fix is to guard the seam we own.** `research.search` and `research.extract`
+are this project's only two fetch calls; a guard there cannot be bypassed by a
+dependency's choice of HTTP stack. Measured after: those two mutants now fail in
+**0.80s and 1.26s** — ~70× faster and deterministic rather than DNS-dependent.
+Full suite 482 passed in ~2s, no test broken, all eight respx tests unaffected
+(respx patches the httpx transport, so a mocked request never descends to
+`create_connection`).
+
+The socket patches stay: `x/client.py` and `x/auth.py` use httpx, which is pure
+Python all the way down, and they were measured blocked in 0.06s.
+
+**The honest remaining hole**, reported rather than hidden: `video/render.py`'s
+`subprocess.run` of node. A child process inherits no monkeypatch. Every render
+test patches `R.subprocess.run`, but that is *convention* — exactly where
+`research` was before this task. Phase 8's gated `render` should guard
+`render._run` by the same logic.
+
+**Generalisable:** an isolation guarantee must sit on a boundary you control. A
+guard on someone else's abstraction holds only until they change how they reach
+the network — and it fails silently, which is the worst way to learn.
