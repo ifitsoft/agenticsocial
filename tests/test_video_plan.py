@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 
 import pytest
 
@@ -599,14 +600,82 @@ def test_the_resolved_label_survives_serialisation(ws, series):
     assert loaded["beats"][0]["act_label"] == "01 — The headline"
 
 
-def test_planbuild_consumes_the_resolved_label_and_does_no_lookup(ws):
-    """R2, structurally. If planbuild.js still passed `b.act`, the resolution
-    would be dead weight and the chip would print a bare id."""
+def _planbuild_path():
     from pathlib import Path
 
     import agenticsocial
 
-    src = (
-        Path(agenticsocial.__file__).resolve().parents[2] / "engine" / "planbuild.js"
-    ).read_text(encoding="utf-8")
-    assert "act_label" in src
+    return Path(agenticsocial.__file__).resolve().parents[2] / "engine" / "planbuild.js"
+
+
+def _planbuild_src():
+    return _planbuild_path().read_text(encoding="utf-8")
+
+
+def test_planbuild_consumes_the_resolved_label_and_does_no_lookup():
+    """R2, structurally. If planbuild.js still passed `b.act`, the resolution
+    would be dead weight and the chip would print a bare id.
+
+    The PRECEDENCE is what this pins, not the mere presence of the identifier.
+    A mutation sweep found that `b.act || b.act_label` — which prints the id and
+    ignores the label — survived an `"act_label" in src` assertion untouched."""
+    src = _planbuild_src()
+    assert "b.act_label || b.act || ''" in src
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_planbuild_actually_passes_the_label_to_scene():
+    """The structural test above pins the source text; this one runs it.
+
+    planbuild.js is a classic script with no exports, so it is evaluated with
+    the handful of globals `scene`/`meta`/`E`/`P`/`rise` that scene.html
+    provides, and the act argument every `scene()` call receives is captured.
+    """
+    import json as _json
+    import subprocess
+    import textwrap
+
+    plan = {
+        "episode": "2026-08-16",
+        "byline": "",
+        "design": {},
+        "beats": [
+            {"type": "statement", "act": "01", "act_label": "01 — The headline",
+             "hold": 3.0, "kicker": "", "text": "t", "src": ""},
+            {"type": "statement", "act": "07", "act_label": "07",
+             "hold": 3.0, "kicker": "", "text": "t", "src": ""},
+            {"type": "statement", "act": "", "act_label": "",
+             "hold": 3.0, "kicker": "", "text": "t", "src": ""},
+        ],
+    }
+    harness = textwrap.dedent(
+        """
+        const fs = require('fs');
+        const vm = require('vm');
+        const seen = [];
+        const ctx = {
+          document: { documentElement: { style: { setProperty() {} } } },
+          scene: (act) => seen.push(act),
+          meta: () => {},
+          E: () => ({}), P: (x) => x, rise: () => {},
+        };
+        vm.createContext(ctx);
+        vm.runInContext(fs.readFileSync(process.env.PLANBUILD, 'utf8'), ctx);
+        vm.runInContext('buildFromPlan(' + process.env.PLAN + ')', ctx);
+        console.log(JSON.stringify(seen));
+        """
+    )
+    import os
+
+    proc = subprocess.run(
+        ["node", "-e", harness],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PLANBUILD": str(_planbuild_path()),
+            "PLAN": _json.dumps(plan),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert _json.loads(proc.stdout) == ["01 — The headline", "07", ""]
