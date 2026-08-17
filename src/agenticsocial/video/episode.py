@@ -31,10 +31,14 @@ from ..workspace import atomic_write
 from .models import Episode, EpisodeError, Series
 from ..workspace import assert_safe_name
 
+# One length limit, not two. A second `= 64` here drifts from series.py's the
+# first time either is tuned — the D-036 pattern that has produced five defects.
+# series.py does not import this module, so this direction is the acyclic one.
+from .series import MAX_NAME_LEN as MAX_ID_LEN
+
 SUBDIRS = ("sources", "out", "probe")
 
 EPISODE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
-MAX_ID_LEN = 64
 
 _DOC_START_RE = re.compile(r"\A---[ \t]*(\r\n|\r|\n)")
 _SEP_RE = re.compile(r"(\r\n|\r|\n)---[ \t]*(\r\n|\r|\n)")
