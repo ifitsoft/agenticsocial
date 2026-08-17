@@ -91,13 +91,21 @@ def write_document(
     title: str = "",
     fetched_at: str | None = None,
     key: str | None = None,
+    replace: bool = False,
 ) -> str:
-    """Write one fetched document and record it. Returns the key used."""
+    """Write one fetched document and record it. Returns the key used.
+
+    A key already in the manifest is normally given a `-2` suffix, because two
+    distinct documents must never share one key. `replace=True` says the caller
+    has established this is the SAME document — same URL — and wants it refreshed
+    in place. Only a caller that matched on the exact URL may say that; suffixing
+    there would re-point every claim citing the old key (see ingest._write).
+    """
     key = key if key is not None else key_for(url)
     assert_safe_name(key, "source key", CorpusError)
 
     manifest = read_manifest(episode)
-    if key in manifest:
+    if key in manifest and not replace:
         base, n = key, 2
         while f"{base}-{n}" in manifest:
             n += 1
