@@ -156,11 +156,14 @@ def test_verify_is_silent_on_a_sound_corpus(episode):
     assert C.verify(episode) == []
 
 
-def test_verify_detects_a_modified_document(episode):
-    """The whole point: a claim is checked against bytes, so the bytes must be
-    provably the ones that were fetched."""
-    C.write_document(episode, "one", url="https://blog.google/x")
-    (episode.sources_dir / "blog-google.txt").write_text("tampered", encoding="utf-8")
+def test_verify_detects_a_same_length_modification(episode):
+    """The realistic tamper is changing a figure, not changing a length. The
+    previous version of this test replaced 3 bytes with 8, so a verifier
+    comparing only `bytes` passed it — blind to exactly what it named."""
+    C.write_document(episode, "Anthropic raised $100M", url="https://blog.google/x")
+    (episode.sources_dir / "blog-google.txt").write_text(
+        "Anthropic raised $900M", encoding="utf-8"
+    )
     assert C.verify(episode) == [("modified", "blog-google")]
 
 
@@ -191,3 +194,37 @@ def test_verify_reports_every_problem_sorted(episode):
 
 def test_verify_on_an_empty_corpus(episode):
     assert C.verify(episode) == []
+
+
+@pytest.mark.parametrize(
+    "bad", ["../../../series", "../secret", "a/b", "..", ".", "", "a\\b"]
+)
+def test_document_text_refuses_a_traversing_key(episode, bad):
+    """Phase 5's source key comes from agent-authored YAML. Without this guard
+    the key `../../../../../voice` reads workspace/voice.txt."""
+    with pytest.raises(C.CorpusError):
+        C.document_text(episode, bad)
+
+
+def test_document_text_cannot_reach_outside_the_corpus(episode):
+    """Concrete: plant a file where a traversal would land and prove it stays
+    unreachable."""
+    series_dir = episode.dir.parent.parent
+    (series_dir / "series.txt").write_text("SECRET", encoding="utf-8")
+    with pytest.raises(C.CorpusError):
+        C.document_text(episode, "../../../series")
+
+
+def test_verify_reports_everything_missing_when_the_corpus_dir_is_gone(episode):
+    import shutil
+
+    C.write_document(episode, "one", url="https://blog.google/x")
+    C.write_document(episode, "two", url="https://venturebeat.com/y")
+    manifest = (episode.sources_dir / C.MANIFEST_NAME).read_text(encoding="utf-8")
+    shutil.rmtree(episode.sources_dir)
+    episode.sources_dir.mkdir()
+    (episode.sources_dir / C.MANIFEST_NAME).write_text(manifest, encoding="utf-8")
+    assert C.verify(episode) == [
+        ("missing", "blog-google"),
+        ("missing", "venturebeat-com"),
+    ]
