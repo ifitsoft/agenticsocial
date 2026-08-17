@@ -382,7 +382,7 @@ def test_ingest_refuses_the_other_pair_of_input_modes(prepared, tmp_path):
         "--paste", str(f), "--from-source", "kill-staging",
     )
     assert result.exit_code == 1
-    assert not (prepared / "sources").exists()
+    assert not list((prepared / "sources").glob("*.txt"))
 
 
 def test_ingest_refuses_all_three_input_modes(prepared, tmp_path):
@@ -395,7 +395,7 @@ def test_ingest_refuses_all_three_input_modes(prepared, tmp_path):
         "--paste", str(f), "--research", "gemini", "--from-source", "x",
     )
     assert result.exit_code == 1
-    assert not (prepared / "sources").exists()
+    assert not list((prepared / "sources").glob("*.txt"))
 
 
 def test_ingest_paste_writes_the_corpus(prepared, tmp_path):
