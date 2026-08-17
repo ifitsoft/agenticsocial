@@ -318,8 +318,13 @@ def test_beats_are_contiguous_and_start_at_zero(series):
 
 
 def test_total_sec_is_the_last_end_not_a_sum(series):
-    """Deriving the total from the last beat's end keeps the schema neutral
-    about overlap, so adding tracks later does not change this contract."""
+    """Documents shape, and cannot currently fail.
+
+    While beats are contiguous and non-overlapping, `sum(hold)` and
+    `beats[-1]["end"]` are provably equal, so no mutant distinguishes them. It
+    is kept because deriving the total from the last end is what lets tracks be
+    added later without changing the timing contract — see the Phase 1.5 plan.
+    """
     ep = create_episode(series, "2026-08-14")
     _script(ep, THREE)
     plan = build_plan(series, load_episode(series, "2026-08-14"))
@@ -394,3 +399,34 @@ def test_write_plan_names_the_file_after_the_format(series):
     _script(ep, THREE)
     path = write_plan(series, load_episode(series, "2026-08-14"))
     assert path == ep.out_dir / "plan-vertical.json"
+
+
+def test_resolved_times_are_rounded_not_raw_floats(series):
+    """0.1 + 0.2 arithmetic must not reach a file whose purpose is diffability.
+    Kills the mutant that drops round(start/end, 3)."""
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE, pace=1.1)
+    for b in build_plan(series, load_episode(series, "2026-08-14"))["beats"]:
+        for key in ("hold", "start", "end"):
+            assert b[key] == round(b[key], 3), (key, b[key])
+
+
+def test_resolved_times_are_rounded_under_an_accumulating_pace(series):
+    """The sibling above is VACUOUS at pace 1.1: `hold` is itself rounded, and
+    0.0 + 3.85 + 3.3 + 4.4 happens to land on exactly representable sums, so
+    dropping round(start/end, 3) leaves it green (verified by mutant). Noise only
+    escapes when the running total is not representable — pace 1.15 gives
+    7.4750000000000005. This is the test that kills that mutant.
+    """
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, THREE, pace=1.15)
+    for b in build_plan(series, load_episode(series, "2026-08-14"))["beats"]:
+        for key in ("hold", "start", "end"):
+            assert b[key] == round(b[key], 3), (key, b[key])
+
+
+def test_a_beat_shorter_than_one_frame_is_refused(series):
+    ep = create_episode(series, "2026-08-14")
+    _script(ep, "beats:\n  - type: statement\n    text: blink\n    hold: 0.01\n")
+    with pytest.raises(PlanError, match="one frame"):
+        build_plan(series, load_episode(series, "2026-08-14"))

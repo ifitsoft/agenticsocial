@@ -104,6 +104,11 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
             )
         b = _statement(raw, i, where)
         hold = round(b["hold"] * pace, 3)
+        if round(hold * FPS) < 1:
+            raise PlanError(
+                f"{where}: beat {i} lasts {hold}s at pace {pace}, under one frame "
+                f"at {FPS}fps — it would not appear in the render"
+            )
         start, end = round(at, 3), round(at + hold, 3)
         b.update(
             {
