@@ -6,8 +6,10 @@ from typing import Optional
 import typer
 
 from ..workspace import Workspace, WorkspaceError
+from . import render as render_mod
 from .episode import create_episode, episode_ids, load_episode
 from .models import EpisodeError, SeriesError
+from .plan import PlanError
 from .series import load_series, scaffold_series, series_slugs
 
 series_app = typer.Typer(help="Manage video series.", no_args_is_help=True)
@@ -142,3 +144,25 @@ def video_list(
             typer.echo(f"{ep_id}  {load_episode(s, ep_id).status.value}")
         except EpisodeError as e:
             typer.secho(f"{ep_id}  [unreadable]  {e}", fg=typer.colors.YELLOW)
+
+
+@video_app.command("preview")
+def video_preview(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    probe: bool = typer.Option(False, "--probe", help="one frame per beat, no video"),
+) -> None:
+    """Render an episode to video. Does NOT change its status — the gated
+    `render` command arrives with the approval workflow."""
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    try:
+        s = load_series(ws, series)
+        ep = load_episode(s, episode)
+        out = render_mod.preview(s, ep, probe=probe)
+    except (SeriesError, EpisodeError, PlanError, render_mod.RenderError) as e:
+        raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot write output: {e}")
+    typer.echo(f"wrote {out}")

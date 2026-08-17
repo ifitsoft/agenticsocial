@@ -6,6 +6,7 @@
  *   node render.mjs --day 2026-08-14 --pace 1.05  → override the read-speed knob
  *   node render.mjs --plan <plan.json>       → render a resolved plan instead
  *   node render.mjs --plan <plan.json> --out <dir>  → frames elsewhere
+ *   --out also relocates --probe's frames, so probes land beside their episode
  *
  * --plan JSON.parses the plan and writes engine/.plan.js for the page, because
  * fetch and ES modules are both CORS-blocked over file://.
@@ -86,7 +87,7 @@ if (at !== null) {
   await shoot(at, p);
   console.log(p);
 } else if (probe) {
-  const dir = join(HERE, 'probe');
+  const dir = outDir || join(HERE, 'probe');
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
   // sample past the midpoint of every scene — that is where a layout bug shows
