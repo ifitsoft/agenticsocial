@@ -29,10 +29,49 @@ function applyPlanDesign(design) {
   }
 }
 
+/* Prose fields are AUTHORED TEXT, not markup.
+ *
+ * `P()` sets innerHTML, so before this every prose field was parsed as HTML:
+ * "The model is <thinking> about it" rendered as "The model is  about it" — the
+ * word did not break, it VANISHED, and nothing errored. Phase 5 verifies a
+ * claim against script.yaml's bytes, so that is a verification defect: the
+ * check passes while the frame shows different words.
+ *
+ * The vocabulary is closed, not absent. Spec §7.1 gives `body` the field
+ * `text` (bold via `**`); `**bold**` is the whole of it. A script.yaml is
+ * written by an agent against a source, so its markup surface has to be
+ * something this file grants, not something Chromium happens to accept.
+ *
+ * The ORDER is the trick, and it only works one way round: escape first, then
+ * make the tag. Convert `**` first and the escape pass eats the `<b>` you just
+ * built, so the reader sees the tag as literal text.
+ *
+ * `jumpChart.shown` is exempt — it is a documented HTML override and
+ * content/2026-08-14.js relies on `<s>34.4</s> &rarr; 43.6`.
+ */
+function escapeHTML(t) {
+  return String(t)
+    .replace(/&/g, '&amp;') /* first, or the escapes below get double-escaped */
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function proseHTML(t) {
+  /* [\s\S] not . — YAML folds long strings, so a `**…**` an agent wrote
+   * routinely arrives with a newline inside it. Lazy, so `**a** and **b**`
+   * is two bold runs rather than one that swallows the middle. */
+  return escapeHTML(t).replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>');
+}
+
+/* The prose counterpart of P(): use it for every operator-authored field. */
+function prose(t) {
+  return { html: proseHTML(t) };
+}
+
 function buildStatement(b) {
   return function () {
-    if (b.kicker) E('div', 'kicker', P(b.kicker));
-    var h = E('h1', null, P(b.text));
+    if (b.kicker) E('div', 'kicker', prose(b.kicker));
+    var h = E('h1', null, prose(b.text));
     rise(h, 0.22, { stag: 0.045 });
   };
 }
