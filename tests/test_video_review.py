@@ -596,12 +596,107 @@ def test_review_keeps_a_multiline_beat_on_one_row(ws, series):
     assert "two" in rows[0]
 
 
+MAX_COLS = 100
+
+
 def test_review_truncates_a_very_long_beat(ws, series):
     """precondition: readability. A 600-character body must not wrap the table
     into unreadability."""
     episode(series, [{"type": "statement", "hold": 3.0, "text": "x" * 600}])
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
-    assert max(len(ln) for ln in out.splitlines()) < 120
+    assert max(len(ln) for ln in out.splitlines()) <= MAX_COLS
+
+
+def test_a_long_source_cannot_widen_the_table(ws, series):
+    """precondition: readability, found by running Step 5 for real. The first
+    twelve-beat output was 156 columns wide because `[src: ...]` was appended
+    AFTER an already-full text column. Every row is one screen line or the
+    table stops being a table — which is the whole reason it exists."""
+    episode(
+        series,
+        [
+            {
+                "type": "statement",
+                "act": "cold-open",
+                "hold": 3.0,
+                "text": "x" * 600,
+                "src": "www.example.com/a/very/long/path/to/an/article?utm=1",
+            }
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    assert max(len(ln) for ln in out.splitlines()) <= MAX_COLS
+
+
+@pytest.mark.parametrize("beat", [{"type": "title"}, {"type": "signoff", "text": ""}])
+def test_a_beat_with_nothing_to_say_still_names_itself(ws, series, beat):
+    """precondition: `title` and `signoff` are the two types whose fields are
+    all optional, so they are the two that can summarise to nothing. A blank
+    text column reads as a broken row; the type name reads as a card. Found by
+    the sweep: with per-summariser fallbacks the generic one was unreachable,
+    and unreachable code is code no test can be wrong about."""
+    episode(series, [{"hold": 3.0, **beat}])
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    row = [ln for ln in out.splitlines() if re.match(r"^\s*!?\s+0\s", ln)][0]
+    assert f"({beat['type']})" in row
+
+
+def test_the_total_is_scaled_once_not_per_beat(ws, series):
+    """precondition: R1 says `sum(hold) * pace`, and that is deliberately NOT
+    how build_plan computes total_sec — the plan rounds every beat to 3dp
+    because frame numbers come off it. Twelve 1.0s holds at pace 0.3333 is
+    3.996s the plan's way and 4.0s this way. The duration rule is written
+    against this one, so Phase 7 must gate on this one.
+
+    Found by the sweep: every other test in this file uses holds whose product
+    is exact to 3dp, so both formulas agreed and the difference was invisible.
+    """
+    check = runtime(series, ws, statements([1.0] * 12), pace=0.3333)
+    assert check.total_sec == pytest.approx(4.0)
+
+
+def test_the_margin_marks_only_the_unrenderable_rows(ws, series):
+    """precondition: R4 + M7. The footer counts them; the margin says WHICH.
+    A `!` on every row, or on none, is the same amount of information."""
+    episode(
+        series,
+        [
+            {"type": "statement", "hold": 3.0, "text": "this one renders"},
+            {"type": "quote", "hold": 3.0, "text": "this one", "attribution": "does not"},
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    rows = [ln for ln in out.splitlines() if re.match(r"^\s*!?\s+\d+\s", ln)]
+    assert len(rows) == 2
+    assert "!" not in rows[0]
+    assert rows[1].lstrip().startswith("!")
+
+
+def test_the_whole_report_respects_the_width(ws, series):
+    """precondition: readability, and the second thing the real Step 5 run
+    found. Fixing the table left the "cannot be rendered yet" footer at 156
+    columns — nine type names and their counts on one line. Every line of the
+    report is a line, not just the table's."""
+    episode(series, one_of_each())
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    widest = max(out.splitlines(), key=len)
+    assert len(widest) <= MAX_COLS, widest
+
+
+def test_the_source_column_aligns_across_rows(ws, series):
+    """precondition: readability. An approver scans the src column down the
+    page; a ragged one has to be read row by row."""
+    episode(
+        series,
+        [
+            {"type": "statement", "hold": 3.0, "text": "short", "src": "blog.google"},
+            {"type": "statement", "hold": 3.0, "text": "x" * 200, "src": "reuters"},
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    rows = [ln for ln in out.splitlines() if re.match(r"^\s*!?\s+\d+\s", ln)]
+    assert len(rows) == 2
+    assert rows[0].index("[blog.google]") == rows[1].index("[reuters]")
 
 
 def test_review_shows_the_act_of_each_beat(ws, series):

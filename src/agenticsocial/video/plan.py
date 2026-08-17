@@ -24,6 +24,7 @@ It only ever READS the script — `script.yaml` bytes are load-bearing for
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..workspace import atomic_write
@@ -31,6 +32,7 @@ from .models import Episode, Series
 from .script import (
     DEFAULT_HOLD,
     RENDERABLE,
+    Script,
     ScriptError,
     load_script_with_digest,
     validate_acts,
@@ -49,13 +51,79 @@ __all__ = [
     "SUPPORTED_BEATS",
     "FORMATS",
     "PlanError",
+    "RuntimeCheck",
     "build_plan",
+    "check_runtime",
     "write_plan",
 ]
 
 
 class PlanError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class RuntimeCheck:
+    """Is this episode the length the series asks for?
+
+    Frozen per D-062. Phase 7's `approve` refuses on this object, and a verdict
+    a caller can edit after the fact is not a verdict.
+
+    `delta` is signed — `total - target`. An operator needs to know whether to
+    cut or to add, and `abs()` here would make them work it out again.
+    """
+
+    total_sec: float
+    target_sec: int
+    tolerance_sec: int
+    within: bool
+    delta: float
+
+
+def check_runtime(script: Script, series: Series) -> RuntimeCheck:
+    """Total runtime against `[runtime]` in series.toml. Reads and writes no files.
+
+    Total is `sum(hold) * pace` — the authored holds scaled once at the end,
+    not per beat. That is deliberately NOT how `build_plan` computes
+    `total_sec`: the plan rounds each beat to 3dp because frame numbers derive
+    from it, so the two can disagree in the third decimal. This is the number
+    the duration rule is written against, and it is the one Phase 7 must gate
+    on.
+
+    Both totals are rounded to 3dp before comparing, because R2's boundary is
+    INCLUSIVE and binary floats make inclusivity accidental: eight 16.0s holds
+    sum to 128.00000000000003 on some paths, and a `<=` against an unrounded
+    sum would fail an episode that hits the documented bound exactly.
+
+    D-063 — the freshness question. This function deliberately does NOT re-read
+    series.toml. It is a computation over two values, not a gate: it decides
+    nothing and writes nothing, so there is no moment for a stale read to be
+    exploited. Re-reading from `series.dir` would also buy almost nothing —
+    the path comes from the same object the value did, so a caller who can
+    forge one can forge the other; it would only narrow staleness, not
+    forgery, while making a pure function do IO.
+
+    The guarantee therefore has to live at the gate, not here. When Phase 7
+    builds `approve`, it must load series.toml and script.yaml ITSELF,
+    immediately before the transition, in the same function that performs the
+    write — the way `episode.set_status` re-reads the status it gates on. A
+    gate that accepts a `Series` parameter from its caller is the fourth
+    bypass, whatever this function does internally. See the Phase 3 Task 2
+    report.
+    """
+    total = round(sum(beat.hold for beat in script.beats) * script.pace, 3)
+    delta = round(total - series.target_sec, 3)
+    return RuntimeCheck(
+        total_sec=total,
+        target_sec=series.target_sec,
+        tolerance_sec=series.tolerance_sec,
+        # `<=`, not `<`: the bound is inclusive. And `tolerance_sec: 0` is a
+        # legitimate setting meaning "match target_sec exactly" — series.py
+        # allows it on purpose, so it reaches here and must not be read as
+        # "no limit".
+        within=abs(delta) <= series.tolerance_sec,
+        delta=delta,
+    )
 
 
 def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
