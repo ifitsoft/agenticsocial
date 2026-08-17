@@ -70,6 +70,79 @@ const FIXTURE = [
     beat: { type: 'signoff', text: 'Same time tomorrow' },
     expect: ['THE BRIEF', 'Same time tomorrow'],
   },
+  {
+    /* The two strictly verifiable types, with the real 2026-08-14 figures.
+     *
+     * Read as text, not as pixels, and for the same reason as everything above
+     * — but here the text IS the claim. A hash would report "the count-up ended
+     * somewhere else" as an unexplained mismatch; this reports the number.
+     *
+     * `$0.75`, not `0.8`: the symbol and the separator are presentation, and
+     * the digits are the plan's own. The `decimals: 2` is what makes 0.75 legal
+     * at all — without it the engine's Math.round branch would render `1`, and
+     * planbuild.js refuses the beat rather than draw it. */
+    beat: {
+      type: 'kpis',
+      kicker: 'And it costs half of what 3.6 Flash did',
+      items: [
+        { value: 0.75, prefix: '$', label: 'per 1M input tokens', decimals: 2 },
+        { value: 3.75, prefix: '$', label: 'per 1M output tokens', decimals: 2 },
+        { value: 50, unit: '%', label: 'cheaper than 3.6 Flash' },
+      ],
+      src: 'venturebeat',
+      quote: 'priced at $0.75 per million input tokens and $3.75 per million output',
+    },
+    /* Sampled at 0.95 of the hold, not 0.72: the LAST row of a three-row stack
+     * starts counting at 1.59s and takes 1.35s, so at 0.72 the frame shows 47%
+     * on its way to 50 — a number no one authored. See the report's section 6;
+     * this file samples where the count has landed, which is also where a
+     * viewer reads it. */
+    at: 0.95,
+    expect: [
+      '$0.75',
+      '$3.75',
+      'per 1M input tokens',
+      'per 1M output tokens',
+      '50%',
+      'cheaper than 3.6 Flash',
+    ],
+  },
+  {
+    /* The real four rows from content/2026-08-14.js. `shown` is the one field
+     * rendered as HTML, and both halves of that matter here: `<s>` must strike
+     * the old score through rather than print as text, and `&rarr;` must reach
+     * the frame as an arrow. The footnote is the opposite case — plain text,
+     * required, and the thing that stops the chart being read as something this
+     * series measured itself. The footnote fades in after the last bar has
+     * grown, which is past 0.72 of a 3s hold — sample where a viewer would
+     * actually have it. */
+    at: 0.95,
+    beat: {
+      type: 'jumpChart',
+      rows: [
+        { label: 'FrontierCode 1.1', before: 34.4, after: 43.6, shown: '<s>34.4</s> &rarr; 43.6' },
+        { label: 'DeepSWE v1.1', before: 48.0, after: 65.3, shown: '<s>48–49</s> &rarr; 65.3' },
+        { label: 'AutomationBench', before: 17.0, after: 30.4, shown: '<s>17.0</s> &rarr; 30.4' },
+        { label: 'GDP.pdf', before: 22.0, after: 34.0, shown: '<s>22.0</s> &rarr; 34.0' },
+      ],
+      scale: 70,
+      footnote:
+        'Scores as published by Google, on a common 0–70% scale. The DeepSWE v1.1 baseline is reported as a 48–49% range.',
+      src: 'deepmind',
+      quote: 'FrontierCode 1.1 rises from 34.4 to 43.6',
+    },
+    expect: [
+      'FrontierCode 1.1',
+      '34.4→43.6',
+      'DeepSWE v1.1',
+      '48–49→65.3',
+      'AutomationBench',
+      '17.0→30.4',
+      'GDP.pdf',
+      '22.0→34.0',
+      'Scores as published by Google',
+    ],
+  },
 ];
 
 const PLAN = {
@@ -104,13 +177,17 @@ const PLAN_JS = join(HERE, '.plan.js');
 const previousPlan = await readFile(PLAN_JS, 'utf8').catch(() => null);
 await writeFile(PLAN_JS, 'window.__PLAN = ' + JSON.stringify(PLAN) + ';\n', 'utf8');
 
+/* Past the midpoint of each beat, where the text has landed. A fixture may ask
+ * for a later fraction: an eased count-up is still moving well past the
+ * midpoint, and a frame sampled mid-count shows a number no one authored. */
+const sampleAt = (f, i) => i * HOLD + HOLD * (f.at == null ? 0.72 : f.at);
+
 const CASES = [
   { label: 'day path', qs: 'day=2026-08-14', times: [0.5, 3.7, 42.9] },
   {
     label: 'plan path',
     qs: 'plan=1',
-    // past the midpoint of each beat, where the text has landed
-    times: FIXTURE.map((_, i) => i * HOLD + HOLD * 0.72),
+    times: FIXTURE.map(sampleAt),
     content: FIXTURE,
   },
 ];
@@ -188,7 +265,7 @@ for (const c of CASES) {
   if (c.content) {
     for (let i = 0; i < c.content.length; i++) {
       const { beat, expect } = c.content[i];
-      await page.evaluate((tt) => window.__seek(tt), i * HOLD + HOLD * 0.72);
+      await page.evaluate((tt) => window.__seek(tt), sampleAt(c.content[i], i));
       /* #scenes, not #stage. The stage's chrome carries the brand chip ("THE
        * BRIEF") and the date, so a title card that rendered NOTHING still
        * satisfied both of its expectations when read from #stage — the check
