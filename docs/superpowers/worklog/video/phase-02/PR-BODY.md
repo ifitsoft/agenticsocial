@@ -4,7 +4,7 @@ Builds the corpus every later fact-check is checked against, and the ingestion
 that fills it. **Also fixes a bug that could publish an unapproved draft to X.**
 
 **Plan:** `docs/superpowers/plans/2026-08-17-phase-02-ingest.md`
-**Spec:** §4, §5, §11 · **Decisions:** D-059 … D-065
+**Spec:** §4, §5, §11 · **Decisions:** D-059 … D-067
 
 ---
 
@@ -104,7 +104,7 @@ Mutation testing found what reading did not, repeatedly. `corpus.py` had **12 of
 14 mutants survive** on first pass; all seven real ones are now closed.
 `ingest.py`/`cli.py` finished at **18/19 with the survivor proven equivalent**.
 
-Two findings worth naming because neither was visible in the code:
+Four findings worth naming, none of which was visible by reading the code:
 
 - **The suite's no-network guarantee was a convention, not a mechanism.** A
   gate review measured 17 outbound attempts across three mutants; one run took
