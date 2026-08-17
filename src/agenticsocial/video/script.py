@@ -121,6 +121,53 @@ def rows(v: Any) -> str | None:
     return None
 
 
+def jump_rows(v: Any) -> str | None:
+    """`rows[{label, before, after, shown}]` — spec §7.1 as corrected by D-068.
+
+    A jumpChart is a LIST of bars. The engine's signature is
+    `jumpChart(rows, max, d0, parent)` and the only episode that has ever drawn
+    one passes four `[label, from, to, shown]` rows. The spec's original
+    single-bar `before`/`after` could not express that chart at all.
+
+    Rows are mappings here, not the engine's positional tuples: a script is
+    written by hand, and `['GDP.pdf', 22.0, 34.0, '…']` gives an operator no
+    way to notice they have swapped the two numbers. The positional form is
+    `render.mjs`'s problem, at the other end of `plan.json`.
+
+    `before`/`after` are checked as numbers, not as truthy: a benchmark that
+    scored 0 before is a real bar. `shown` is a display override — the engine
+    sets it as `html` — so an empty one deliberately blanks the value cell, the
+    way `sub: ""` blanks a title card's subtitle.
+    """
+    if not isinstance(v, list):
+        return f"must be a list, got {_type_name(v)}"
+    if not v:
+        return "must not be empty"
+    for i, item in enumerate(v):
+        if not isinstance(item, dict):
+            return (
+                f"[{i}] must be a mapping with `label`, `before` and `after`, "
+                f"got {_type_name(item)}"
+            )
+        if "label" not in item:
+            return f"[{i}] needs a `label`"
+        if not _is_filled(item["label"]):
+            return (
+                f"[{i}] `label` must be a non-empty string, got "
+                f"{_type_name(item['label'])}"
+            )
+        for name in ("before", "after"):
+            if name not in item:
+                return f"[{i}] needs a `{name}`"
+            if not _is_number(item[name]):
+                return (
+                    f"[{i}] `{name}` must be a number, got {_type_name(item[name])}"
+                )
+        if "shown" in item and not _is_str(item["shown"]):
+            return f"[{i}] `shown` must be a string, got {_type_name(item['shown'])}"
+    return None
+
+
 def series_pair(v: Any) -> str | None:
     """Exactly two named series — spec §7.1 writes it as `series[2]`."""
     if not isinstance(v, list):
@@ -184,9 +231,9 @@ BEAT_TYPES: dict[str, dict] = {
     },
     "kpis": {"required": {"items": kpi_items}, "optional": {}, "cited": True},
     "jumpChart": {
+        # D-068: `rows`, not a single `before`/`after` pair. See `jump_rows`.
         "required": {
-            "before": number,
-            "after": number,
+            "rows": jump_rows,
             "scale": positive_number,
             "footnote": text,
         },

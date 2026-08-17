@@ -75,10 +75,22 @@ VALID = {
         "src": "venturebeat",
         "quote": "priced at $0.75 per million input tokens and $3.75 per million output",
     },
+    # The real four rows from engine/content/2026-08-14.js, transcribed into the
+    # schema D-068 corrected §7.1 to. `jumpChart(rows, max, d0, parent)` takes a
+    # LIST of bars; the single-bar shape the spec first described cannot express
+    # the only jumpChart that has ever rendered.
     "jumpChart": {
         "type": "jumpChart",
-        "before": 34.4,
-        "after": 43.6,
+        "rows": [
+            {"label": "FrontierCode 1.1", "before": 34.4, "after": 43.6,
+             "shown": "<s>34.4</s> &rarr; 43.6"},
+            {"label": "DeepSWE v1.1", "before": 48.0, "after": 65.3,
+             "shown": "<s>48–49</s> &rarr; 65.3"},
+            {"label": "AutomationBench", "before": 17.0, "after": 30.4,
+             "shown": "<s>17.0</s> &rarr; 30.4"},
+            {"label": "GDP.pdf", "before": 22.0, "after": 34.0,
+             "shown": "<s>22.0</s> &rarr; 34.0"},
+        ],
         "scale": 70,
         "footnote": "Scores as published by Google, on a common 0-70% scale.",
         "src": "deepmind",
@@ -170,6 +182,117 @@ def test_renderable_is_exactly_statement_for_this_phase():
     """precondition: Phase 3 renders one beat type. This pins the gate so that
     widening it is a deliberate edit."""
     assert S.RENDERABLE == frozenset({"statement"})
+
+
+# --- D-068: jumpChart is a list of bars, not one bar ----------------------------
+#
+# Spec §7.1 originally gave jumpChart `before`/`after` at the top level. The
+# engine's signature is `jumpChart(rows, max, d0, parent)` and the only episode
+# that has ever drawn one passes four rows. The schema now follows the code.
+
+
+def _engine_jump_rows():
+    """The literal rows from engine/content/2026-08-14.js, read from the file.
+
+    Read rather than retyped: a hand-copied fixture stops being evidence the
+    moment the episode changes, which is exactly when we need it to complain.
+    """
+    src = Path("engine/content/2026-08-14.js").read_text(encoding="utf-8")
+    call = re.search(r"jumpChart\(\[(.*?)\]\s*,\s*(\d+)\s*,", src, re.S)
+    assert call, "the jumpChart call moved out of 2026-08-14.js"
+    rows = re.findall(
+        r"\[\s*'([^']*)'\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*'([^']*)'\s*\]",
+        call.group(1),
+    )
+    return [
+        {"label": lab, "before": float(a), "after": float(b), "shown": shown}
+        for lab, a, b, shown in rows
+    ], int(call.group(2))
+
+
+def test_the_exemplar_is_the_episode_that_actually_rendered():
+    """precondition: D-068 was found by comparing the schema to the committed
+    episode. If the exemplar drifts from that call, every jumpChart test below
+    is testing a shape nothing renders."""
+    rows, scale = _engine_jump_rows()
+    assert len(rows) == 4, rows
+    assert VALID["jumpChart"]["rows"] == rows
+    assert VALID["jumpChart"]["scale"] == scale
+
+
+def test_the_real_four_row_jumpchart_validates(series):
+    """precondition: D-068. The schema's job is to describe the chart the engine
+    draws; four rows is what it draws."""
+    rows, scale = _engine_jump_rows()
+    beat = dict(VALID["jumpChart"], rows=rows, scale=scale)
+    script = _load(series, [beat])
+    assert [r["label"] for r in script.beats[0].fields["rows"]] == [
+        "FrontierCode 1.1",
+        "DeepSWE v1.1",
+        "AutomationBench",
+        "GDP.pdf",
+    ]
+
+
+def test_jumpchart_no_longer_has_a_top_level_before_or_after():
+    """precondition: D-068. Leaving the single-bar fields required alongside
+    `rows` would make every real chart unwritable; leaving them optional would
+    leave two ways to say the same thing and let a renderer pick the wrong
+    one."""
+    required = S.BEAT_TYPES["jumpChart"]["required"]
+    optional = S.BEAT_TYPES["jumpChart"]["optional"]
+    assert set(required) == {"rows", "scale", "footnote"}
+    assert "before" not in optional and "after" not in optional
+
+
+def test_a_jumpchart_row_may_omit_shown(series):
+    """precondition: the engine does `E('div','jval',{html:shown})` — an
+    undefined `shown` renders an empty value cell, not a crash. It is a display
+    override, not data."""
+    beat = dict(VALID["jumpChart"], rows=[{"label": "x", "before": 1, "after": 2}])
+    script = _load(series, [beat])
+    assert "shown" not in script.beats[0].fields["rows"][0]
+
+
+def test_a_jumpchart_row_may_move_to_zero_or_from_zero(series):
+    """precondition: falsy is not invalid. A benchmark that scored 0 before is a
+    real bar, and `if before:` cannot draw it."""
+    beat = dict(
+        VALID["jumpChart"],
+        rows=[
+            {"label": "from nothing", "before": 0, "after": 30.4},
+            {"label": "to nothing", "before": 12.0, "after": 0},
+        ],
+    )
+    script = _load(series, [beat])
+    assert [r["after"] for r in script.beats[0].fields["rows"]] == [30.4, 0]
+
+
+def test_a_jumpchart_row_may_carry_an_empty_shown(series):
+    """precondition: `shown: ""` deliberately blanks the value cell. Empty is a
+    choice here, the way `sub: ""` is on a title card."""
+    beat = dict(
+        VALID["jumpChart"],
+        rows=[{"label": "x", "before": 1, "after": 2, "shown": ""}],
+    )
+    script = _load(series, [beat])
+    assert script.beats[0].fields["rows"][0]["shown"] == ""
+
+
+def test_a_bad_jumpchart_row_names_its_index(series):
+    """precondition: a twelve-bar chart with one bad row must say WHICH row.
+    "rows is invalid" sends an operator reading all twelve."""
+    beat = dict(
+        VALID["jumpChart"],
+        rows=[
+            {"label": "ok", "before": 1, "after": 2},
+            {"label": "ok too", "before": 1, "after": 2},
+            {"label": "bad", "before": "1", "after": 2},
+        ],
+    )
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    assert "[2]" in str(e.value)
 
 
 @pytest.mark.parametrize("kind", sorted(VALID))
@@ -274,8 +397,7 @@ REQUIRED = [
     ("body", "text"),
     ("list", "items"),
     ("kpis", "items"),
-    ("jumpChart", "before"),
-    ("jumpChart", "after"),
+    ("jumpChart", "rows"),
     ("jumpChart", "scale"),
     ("jumpChart", "footnote"),
     ("dumbbell", "rows"),
@@ -350,11 +472,23 @@ WRONG_TYPE = [
     ("kpis", "items", [{"value": 1, "label": "x", "unit": 0}]),
     ("kpis", "items", [{"value": [], "label": "x"}]),
     ("kpis", "items", ["not a mapping"]),
-    ("jumpChart", "before", ""),
-    ("jumpChart", "before", False),
-    ("jumpChart", "before", []),
-    ("jumpChart", "before", "34.4"),
-    ("jumpChart", "after", False),
+    ("jumpChart", "rows", []),                       # present, a list, no bars
+    ("jumpChart", "rows", 0),
+    ("jumpChart", "rows", ""),
+    ("jumpChart", "rows", False),
+    # the pre-D-068 single-bar shape, and the engine's own positional tuple —
+    # both are the wrong thing to hand `rows`, and both are truthy
+    ("jumpChart", "rows", [{"before": 34.4, "after": 43.6}]),        # no label
+    ("jumpChart", "rows", [{"label": "", "before": 34.4, "after": 43.6}]),
+    ("jumpChart", "rows", [{"label": 0, "before": 34.4, "after": 43.6}]),
+    ("jumpChart", "rows", [{"label": "x", "after": 43.6}]),          # no before
+    ("jumpChart", "rows", [{"label": "x", "before": 34.4}]),         # no after
+    ("jumpChart", "rows", [{"label": "x", "before": "34.4", "after": 43.6}]),
+    ("jumpChart", "rows", [{"label": "x", "before": False, "after": 43.6}]),
+    ("jumpChart", "rows", [{"label": "x", "before": 34.4, "after": True}]),
+    ("jumpChart", "rows", [{"label": "x", "before": 34.4, "after": ""}]),
+    ("jumpChart", "rows", [{"label": "x", "before": 0, "after": 1, "shown": 0}]),
+    ("jumpChart", "rows", [["FrontierCode 1.1", 34.4, 43.6, "…"]]),  # engine tuple
     ("jumpChart", "scale", 0),
     ("jumpChart", "scale", False),
     ("jumpChart", "scale", -70),
