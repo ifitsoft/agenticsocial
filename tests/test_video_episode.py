@@ -217,3 +217,152 @@ def test_a_rejected_transition_does_not_touch_the_file(series):
         set_status(ep, Status.RENDERING)
     assert ep.script_path.read_text(encoding="utf-8") == before
     assert ep.status is Status.DRAFT
+
+
+# --- document 2 is never parsed, never rewritten, never lost -------------------
+# Task 3 substituted {"beats": []} for any document 2 that was not a dict, then
+# wrote the substitute back on the next status change. Reproduced with a bare
+# YAML sequence, which is a natural way to write beats.
+
+
+def _write_script(ep, text):
+    ep.script_path.write_text(text, encoding="utf-8")
+
+
+def test_set_status_preserves_a_sequence_beats_document_verbatim(series):
+    ep = create_episode(series, "2026-08-14")
+    body = "---\nepisode: 2026-08-14\nseries: the-brief\nstatus: draft\n---\n- type: statement\n  text: hello\n"
+    _write_script(ep, body)
+    reloaded = load_episode(series, "2026-08-14")
+    set_status(reloaded, Status.IN_REVIEW)
+    after = ep.script_path.read_text(encoding="utf-8")
+    assert "- type: statement" in after
+    assert "beats: []" not in after
+
+
+def test_set_status_preserves_comments_and_formatting_in_beats(series):
+    """The storyboard skill writes deliberate formatting. Approving must not
+    reflow it, and script_sha256 drift must not fire on churn we caused."""
+    ep = create_episode(series, "2026-08-14")
+    beats = (
+        "beats:\n"
+        "  # the cold open carries the whole episode\n"
+        "  - type: statement\n"
+        '    text: "Google shipped its main agentic model."\n'
+        "\n"
+        "  - type:  kpis          # deliberate double space\n"
+        "    hold:  4.6\n"
+    )
+    _write_script(
+        ep, f"---\nepisode: 2026-08-14\nseries: the-brief\nstatus: draft\n---\n{beats}"
+    )
+    reloaded = load_episode(series, "2026-08-14")
+    set_status(reloaded, Status.IN_REVIEW)
+    after = ep.script_path.read_text(encoding="utf-8")
+    assert after.endswith(beats)
+
+
+def test_set_status_preserves_a_third_document(series):
+    ep = create_episode(series, "2026-08-14")
+    _write_script(
+        ep,
+        "---\nepisode: 2026-08-14\nseries: the-brief\nstatus: draft\n"
+        "---\nbeats: []\n---\nnotes: kept\n",
+    )
+    reloaded = load_episode(series, "2026-08-14")
+    set_status(reloaded, Status.IN_REVIEW)
+    assert "notes: kept" in ep.script_path.read_text(encoding="utf-8")
+
+
+def test_beats_bytes_are_identical_across_a_status_change(series):
+    ep = create_episode(series, "2026-08-14")
+    beats = "beats:\n  - type: statement\n    text: unchanged\n"
+    _write_script(
+        ep, f"---\nepisode: 2026-08-14\nseries: the-brief\nstatus: draft\n---\n{beats}"
+    )
+    before = ep.script_path.read_text(encoding="utf-8").split("\n---\n", 1)[1]
+    reloaded = load_episode(series, "2026-08-14")
+    set_status(reloaded, Status.IN_REVIEW)
+    set_status(reloaded, Status.APPROVED)
+    after = ep.script_path.read_text(encoding="utf-8").split("\n---\n", 1)[1]
+    assert after == before
+
+
+# --- a beats syntax error must not stop you reading the status -----------------
+
+
+def test_status_is_readable_even_when_beats_is_unparseable(series):
+    """D-018 one level down: the diagnostic path must survive broken beats."""
+    ep = create_episode(series, "2026-08-14")
+    _write_script(
+        ep,
+        "---\nepisode: 2026-08-14\nseries: the-brief\nstatus: in_review\n"
+        "---\nbeats: [unclosed\n  : : :\n",
+    )
+    assert load_episode(series, "2026-08-14").status is Status.IN_REVIEW
+
+
+# --- unparseable METADATA raises EpisodeError, never a YAML exception ----------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "---\n: : :\n  - broken\n---\nbeats: []\n",
+        "---\nepisode: [unclosed\n---\nbeats: []\n",
+        "\x00\x01 not yaml at all\n",
+        '---\n"unterminated\n---\nbeats: []\n',
+    ],
+)
+def test_unparseable_metadata_raises_episode_error(series, body):
+    ep = create_episode(series, "2026-08-14")
+    _write_script(ep, body)
+    with pytest.raises(EpisodeError):
+        load_episode(series, "2026-08-14")
+
+
+def test_non_mapping_metadata_raises_episode_error(series):
+    ep = create_episode(series, "2026-08-14")
+    _write_script(ep, "---\n- just\n- a list\n---\nbeats: []\n")
+    with pytest.raises(EpisodeError, match="metadata"):
+        load_episode(series, "2026-08-14")
+
+
+def test_episode_ids_survives_an_unparseable_script(series):
+    """The enumerator must never parse anything. This is the D-018 guarantee
+    Task 4's `except EpisodeError` will rely on."""
+    create_episode(series, "2026-08-14")
+    bad = create_episode(series, "2026-08-15")
+    _write_script(bad, "\x00\x01 : : not yaml [\n")
+    assert episode_ids(series) == ["2026-08-14", "2026-08-15"]
+
+
+def test_resolve_a_healthy_episode_despite_an_unparseable_neighbour(series):
+    create_episode(series, "2026-08-14")
+    bad = create_episode(series, "2026-08-15")
+    _write_script(bad, "\x00\x01 : : not yaml [\n")
+    assert resolve_episode(series, "2026-08-14").id == "2026-08-14"
+
+
+# --- create_episode must not leave a half-built directory ----------------------
+
+
+def test_failed_create_leaves_no_partial_directory(series, monkeypatch):
+    import agenticsocial.video.episode as ep_mod
+
+    def explode(path, text):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ep_mod, "atomic_write", explode)
+    with pytest.raises(OSError):
+        create_episode(series, "doomed")
+    assert not (series.episodes_dir / "doomed").exists()
+    monkeypatch.undo()
+    create_episode(series, "doomed")  # retry must work
+
+
+def test_episode_ids_ignores_a_directory_where_the_script_should_be(series):
+    create_episode(series, "2026-08-14")
+    d = series.episodes_dir / "weird"
+    (d / "script.yaml").mkdir(parents=True)
+    assert episode_ids(series) == ["2026-08-14"]
