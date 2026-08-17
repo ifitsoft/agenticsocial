@@ -5,12 +5,36 @@ import json
 import re
 import shutil
 import tomllib
+import warnings
+from typing import Any
 
 from ..workspace import Workspace, assert_safe_name, atomic_write
 from .models import FORMATS, Series, SeriesError
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 MAX_NAME_LEN = 64
+
+# The design tokens that become CSS custom properties in `engine/planbuild.js`
+# (PLAN_TOKENS). Keep this list identical to that map: a token here that the
+# engine does not set is a pointless rule, and a token the engine sets that is
+# missing here is the whole bug this exists to prevent.
+#
+# `type_family` and `type_scale` are deliberately absent. They are typography,
+# not colour, and a colour rule applied to the whole [design] table would reject
+# the scaffold's own font stack.
+COLOUR_TOKENS = (
+    "surface",
+    "ink",
+    "ink_muted",
+    "accent",
+    "accent_alt",
+    "accent_warm",
+)
+
+# `#RGB` and `#RRGGBB`, case-insensitive — the only two forms the scaffold and
+# both committed episodes write. Named colours and `rgb()` are valid CSS and are
+# still refused: see `_colour_reason`.
+HEX_COLOUR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 # Phase 4 selects voice rules from `register`, so a typo must not silently pick
 # a default. `cadence` is deliberately NOT validated: spec §6 marks it advisory
@@ -132,6 +156,75 @@ def _table(raw: dict, key: str, path) -> dict:
     return value
 
 
+def validate_design(design: dict, where: Any) -> None:
+    """Refuse any `[design]` value that becomes a CSS custom property and is not
+    a colour we write.
+
+    This is the single most important check in the video pipeline, and it is
+    here — in Python, at load and again before `plan.json` is written — rather
+    than in `planbuild.js`, because of how CSS fails. `--blue: 5` is an invalid
+    declaration, and an invalid declaration is DISCARDED: no exception, no
+    console message, no visual marker. The render completes, looks plausible,
+    and is wrong. A crash would be better; the operator would at least know.
+
+    Checking at render time is not equivalent even if it caught the same values:
+    by then the operator has waited out a full frame-by-frame render.
+
+    The types are checked, not the truthiness. `accent = 0`, `accent = false`,
+    `accent = ""` and `accent = []` are all falsy, and a check written
+    `if value and not HEX_COLOUR_RE.match(value)` accepts every one of them —
+    then `str()`s them into the stylesheet. `isinstance(v, str)` also rejects
+    `true` for free, which a bare `isinstance(v, (int, str))` would not.
+    """
+    for token in COLOUR_TOKENS:
+        if token not in design:
+            continue
+        value = design[token]
+        if isinstance(value, str) and HEX_COLOUR_RE.match(value):
+            continue
+        raise SeriesError(
+            f"{where}: [design] {token} must be a hex colour — "
+            f'"#RRGGBB" or "#RGB", either case — got {value!r}. '
+            "Named colours, rgb() and other CSS forms are refused even though "
+            "CSS accepts them: agsoc writes one format, and a second "
+            "silently-accepted one is how a palette drifts. This value becomes "
+            "a CSS custom property, and CSS discards an invalid declaration "
+            "without an error — the render would come out wrong and say nothing."
+        )
+
+
+def check_warm_acts(acts: list, warm_acts: list, where: Any) -> None:
+    """Warn — never refuse — when `warm_acts` names an act nobody declared.
+
+    `warm_acts` entries are act IDs, the same key a beat's `act` uses. Joining
+    on the label instead would mean that rewording an act's display text
+    silently unwires every reference to it, which is the failure this whole
+    task exists to eliminate.
+
+    D-070 keeps the miss soft. Spec §6 marks act metadata advisory, and a series
+    whose only fault is a renamed act must still load — refusing would turn a
+    cosmetic problem into a hard stop on the wrong side. Silence is the other
+    failure: nothing else in the pipeline will ever mention that `accent_warm`
+    is wired to an act that does not exist, so the operator would simply never
+    see the warm treatment and have no thread to pull.
+    """
+    declared = {
+        a["id"] for a in acts if isinstance(a, dict) and isinstance(a.get("id"), str)
+    }
+    unknown = [w for w in warm_acts if w not in declared]
+    if not unknown:
+        return
+    warnings.warn(
+        f"{where}: [structure] warm_acts names "
+        f"{', '.join(repr(u) for u in unknown)}, which no [[structure.acts]] "
+        "declares. warm_acts entries are act ids (the `id` field), not labels. "
+        "Loading anyway — those acts simply will not get the accent_warm "
+        "treatment.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 def scaffold_series(ws: Workspace, slug: str, name: str | None = None) -> Series:
     assert_safe_name(slug, "series slug", SeriesError)
     _validate_slug(slug)
@@ -229,6 +322,9 @@ def load_series(ws: Workspace, slug: str) -> Series:
         isinstance(a, str) for a in warm_acts
     ):
         raise SeriesError(f"{path}: [structure] warm_acts must be a list of strings")
+
+    validate_design(design, path)
+    check_warm_acts(acts, warm_acts, path)
 
     return Series(
         slug=slug,

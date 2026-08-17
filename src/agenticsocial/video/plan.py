@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..workspace import atomic_write
-from .models import Episode, Series
+from .models import Episode, Series, SeriesError
 from .script import (
     DEFAULT_HOLD,
     RENDERABLE,
@@ -37,6 +37,7 @@ from .script import (
     load_script_with_digest,
     validate_acts,
 )
+from .series import validate_design
 
 FPS = 30
 # The renderable gate, named for the callers that already import it. It is
@@ -51,6 +52,7 @@ __all__ = [
     "SUPPORTED_BEATS",
     "FORMATS",
     "PlanError",
+    "act_labels",
     "RuntimeCheck",
     "build_plan",
     "check_runtime",
@@ -60,6 +62,32 @@ __all__ = [
 
 class PlanError(Exception):
     pass
+
+
+def act_labels(series: Series) -> dict[str, str]:
+    """`act id -> display label`, resolved once so `planbuild.js` does no lookup.
+
+    A beat names its act by ID; the label is display text. Resolving here means
+    an operator can reword `label = "03 — Agents"` without silently unwiring
+    every beat that points at act `03`.
+
+    Falls back to the id when an act declares no usable `label`. `validate_acts`
+    requires an `id` and deliberately does not constrain `label` — spec §6's own
+    cold-open row carries `label = ""` — so `""` is a label an operator chose and
+    is kept, while a missing or non-string one is not a label at all and would
+    otherwise be interpolated into the chip as `None` or `5`.
+    """
+    labels: dict[str, str] = {}
+    for act in series.acts:
+        if not isinstance(act, dict):
+            continue
+        act_id = act.get("id")
+        if not isinstance(act_id, str):
+            continue
+        label = act.get("label")
+        # First declaration wins, so a duplicated id resolves deterministically.
+        labels.setdefault(act_id, label if isinstance(label, str) else act_id)
+    return labels
 
 
 @dataclass(frozen=True)
@@ -142,6 +170,16 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
     except ScriptError as e:
         raise PlanError(str(e)) from e
 
+    # Again, having already run in load_series. Not redundant: this is the last
+    # point before plan.json exists on disk and Node is started, and build_plan
+    # takes a `Series` from its caller — the same reason check_runtime's docstring
+    # gives for why a gate must re-verify rather than trust what it was handed.
+    try:
+        validate_design(series.design, series.dir / "series.toml")
+    except SeriesError as e:
+        raise PlanError(str(e)) from e
+
+    labels = act_labels(series)
     pace = script.pace
     beats_out: list[dict] = []
     at = 0.0
@@ -164,6 +202,12 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
             {
                 "type": beat.type,
                 "act": beat.act,
+                # The id is kept alongside the label: Phase 5 anchors claims to
+                # beats, and it must join on the stable key, not on display text.
+                # An undeclared id falls through as its own label rather than
+                # raising — a script written before its series declared acts
+                # still renders (R3 negative, spec §6 "advisory").
+                "act_label": labels.get(beat.act, beat.act),
                 "hold": hold,
                 "start": start,
                 "end": end,

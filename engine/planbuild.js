@@ -55,6 +55,10 @@ function buildFromPlan(plan) {
     if (b.type !== 'statement') {
       throw new Error('unsupported beat type: ' + b.type);
     }
-    scene(b.act || '', b.hold, b.src || '', buildStatement(b));
+    /* act_label is resolved in Python — an act ID joined against
+     * [[structure.acts]]. Do NOT look it up here: this file has no series.toml,
+     * and a second resolution is a second place for the join to drift.
+     * `b.act` is the fallback for a plan written before act_label existed. */
+    scene(b.act_label || b.act || '', b.hold, b.src || '', buildStatement(b));
   }
 }
