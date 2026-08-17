@@ -192,7 +192,15 @@ function seek(t){
     const ap=clamp((t-ACT_START[S.act])/.5);
     actEl.style.opacity=String(EZ.out(ap));
     actEl.style.transform=`translateY(${(1-EZ.out(ap))*14}px)`;
-  }else{actEl.style.opacity='0';}
+  }else{
+    /* Clear, don't just hide. A scene with no act must not inherit the previous
+       scene's label: opacity:0 leaves the stale text and transform in the DOM,
+       so __seek(t) would depend on where you seeked from. Invisible today only
+       because the opacity is exactly 0 — it becomes a wrong-label bug the moment
+       the chip fades instead of snapping, or anything reads the text. */
+    actEl.textContent='';actEl.className='';
+    actEl.style.opacity='0';actEl.style.transform='none';
+  }
 
   /* persistent byline — suppressed on any card that draws its own full-size one */
   const ownByline=!!SC.querySelector('.byline');
@@ -203,7 +211,7 @@ function seek(t){
     tagEl.textContent=S.tag;
     const tp=clamp((lt-.55)/.5)*(lt>S.dur-tail?1-EZ.io((lt-(S.dur-tail))/tail):1);
     tagEl.style.opacity=String(EZ.out(tp));
-  }else{tagEl.style.opacity='0';}
+  }else{tagEl.textContent='';tagEl.style.opacity='0';}
 
   /* Re-insert the scene node so it is rasterised from scratch every seek.
      Chromium composites `filter: blur()` differently on a layer that already has

@@ -44,6 +44,29 @@ for (const c of CASES) {
     const ok = a === b;
     if (!ok) failures++;
     console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${c.label} t=${t}  ${a.slice(0, 12)} ${b.slice(0, 12)}`);
+
+    // The page state must be a pure function of t too, not just the pixels.
+    // An element hidden with opacity:0 still holds its text, so a screenshot is
+    // structurally blind to a scene inheriting the previous scene's act chip or
+    // source tag. Read the text instead.
+    //
+    // Sweep several predecessors rather than just one: a single detour proves
+    // nothing if both arms happen to come from scenes that set the same chrome.
+    // Some scene in the episode has an act chip and some does not, and arriving
+    // from each must land in the same place.
+    const chromeAfter = async (from) => {
+      await page.evaluate((f) => window.__seek(f), from);
+      await page.evaluate((tt) => window.__seek(tt), t);
+      return page.evaluate(() => document.getElementById('stage').innerText);
+    };
+    const seen = [];
+    for (const from of [0, 99, ...c.times]) seen.push([from, await chromeAfter(from)]);
+    const odd = seen.find(([, s]) => s !== seen[0][1]);
+    if (odd) failures++;
+    console.log(
+      `  ${odd ? 'FAIL' : 'ok  '} ${c.label} t=${t}  chrome text` +
+        (odd ? ` differs when reached via t=${odd[0]}` : ' stable from every predecessor'),
+    );
   }
   if (errors.length) {
     failures++;
