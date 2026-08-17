@@ -204,9 +204,9 @@ def post(
             f"{src.id} was interrupted after {len(v.meta.get('posted_ids') or [])} tweets — "
             "rerun with --resume to continue the thread"
         )
-    if v.status is not Status.PUBLISHING:  # resume case is already mid-publish
+    if ws.disk_status(v) is not Status.PUBLISHING:  # resume case is already mid-publish
         try:
-            assert_transition(v.status, Status.PUBLISHING)  # gate check BEFORE touching the keyring
+            assert_transition(ws.disk_status(v), Status.PUBLISHING)  # gate BEFORE the keyring
         except TransitionError as e:
             raise _fail(str(e))
     token = x_auth.load_token()

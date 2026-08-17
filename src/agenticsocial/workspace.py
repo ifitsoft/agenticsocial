@@ -199,36 +199,51 @@ class Workspace:
             if (source.dir / f"{p}.md").exists()
         ]
 
-    def save_variant(self, v: Variant) -> None:
-        v.meta["status"] = v.status.value
-        atomic_write(v.path, frontmatter.dump(v.meta, v.body))
+    def _write_variant(self, v: Variant, meta: dict) -> None:
+        atomic_write(v.path, frontmatter.dump(meta, v.body))
 
-    def set_status(self, v: Variant, target: Status) -> None:
-        """Move a variant to `target`.
+    def disk_status(self, v: Variant) -> Status:
+        """The variant's status as the FILE records it, not as the object claims.
 
-        The gate is checked against the status ON DISK, not `v.status`: a caller
-        holding a stale Variant must not be able to move a variant the file says
-        is a draft. Same reasoning as video/episode.py::set_status (D-045/D-049).
-
-        Only the status is taken from disk. `v.meta` is written as-is, because
-        publish_variant sets `posted_url` in memory and expects this call to
-        persist it — replacing meta with the disk copy would silently break the
-        resume invariant.
+        Callers deciding whether a transition is allowed must use this. Three
+        separate bypasses in this codebase came from reading the object instead
+        (D-045, D-049, D-059).
         """
-        disk_meta, _ = frontmatter.parse(v.path.read_text(encoding="utf-8"))
-        raw = disk_meta.get("status", Status.DRAFT.value)
+        meta, _ = frontmatter.parse(v.path.read_text(encoding="utf-8"))
+        raw = meta.get("status", Status.DRAFT.value)
         try:
-            current = Status(raw)
+            return Status(raw)
         except ValueError:
             raise WorkspaceError(
                 f"{v.path}: invalid status '{raw}' — one of: "
                 f"{', '.join(s.value for s in Status)}"
             )
-        assert_transition(current, target)
+
+    def save_variant(self, v: Variant) -> None:
+        """Persist body and metadata. Does NOT change status.
+
+        `set_status` is the only writer of the status key. A second, ungated
+        writer is what allowed a draft to be published: the skipped gate was
+        laundered by this method stamping `publishing` onto the file.
+        """
+        meta = dict(v.meta)
+        meta["status"] = self.disk_status(v).value
+        self._write_variant(v, meta)
+
+    def set_status(self, v: Variant, target: Status) -> None:
+        """Move a variant to `target`, gated on the status ON DISK.
+
+        Only the status is read from disk; `v.meta` is written as-is, because
+        publish_variant sets `posted_url` in memory and relies on this call to
+        persist it.
+        """
+        assert_transition(self.disk_status(v), target)
         now = datetime.now().astimezone().isoformat(timespec="seconds")
         if target is Status.APPROVED:
             v.meta["approved_at"] = now
         if target is Status.PUBLISHED:
             v.meta["posted_at"] = now
         v.status = target
-        self.save_variant(v)
+        meta = dict(v.meta)
+        meta["status"] = target.value
+        self._write_variant(v, meta)
