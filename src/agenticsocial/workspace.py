@@ -62,7 +62,7 @@ class WorkspaceError(Exception):
 def atomic_write(path: Path, text: str) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
         os.replace(tmp, path)
     except BaseException:
