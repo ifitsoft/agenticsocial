@@ -137,3 +137,66 @@ def test_source_md_without_id_falls_back_to_dirname(ws):
     src = ws.create_source("Has id", created="2026-07-13")
     (src.dir / "source.md").write_text("---\ntitle: Has id\n---\n", encoding="utf-8")
     assert ws.list_sources()[0].id == src.dir.name
+
+
+def test_set_status_gates_on_disk_not_the_in_memory_variant(tmp_path):
+    """D-049: the identical shape as the video gate bypass (D-045). A stale
+    Variant must not be able to move a variant the file says is a draft."""
+    import pytest
+
+    from agenticsocial.models import Status, TransitionError
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+    ws.set_status(v, Status.IN_REVIEW)
+    ws.set_status(v, Status.APPROVED)
+
+    v.path.write_text(
+        v.path.read_text(encoding="utf-8").replace("status: approved", "status: draft"),
+        encoding="utf-8",
+    )
+    with pytest.raises(TransitionError):
+        ws.set_status(v, Status.PUBLISHING)
+    assert ws.load_variant(src, "x").status is Status.DRAFT
+
+
+def test_set_status_preserves_in_memory_meta(tmp_path):
+    """publish_variant sets posted_url in memory and expects set_status to write
+    it. Reading meta back from disk for the gate must not discard that."""
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+    ws.set_status(v, Status.IN_REVIEW)
+    ws.set_status(v, Status.APPROVED)
+    ws.set_status(v, Status.PUBLISHING)
+
+    v.meta["posted_ids"] = ["1", "2"]
+    v.meta["posted_url"] = "https://x.com/i/web/status/1"
+    ws.set_status(v, Status.PUBLISHED)
+
+    reloaded = ws.load_variant(src, "x")
+    assert reloaded.meta["posted_url"] == "https://x.com/i/web/status/1"
+    assert reloaded.meta["posted_ids"] == ["1", "2"]
+    assert reloaded.status is Status.PUBLISHED
+
+
+def test_set_status_rejects_an_unreadable_status_on_disk(tmp_path):
+    import pytest
+
+    from agenticsocial.models import Status
+    from agenticsocial.workspace import Workspace, WorkspaceError
+
+    ws = Workspace.init(tmp_path / "workspace")
+    src = ws.create_source("Kill staging")
+    v = ws.create_variant(src, "x", body="hello")
+    v.path.write_text(
+        v.path.read_text(encoding="utf-8").replace("status: draft", "status: banana"),
+        encoding="utf-8",
+    )
+    with pytest.raises(WorkspaceError, match="banana"):
+        ws.set_status(v, Status.IN_REVIEW)
