@@ -134,7 +134,14 @@ def ingest_research(
         if not text or not text.strip():
             failures.append((url, "no readable text extracted"))
             continue
-        key = _write(episode, text, url=url, title=title)
+        try:
+            key = _write(episode, text, url=url, title=title)
+        except C.CorpusError as e:
+            # Partial failure is the normal case (module docstring), and a
+            # result the corpus cannot key is one of them. Letting it propagate
+            # aborted the whole run, recorded nothing, and left no brief.md.
+            failures.append((url, str(e)))
+            continue
         keys.append(key)
         written.append((key, url, title))
 

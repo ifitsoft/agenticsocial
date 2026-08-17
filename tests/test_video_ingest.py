@@ -251,3 +251,38 @@ def test_defaults_are_the_research_module(episode):
     sig = inspect.signature(I.ingest_research)
     assert sig.parameters["search"].default is None
     assert sig.parameters["extract"].default is None
+
+
+# --- F2: a result the corpus cannot key is recorded, not raised ---------------
+
+
+def test_a_hostless_result_is_recorded_not_raised(episode):
+    """precondition: no failures recorded. F2 — one malformed search result
+    aborted the run through the real binary, leaving a half-written corpus and
+    no brief.md."""
+    res = I.ingest_research(
+        episode, "q",
+        search=fake_search([{"title": "t", "href": "not-a-url", "body": ""},
+                            RESULTS[0]]),
+        extract=fake_extract({"https://blog.google/a": "article a"}),
+    )
+    assert res.keys == ["blog-google"]
+    assert any("not-a-url" in u for u, _ in res.failures)
+
+
+def test_a_hostless_result_that_extracts_is_recorded_not_raised(episode):
+    """precondition: no failures recorded. The brief's F2 test never reaches
+    _write — fake_extract returns None for an unmapped url, so `not-a-url` is
+    already rejected as "no readable text". This one gives it text, so
+    key_for's CorpusError is actually raised, which is the reported defect:
+    it aborted the run and left no brief.md."""
+    res = I.ingest_research(
+        episode, "q",
+        search=fake_search([{"title": "t", "href": "not-a-url", "body": ""},
+                            RESULTS[0]]),
+        extract=fake_extract({"not-a-url": "text with no host",
+                              "https://blog.google/a": "article a"}),
+    )
+    assert res.keys == ["blog-google"]
+    assert any("not-a-url" in u and "host" in r for u, r in res.failures)
+    assert res.brief_path.exists()
