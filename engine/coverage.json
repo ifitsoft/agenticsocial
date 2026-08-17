@@ -1,0 +1,185 @@
+{
+  "series": "The Brief",
+  "conventions": {
+    "id": "Stable kebab-case slug for a story THREAD, not a single day's article. Reuse the same id when the story returns.",
+    "angle": "launch | analysis | incident | deployment | research | culture — what the beat actually did with the story.",
+    "update": "Set true when an entry revisits an id covered on an earlier date. Put the earlier date in updateOf and say what is new in note.",
+    "rule": "Before writing a new episode, run `node coverage.mjs check <keywords>`. A hit means either skip it or run it as an explicit update — never re-tell it as if it were new."
+  },
+  "episodes": [
+    {
+      "date": "2026-08-12",
+      "video": "the-brief-2026-08-12.mp4",
+      "runtimeSec": 119.97,
+      "headline": "anthropic-claude-watermarking",
+      "stories": [
+        {
+          "id": "anthropic-claude-watermarking",
+          "title": "Anthropic adds invisible watermarks to Claude text and C2PA metadata to files",
+          "act": "01 — The headline",
+          "angle": "launch",
+          "entities": ["Anthropic", "Claude", "C2PA", "EU AI Act", "watermarking"],
+          "sources": ["gizmodo.com", "globalnews.ca"],
+          "note": "Text watermark survives copy/paste; signed provenance on PNG/JPG. Anthropic concedes false positives and negatives."
+        },
+        {
+          "id": "xai-grok-4-6",
+          "title": "xAI releases Grok 4.6, aimed at long-running agents",
+          "act": "02 — Models",
+          "angle": "launch",
+          "entities": ["xAI", "Grok"],
+          "sources": ["x.ai"],
+          "note": "Pitched on agentic/interactive work rather than benchmarks."
+        },
+        {
+          "id": "google-amie-video-consults",
+          "title": "Google AMIE (Video) rated on par with primary care physicians in simulated consults",
+          "act": "02 — Models",
+          "angle": "research",
+          "entities": ["Google", "AMIE", "healthcare"],
+          "sources": ["artificialintelligence-news.com"],
+          "note": "Charted as direction-only; source publishes no numeric scores."
+        },
+        {
+          "id": "dyna-2-robot-video-learning",
+          "title": "Dyna-2 teaches robots from human video demonstrations",
+          "act": "02 — Models",
+          "angle": "research",
+          "entities": ["Dyna-2", "robotics"],
+          "sources": ["explainx"],
+          "note": "Covered as a one-line mention only — room to expand if it returns."
+        },
+        {
+          "id": "minimax-h3-local-multimodal",
+          "title": "MiniMax H3 runs multimodal inference locally on consumer Macs",
+          "act": "02 — Models",
+          "angle": "launch",
+          "entities": ["MiniMax", "on-device"],
+          "sources": ["explainx"],
+          "note": "One-line mention only."
+        },
+        {
+          "id": "novo-nordisk-aws-agentic-drug-discovery",
+          "title": "Novo Nordisk names AWS strategic AI partner for agentic drug discovery",
+          "act": "03 — Agents",
+          "angle": "deployment",
+          "entities": ["Novo Nordisk", "AWS", "Bedrock", "drug discovery"],
+          "sources": ["nordiclifescience.org", "biospace.com"],
+          "note": "London co-innovation hub; target is drug target to first human dose."
+        },
+        {
+          "id": "litellm-supply-chain-attack",
+          "title": "LiteLLM supply-chain compromise via hijacked Trivy scanner",
+          "act": "03 — Agents",
+          "angle": "incident",
+          "entities": ["LiteLLM", "Trivy", "Aqua Security", "TeamPCP", "PyPI", "CloudSEK"],
+          "sources": ["devops.com"],
+          "note": "2,500 orgs, 434,000 CI/CD pipelines, 40 minutes of poisoned releases."
+        },
+        {
+          "id": "chattjb-human-powered-chatbot",
+          "title": "ChatTJB: a chatbot with no AI, run by one founder and 10,000 volunteers",
+          "act": "04 — The human one",
+          "angle": "culture",
+          "entities": ["ChatTJB"],
+          "sources": ["fortune.com"]
+        }
+      ]
+    },
+    {
+      "date": "2026-08-14",
+      "video": "the-brief-2026-08-14.mp4",
+      "runtimeSec": 119.99,
+      "headline": "gemini-3-7-flash",
+      "note": "Underlying announcements broke 13 August.",
+      "stories": [
+        {
+          "id": "gemini-3-7-flash",
+          "title": "Google launches Gemini 3.7 Flash — agentic workhorse at half the price",
+          "act": "01 — The headline",
+          "angle": "launch",
+          "entities": ["Google", "Gemini", "Gemini 3.7 Flash", "Antigravity", "AI Studio"],
+          "sources": ["blog.google", "venturebeat.com", "reuters.com", "deepmind.google"],
+          "note": "$0.75/$3.75 per 1M tokens through 2026, doubling in 2027. Benchmarks charted: FrontierCode 1.1, DeepSWE v1.1, AutomationBench, GDP.pdf."
+        },
+        {
+          "id": "gemini-3-7-flash-github-copilot",
+          "title": "Gemini 3.7 Flash selectable in GitHub Copilot",
+          "act": "01 — The headline",
+          "angle": "launch",
+          "entities": ["GitHub", "Copilot", "Gemini 3.7 Flash"],
+          "sources": ["github.blog"],
+          "note": "Enterprise admins must enable a preview policy first."
+        },
+        {
+          "id": "gemini-3-7-flash-specs",
+          "title": "Gemini 3.7 Flash model card: 1,048,576-token input, 65,536 output, built-in tool use",
+          "act": "02 — Core tech",
+          "angle": "analysis",
+          "entities": ["Google DeepMind", "Gemini 3.7 Flash"],
+          "sources": ["deepmind.google", "ai.google.dev"]
+        },
+        {
+          "id": "frontier-release-cadence",
+          "title": "Frontier-class model releases now arrive every few days",
+          "act": "02 — Core tech",
+          "angle": "analysis",
+          "entities": ["AI Release Tracker", "LLM Gateway"],
+          "sources": ["aireleasetracker.com", "llmgateway.io"],
+          "note": "One-line mention only."
+        },
+        {
+          "id": "gemini-spark",
+          "title": "Gemini Spark upgraded to 3.7 Flash; Tasks/Skills/Schedules model",
+          "act": "03 — Agents",
+          "angle": "launch",
+          "entities": ["Google", "Gemini Spark", "Workspace"],
+          "sources": ["i-scoop.eu", "aiagentslibrary.com", "pcmag.com"],
+          "note": "24/7 personal agent across Gmail, Calendar, Drive, Docs, Sheets, Maps."
+        },
+        {
+          "id": "github-trending-coding-agents",
+          "title": "cline and huggingface/ml-intern trending as autonomous coding/ML agents",
+          "act": "03 — Agents",
+          "angle": "culture",
+          "entities": ["cline", "huggingface/ml-intern", "GitHub trending"],
+          "sources": ["github.com/trending"]
+        },
+        {
+          "id": "agent-context-tooling",
+          "title": "MCP context tooling: claude-context, context-mode, 1,000+ curated agent skills",
+          "act": "03 — Agents",
+          "angle": "culture",
+          "entities": ["MCP", "zilliztech/claude-context", "mksglu/context-mode", "VoltAgent/awesome-agent-skills"],
+          "sources": ["github.com/trending"]
+        },
+        {
+          "id": "runtimewire-ai-newsroom",
+          "title": "RuntimeWire AI newsroom beat human reporters on an OpenAI Black Hat disclosure",
+          "act": "04 — In the wild",
+          "angle": "culture",
+          "entities": ["RuntimeWire", "WIRED", "OpenAI", "Black Hat"],
+          "sources": ["wired.com", "runtimewire.com"],
+          "note": "3+ hours ahead, ~6 minutes to publish, ~2,000 stories since May."
+        },
+        {
+          "id": "new-orleans-911-ai-dedup",
+          "title": "New Orleans 911 call deduplication by AI, running since 2023, disclosed 6 August",
+          "act": "04 — In the wild",
+          "angle": "deployment",
+          "entities": ["Carbyne", "Axon", "New Orleans", "911", "311"],
+          "sources": ["explainx.ai"],
+          "note": "Escalates to human on caller involvement, new information, violent crime or medical emergency."
+        },
+        {
+          "id": "nist-agent-governance-gap",
+          "title": "NIST agent interoperability profiles and SP 800-53 overlays still in draft",
+          "act": "04 — In the wild",
+          "angle": "analysis",
+          "entities": ["NIST", "Cloud Security Alliance", "governance"],
+          "sources": ["cloudsecurityalliance.org"]
+        }
+      ]
+    }
+  ]
+}
