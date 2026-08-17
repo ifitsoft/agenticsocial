@@ -71,6 +71,22 @@ def atomic_write(path: Path, text: str) -> None:
         raise
 
 
+_UNSAFE_NAME_CHARS = ("/", "\\", "\x00")
+
+
+def assert_safe_name(name: str, kind: str, error: type[Exception]) -> None:
+    """Reject anything that could address a path outside its parent directory.
+
+    Deliberately separate from any naming rule. Naming governs what agsoc will
+    CREATE; this governs what it will TOUCH. A directory a human named `My-Show`
+    stays loadable; `../../outside` does not, whoever made it. See D-038.
+
+    `error` is the caller's exception type, so each module raises its own.
+    """
+    if not name or name in {".", ".."} or any(c in name for c in _UNSAFE_NAME_CHARS):
+        raise error(f"unsafe {kind} {name!r} — must be a single directory name, not a path")
+
+
 def load_config(ws: "Workspace") -> dict:
     with open(ws.root / "config.toml", "rb") as f:
         return tomllib.load(f)

@@ -6,7 +6,7 @@ import re
 import shutil
 import tomllib
 
-from ..workspace import Workspace, atomic_write
+from ..workspace import Workspace, assert_safe_name, atomic_write
 from .models import FORMATS, Series, SeriesError
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -106,23 +106,6 @@ def render_coverage_json(name: str) -> str:
     )
 
 
-_UNSAFE_CHARS = ("/", "\\", "\x00")
-
-
-def _assert_safe_name(name: str, kind: str, error: type[Exception]) -> None:
-    """Reject anything that could address a path outside its parent directory.
-
-    Deliberately separate from the naming rules. Naming governs what agsoc will
-    CREATE; this governs what it will TOUCH. A directory a human named `My-Show`
-    stays loadable; `../../outside` does not, whoever made it. See D-038.
-    """
-    if not name or name in {".", ".."} or any(c in name for c in _UNSAFE_CHARS):
-        raise error(
-            f"unsafe {kind} {name!r} — must be a single directory name, "
-            "not a path"
-        )
-
-
 def _validate_slug(slug: str) -> None:
     if len(slug) > MAX_NAME_LEN:
         raise SeriesError(
@@ -145,7 +128,7 @@ def _table(raw: dict, key: str, path) -> dict:
 
 
 def scaffold_series(ws: Workspace, slug: str, name: str | None = None) -> Series:
-    _assert_safe_name(slug, "series slug", SeriesError)
+    assert_safe_name(slug, "series slug", SeriesError)
     _validate_slug(slug)
     d = ws.series_dir / slug
     if d.exists() or d.is_symlink():
@@ -164,7 +147,7 @@ def scaffold_series(ws: Workspace, slug: str, name: str | None = None) -> Series
 
 
 def load_series(ws: Workspace, slug: str) -> Series:
-    _assert_safe_name(slug, "series slug", SeriesError)
+    assert_safe_name(slug, "series slug", SeriesError)
     d = ws.series_dir / slug
     path = d / "series.toml"
     if not path.is_file():

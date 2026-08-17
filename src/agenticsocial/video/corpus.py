@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 from ..workspace import atomic_write
 from .models import Episode
-from .series import _assert_safe_name
+from ..workspace import assert_safe_name
 
 MANIFEST_NAME = "_manifest.json"
 SUFFIX = ".txt"
@@ -65,7 +65,7 @@ def read_manifest(episode: Episode) -> dict:
 
 
 def document_text(episode: Episode, key: str) -> str:
-    _assert_safe_name(key, "source key", CorpusError)
+    assert_safe_name(key, "source key", CorpusError)
     path = episode.sources_dir / (key + SUFFIX)
     if not path.is_file():
         raise CorpusError(f"no source {key!r} in this episode's corpus")
@@ -88,7 +88,7 @@ def write_document(
 ) -> str:
     """Write one fetched document and record it. Returns the key used."""
     key = key if key is not None else key_for(url)
-    _assert_safe_name(key, "source key", CorpusError)
+    assert_safe_name(key, "source key", CorpusError)
 
     manifest = read_manifest(episode)
     if key in manifest:
@@ -96,7 +96,7 @@ def write_document(
         while f"{base}-{n}" in manifest:
             n += 1
         key = f"{base}-{n}"
-        _assert_safe_name(key, "source key", CorpusError)
+        assert_safe_name(key, "source key", CorpusError)
 
     raw = text.encode("utf-8")
     episode.sources_dir.mkdir(parents=True, exist_ok=True)
