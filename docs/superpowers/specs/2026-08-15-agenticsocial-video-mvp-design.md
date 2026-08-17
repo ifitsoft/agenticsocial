@@ -386,13 +386,85 @@ adjudicates.
 
 Pure Python. No network, no LLM, milliseconds. Runs on every claim.
 
-1. **Quote presence.** `quote`, whitespace-normalised and case-folded, must occur
-   verbatim in `sources/<src>.txt`. Records the character span, which the UI uses
-   to highlight.
-2. **Numeric containment.** Every number the beat will *render* must appear within
-   `quote`. Comparison is on normalised digit sequences (strip `$`, `,`, spaces;
-   `0.75` matches `$0.75` and `75 cents` does **not**). This is the check that
-   makes fabricated figures structurally impossible.
+1. **Quote presence.** `quote` must occur in `sources/<src>.txt` after
+   **comparison folding** (§8.2.1). Records the character span in the *original*
+   text, which the UI uses to highlight.
+2. **Numeric containment.** Every **claim number** (§8.2.2) the beat will
+   *render* must appear within `quote`. Comparison is on normalised digit
+   sequences (strip `$`, `,`, spaces; `0.75` matches `$0.75` and `75 cents` does
+   **not**). This is the check that makes fabricated figures structurally
+   impossible.
+
+#### 8.2.1 Comparison folding — required, and why it is safe
+
+**Folding applies to the comparison only.** The corpus keeps its bytes, the
+`quote` keeps its bytes, and `sha256` still covers the originals. Nothing on disk
+is normalised — that would break the integrity guarantee §4 rests on.
+
+Fold, in both the quote and the corpus, before matching:
+
+| Class | From | To |
+|---|---|---|
+| Hyphens and dashes | U+2010, U+2011, U+2012, U+2013, U+2014, U+2015, U+2212 | `-` |
+| Single quotes | U+2018, U+2019, U+201B | `'` |
+| Double quotes | U+201C, U+201D, U+201F | `"` |
+| Spaces | U+00A0, U+2007, U+2009, U+202F, and runs of whitespace | a single space |
+| Ellipsis | U+2026 | `...` |
+
+Then case-fold.
+
+**This is not optional polish.** Verified against a real pasted brief: the source
+wrote `V4‑Pro` with U+2011 NON-BREAKING HYPHEN while the beat wrote `V4-Pro` with
+U+002D. Two of six beats were refused for quotes that were genuinely present.
+An LLM authoring beats emits ASCII punctuation; real sources emit typographic
+punctuation. Without folding, **the mechanical pass refuses correct claims
+routinely** — and a gate that cries wolf is one operators learn to override,
+which is D-040's failure mode arriving through the front door.
+
+`unicodedata.normalize("NFKC", …)` **does not do this.** U+2011 is not a
+compatibility variant and survives NFKC unchanged. Verified. The fold must be an
+explicit table.
+
+**Why folding cannot weaken the check:** it touches punctuation and whitespace
+only. **No digit is ever folded**, so no fold can make a wrong number match a
+right one. The risk is entirely one-directional — folding can only turn a false
+refusal into a pass, never a false claim into a verified one.
+
+#### 8.2.2 Claim numbers vs identifier digits
+
+A number that is part of a **name** is not a figure being asserted. `V4-Pro`,
+`Qwen3.8-Max` and `GPT-5.6` contain digits; none of them is a claim about
+quantity, and demanding they appear in the `quote` produces false refusals.
+
+**Rule:** split the beat's rendered text on whitespace. For each token, strip
+surrounding punctuation, a leading currency symbol, and a trailing unit suffix
+(`%`, `K`, `M`, `B`, `T`, `x`). If what remains is **only digits and separators**,
+the token is a **claim number** and must appear in the quote. Otherwise it is an
+identifier and is exempt.
+
+| Token | After stripping | Verdict |
+|---|---|---|
+| `$1.32` | `1.32` | claim number |
+| `1,100%` | `1,100` | claim number |
+| `1M` | `1` | claim number |
+| `95B` | `95` | claim number |
+| `2.4` | `2.4` | claim number |
+| `V4-Pro` | `V4-Pro` | identifier |
+| `Qwen3.8-Max` | `Qwen3.8-Max` | identifier |
+| `GPT-5.6` | `GPT-5.6` | identifier |
+
+**The unit suffix matters and a naive "any letters means identifier" rule gets it
+wrong.** That simpler rule was drafted first and exempted `1M` and `95B` — which
+would let a beat claim `95B active` against a source saying `9B`. Caught by
+running the rule against real text before writing any code.
+
+This keeps the useful cases: in `Gemini 3.7 Flash`, the token `3.7` stands alone
+and **is** checked — a beat saying 3.7 when the source says 3.6 is exactly the
+error the pass exists to catch. Only digits *glued* to letters are exempt.
+
+Both rules were found by running a real operator brief through the pipeline
+before Phase 5 existed. Synthetic fixtures contain neither non-breaking hyphens
+nor product names.
 3. **Entity presence.** Every proper noun in the beat text must appear in `quote`
    or elsewhere in `sources/<src>.txt`.
 

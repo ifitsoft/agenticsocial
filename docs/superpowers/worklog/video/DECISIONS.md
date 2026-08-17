@@ -1441,3 +1441,51 @@ the unfixed tree because the old message already contained both names it
 asserted — the same vacuity class as my interned-small-int defect two tasks ago.
 It noticed, strengthened the assertion to the phrase that actually distinguishes
 the two gates, and left a comment saying why.
+
+## D-071 · SPEC · comparison folding and claim-number extraction — HUMAN DECISION
+Running a real operator brief through the pipeline before Phase 5 exists surfaced
+two defects in spec §8.2 that synthetic fixtures could never have shown.
+
+**1. The source used non-breaking hyphens.** Leader-verified:
+
+```
+beat wrote  : 'raised prices on its flagship V4-Pro model'   U+002D
+source wrote: 'raised prices on its flagship V4‑Pro model'   U+2011
+```
+
+Two of six beats refused for quotes that were genuinely present. **NFKC does not
+fix this** — U+2011 is not a compatibility variant and survives normalisation
+unchanged. Verified.
+
+An LLM authoring beats emits ASCII punctuation; real sources emit typographic
+punctuation. Without folding, the mechanical pass **refuses correct claims
+routinely**, and a gate that cries wolf is one operators learn to override — D-040's
+failure mode arriving through the front door.
+
+Spec §8.2.1 now requires an explicit fold table (hyphen/dash family, both quote
+families, the space family, ellipsis) applied **to the comparison only**. The
+corpus keeps its bytes and `sha256` still covers the originals; normalising on
+disk would break the §4 integrity guarantee.
+
+**Why this cannot weaken the check, and why that argument is load-bearing:**
+folding touches punctuation and whitespace only. **No digit is ever folded.**
+Measured: with folding on, `1,400%`, `$9.32` and `9.4 trillion` are all still
+refused against a source saying `1,100%`, `$1.32` and `2.4 trillion`. The risk is
+strictly one-directional — folding can turn a false refusal into a pass, never a
+false claim into a verified one.
+
+**2. Product names contain digits that are not claims.** `V4-Pro`, `Qwen3.8-Max`,
+`GPT-5.6`. Demanding those digits appear in the quote is a second false-refusal
+generator. §8.2.2 now defines claim numbers by stripping punctuation, a leading
+currency symbol and a trailing unit suffix, then testing for digits-only.
+
+**My first draft of that rule was wrong and my own test caught it.** "A token with
+letters and digits is an identifier" exempts `1M` and `95B` — so a beat could
+claim `95B active` against a source saying `9B`. The unit-suffix strip is what
+makes the rule safe, and it exists because the rule was run against real text
+before any code was written.
+
+**Both defects came from one real brief.** Synthetic fixtures contain neither
+non-breaking hyphens nor product names, and I would have written Phase 5 against
+fixtures. Worth repeating the exercise with operator material before every phase
+that touches text.
