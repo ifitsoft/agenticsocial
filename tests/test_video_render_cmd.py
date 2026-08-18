@@ -502,6 +502,11 @@ def test_rendered_is_terminal(series, fake):
     result = render()
     assert result.exit_code == 1, result.output
     assert status_on_disk(series) == "rendered"
+    assert "terminal" in result.output
+    # And it must not send them to `approve`, which would refuse them for a
+    # second reason. A fix line that names the wrong command costs the reader
+    # the only thing the message was trying to give them.
+    assert "agsoc video approve" not in result.output
 
 
 def test_render_writes_status_only_through_set_status(series):

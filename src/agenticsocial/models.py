@@ -58,6 +58,12 @@ class TransitionError(Exception):
         target: Status,
         table: dict[Status, set[Status]],
     ):
+        # Kept as attributes, not only interpolated: a caller that has to decide
+        # what to SUGGEST needs to know which state it is in. `rendered` is
+        # terminal, and telling that operator to run `approve` sends them to a
+        # command that will refuse them too.
+        self.current = current
+        self.target = target
         allowed = ", ".join(
             s.value for s in _ORDER if s in table[current]
         ) or "none (terminal)"

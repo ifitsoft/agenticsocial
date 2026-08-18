@@ -7,7 +7,7 @@ from typing import Optional
 
 import typer
 
-from ..models import TransitionError
+from ..models import Status, TransitionError
 from ..workspace import Workspace, WorkspaceError
 from . import approve as approve_mod
 from . import claims as claims_mod
@@ -1284,6 +1284,15 @@ def video_render(
             ws, series, episode, fmt=fmt, restart=restart
         )
     except TransitionError as e:
+        # Branching on the state, because one message cannot be right for both.
+        # `rendered` is terminal (D-006) and pointing that operator at `approve`
+        # sends them to a command that will refuse them for a second reason.
+        if e.current is Status.RENDERED:
+            raise _fail(
+                f"{head} — {e}. `rendered` is terminal in the MVP (D-006): the "
+                "file in `out/` is this episode's render, and there is no "
+                "supported way back. A changed story is a new episode"
+            )
         raise _fail(
             f"{head} — {e}. Only an episode a human has approved renders: "
             f"`agsoc video approve {episode} --series {series} --by \"Your Name\"`"
@@ -1350,7 +1359,7 @@ def _echo_rendered(series: str, episode: str, result) -> None:
     typer.secho(f"{series}/{episode} · rendered", fg=typer.colors.GREEN)
     # Not through `_detail`: a wrapped path is a path you cannot copy out of a
     # terminal, and this is the one line an operator will select and paste.
-    typer.echo(f"      file      {result.path}")
+    typer.echo(f"      {'file':<{LABEL_WIDTH}}{result.path}")
     typer.echo(
         _detail(
             "",
@@ -1370,8 +1379,8 @@ def _echo_rendered(series: str, episode: str, result) -> None:
     )
     typer.echo(
         _detail(
-            "not covered",
-            "what DREW these frames was never approved — engine.js, "
+            "scope",
+            "the approval does NOT cover what drew these frames — engine.js, "
             "planbuild.js, scene.html's CSS, the font this machine resolved, "
             "Chromium and ffmpeg are all outside the approval, and the font is "
             "the one that differs between machines. Nobody has looked at this "
