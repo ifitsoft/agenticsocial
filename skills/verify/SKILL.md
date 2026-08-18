@@ -354,20 +354,21 @@ bureaucracy.
 uv run agsoc video judge <episode-id> --series <slug> \
   --claim c-001 \
   --verdict unsupported \
-  --refutation "$(cat /tmp/agsoc-verify/<episode-id>/c-001.refutation.txt)" \
-  --risk "$(cat /tmp/agsoc-verify/<episode-id>/c-001.risk.txt)" \
+  --refutation-file /tmp/agsoc-verify/<episode-id>/c-001.refutation.txt \
+  --risk-file /tmp/agsoc-verify/<episode-id>/c-001.risk.txt \
   --by "refuter-1 (claude-opus, skills/verify)"
 ```
 
-- **Pass the prose through `"$(cat …)"`, not inline.** A refutation about this
-  corpus says things like *the source writes `$1.32 / $3.96 per 1M tokens`* —
-  and `--refutation "…$1.32…"` typed straight into a shell expands `$1` and
-  records `.32`. The verdict would look fine on screen and quote a price that
-  was never written. Command substitution inside double quotes is not re-expanded,
-  so `"$(cat file)"` passes those bytes through exactly, apostrophes, dollars
-  and backticks included.
-- **Omit `--risk` entirely when the reply said `NONE`.** Do not pass an empty
-  string; the CLI refuses a blank one.
+- **Pass a file path, never the prose.** `--refutation-file` and `--risk-file`
+  read the bytes off disk, so no shell ever sees them: `$`, backticks and
+  apostrophes land in the ledger exactly as the refuter wrote them. Typed
+  inline, a refutation saying *the source writes `$1.32 / $3.96 per 1M tokens`*
+  records `.32` — the shell removes `$1` before the CLI exists — and the verdict
+  looks completely normal on screen while quoting a price nobody wrote. The CLI
+  prints a warning when it can see the residue, and it cannot always: `$1M`
+  expands to nothing and leaves none. Use the file flags for every judgement.
+- **Omit `--risk-file` entirely when the reply said `NONE`.** Do not pass an
+  empty file or an empty string; the CLI refuses a blank one.
 - **`--by` names the judge, not you.** Use
   `refuter-<n> (<model>, skills/verify)` where `<n>` is the claim's position in
   this run and `<model>` is the model you actually dispatched. It is the only
@@ -390,12 +391,12 @@ standing, and its residual risk. The claim column shows **whichever verdict
 binds** — a claim pass 1 called `pass` and pass 2 refuted reads as refuted
 there, which is the entire reason this pass exists.
 
-Two lines on that screen are pass 1's and only pass 1's, and they are easy to
-misread as a verdict on your run: the `claims  N pass` tally, and the `! c-0NN ·
-beat N · pass` line under it, which prints the **measurement** even on a claim
-pass 2 has refused. The `pass 2` block four lines below is the one that answers
-your question. (Reported as a finding; the table cell above it already shows the
-binding verdict.)
+**Every verdict on that screen is the one that binds.** The `claims  N …`
+tally, the claim column and each open claim's own line all come from one
+function, so a claim pass 2 refused is counted and printed as `refuted` or
+`unsupported` — never as pass 1's `pass`. Where the two differ, pass 1's word is
+still there, written as `pass 1 pass`, labelled so it reads as a report rather
+than a verdict on your run.
 
 Do not re-run `check` merely because you judged something; `judge` has already
 written the ledger. Re-run it only if the script itself changed — and if it did,
@@ -414,6 +415,28 @@ weights*, *The 1.6T MoE flagship*, or just `$1.32` over `per 1M input tokens`.
 Each of those is a card a viewer looks at alone. A refuter reading one alone is
 reading it the way the medium presents it, and it is telling you something true:
 **that card asserts a price about nobody in particular.**
+
+**Why widening the prompt is not the fix, stated as the thing it would cost.**
+The instinct when twenty cards come back refused for one reason is to give the
+refuter the beat before it — and it works: a refuter that can see the sibling
+supplies *DeepSeek* itself and answers `supported`. That is the failure. The
+wall would disappear without one card changing, and the pass would from then on
+be checking a story you assembled for it rather than the cards a viewer sees.
+Everything in *What must never reach a refuter's prompt* exists to buy the one
+property that makes this pass worth its 24 subagents, and this is the change
+that spends it. The alternative fix — let the human override each one — is
+worse: a 4-in-5 refusal rate on correct work teaches an operator to override
+everything, including the true refusal in the same run.
+
+**The remedy is upstream, and it is written down.** `skills/storyboard` step 4.5
+requires every beat that asserts something to name its subject in its own text,
+with worked before/afters from this exact episode. So a wall of
+"missing subject" `unsupported` verdicts is not a broken pass and not a
+mis-tuned prompt: **it is a script that was written to be watched in order, and
+the fix is a few words per card.** Report it that way. If you find yourself
+editing the prompt template in step 3, stop — you are about to delete the pass
+and leave the screen looking fine, which is the failure this whole skill is
+built to make impossible.
 
 So:
 
@@ -464,7 +487,7 @@ uv run agsoc video check <episode-id> --series <slug>
 uv run python -            # step 2, the worklist
 uv run python -            # step 3, the prompt files
 uv run agsoc video judge <episode-id> --series <slug> --claim <id> --verdict <v> \
-    --refutation "$(cat …)" [--risk "$(cat …)"] --by "refuter-<n> (<model>, skills/verify)"
+    --refutation-file <path> [--risk-file <path>] --by "refuter-<n> (<model>, skills/verify)"
 uv run agsoc video review <episode-id> --series <slug>
 ```
 
