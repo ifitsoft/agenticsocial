@@ -7,7 +7,7 @@ from typing import Optional
 
 import typer
 
-from ..models import TransitionError
+from ..models import Status, TransitionError
 from ..workspace import Workspace, WorkspaceError
 from . import approve as approve_mod
 from . import claims as claims_mod
@@ -1238,19 +1238,199 @@ def _covered_inputs(inputs: dict) -> str:
 def video_preview(
     episode: str,
     series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
-    probe: bool = typer.Option(False, "--probe", help="one frame per beat, no video"),
 ) -> None:
-    """Render an episode to video. Does NOT change its status — the gated
-    `render` command arrives with the approval workflow."""
+    """Render an episode to video WITHOUT the gate. Changes no status.
+
+    It carried a `--probe` flag until Phase 8. `probe` is its own command now:
+    the cheap operation must not be a flag on the fourteen-minute one.
+    """
     ws = _workspace()
     episode = _text(episode, "The episode id")
     series = _text(series, "The series slug")
     try:
         s = load_series(ws, series)
         ep = load_episode(s, episode)
-        out = render_mod.preview(s, ep, probe=probe)
+        out = render_mod.preview(s, ep)
     except (SeriesError, EpisodeError, PlanError, render_mod.RenderError) as e:
         raise _fail(str(e))
     except OSError as e:
         raise _fail(f"cannot write output: {e}")
     typer.echo(f"wrote {out}")
+
+
+@video_app.command("probe")
+def video_probe(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    at: float = typer.Option(
+        None, "--at", help="one frame at t=T seconds, instead of one per beat"
+    ),
+    fmt: str = typer.Option("vertical", "--format", help="output format"),
+) -> None:
+    """Look at the frames — one per beat, or one at `--at T`. No encode (§6).
+
+    This is the honest answer to what an approval does not cover (D-116). The
+    beats, `pace` and the design are signed; `engine.js`, `scene.html`'s CSS,
+    the font this machine resolved, Chromium and ffmpeg are not, and a font
+    substitution changes every frame with every check green. Nothing can extend
+    the approval over the pixels, so looking at them is made cheap instead.
+
+    It moves no status and works at any status: probing is how you decide
+    whether to approve.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    try:
+        s = load_series(ws, series)
+        ep = load_episode(s, episode)
+        out = render_mod.probe(s, ep, fmt=fmt, at=at)
+    except (SeriesError, EpisodeError, PlanError, render_mod.RenderError) as e:
+        raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot write output: {e}")
+    frames = sorted(out.glob("*.png")) if out.is_dir() else [out]
+    typer.secho(f"{series}/{episode} · {len(frames)} frame(s)", fg=typer.colors.GREEN)
+    typer.echo(f"      {'at' if at is not None else 'in':<{LABEL_WIDTH}}{out}")
+    typer.echo(
+        _detail(
+            "note",
+            "nothing moved — a probe reads the script and draws frames. What "
+            "you are looking at is this machine's fonts and this machine's "
+            "Chromium, which is exactly the part no approval covers",
+        )
+    )
+
+
+@video_app.command("render")
+def video_render(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    fmt: str = typer.Option("vertical", "--format", help="output format"),
+    restart: bool = typer.Option(
+        False,
+        "--restart",
+        help="an earlier render was killed: mark it failed and start over",
+    ),
+) -> None:
+    """Render an APPROVED episode to an MP4 (§9, §10).
+
+    Three checks, and they stay three so you are told which thing moved
+    (D-115): the status, the approval against what you authored, and the claim
+    ledger against the corpus. It does not re-run `check` — the ledger on disk
+    is the artifact of record, and a second set of verdicts computed here would
+    be verdicts nobody displayed.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    head = f"{series}/{episode} · NOT rendered"
+    try:
+        result = render_mod.render_episode(
+            ws, series, episode, fmt=fmt, restart=restart
+        )
+    except TransitionError as e:
+        # Branching on the state, because one message cannot be right for both.
+        # `rendered` is terminal (D-006) and pointing that operator at `approve`
+        # sends them to a command that will refuse them for a second reason.
+        if e.current is Status.RENDERED:
+            raise _fail(
+                f"{head} — {e}. `rendered` is terminal in the MVP (D-006): the "
+                "file in `out/` is this episode's render, and there is no "
+                "supported way back. A changed story is a new episode"
+            )
+        raise _fail(
+            f"{head} — {e}. Only an episode a human has approved renders: "
+            f"`agsoc video approve {episode} --series {series} --by \"Your Name\"`"
+        )
+    except render_mod.RenderRefused as e:
+        raise _fail(_refusal(head, e, episode, series))
+    except (SeriesError, EpisodeError, PlanError, verify_mod.VerifyError,
+            render_mod.RenderError) as e:
+        raise _fail(f"{head} — {e}")
+    except OSError as e:
+        raise _fail(f"{head} — cannot write output: {e}")
+    _echo_rendered(series, episode, result)
+
+
+def _refusal(head: str, e: render_mod.RenderRefused, episode: str, series: str) -> str:
+    """One screen per kind. Three answers, three files to open (D-115)."""
+    if e.kind == "interrupted":
+        typer.secho(f"{head} — {e}", fg=typer.colors.RED)
+        return _detail(
+            "fix",
+            "if nothing is running, `agsoc video render "
+            f"{episode} --series {series} --restart` marks the abandoned run "
+            "failed and starts over. A partial render is discarded, not "
+            "resumed: frames are reproducible, so there is nothing in them to "
+            "salvage",
+        )
+    if e.kind == "drift":
+        typer.secho(
+            f"{head} — the approval no longer describes this episode", fg=typer.colors.RED
+        )
+        typer.echo(_detail("why", str(e)))
+        return _detail(
+            "fix",
+            "put the change back, or run `agsoc video check "
+            f"{episode} --series {series}` and approve again",
+        )
+    typer.secho(f"{head} — the check does not describe this script", fg=typer.colors.RED)
+    typer.echo(_detail("why", str(e)))
+    return _detail(
+        "fix", f"run `agsoc video check {episode} --series {series}`, read it, then approve"
+    )
+
+
+def _size(n: int) -> str:
+    return f"{n / 1_000_000:.1f} MB" if n >= 100_000 else f"{n / 1000:.0f} kB"
+
+
+def _echo_rendered(series: str, episode: str, result) -> None:
+    """The success screen, written deliberately (D-116).
+
+    It may say the episode was approved and that nothing the operator authored
+    has changed, because all three checks just passed. It may **not** say or
+    imply that this is what the approver saw: `engine.js`, `planbuild.js`,
+    `scene.html`'s CSS, the resolved font, Chromium and ffmpeg are all outside
+    the approval, and a font substitution changes every frame with every check
+    green.
+
+    This project has overclaimed on the summary line four times (D-106, D-110,
+    D-112, D-113) — always here, always because the summary is written last by
+    someone who already knows the answer. So the last line is not a flourish; it
+    is the part that makes the rest of the screen true.
+    """
+    record = result.record
+    typer.secho(f"{series}/{episode} · rendered", fg=typer.colors.GREEN)
+    # Not through `_detail`: a wrapped path is a path you cannot copy out of a
+    # terminal, and this is the one line an operator will select and paste.
+    typer.echo(f"      {'file':<{LABEL_WIDTH}}{result.path}")
+    typer.echo(
+        _detail(
+            "",
+            f"{_size(record['bytes'])} · {record['runtime_sec']:.1f}s · "
+            f"{record['width']}x{record['height']} · {record['frames']} frames "
+            f"@ {record['fps']}fps",
+        )
+    )
+    approval = record.get("approval") or {}
+    typer.echo(
+        _detail(
+            "approved",
+            f"{approval.get('by')} at {approval.get('at')} — and nothing you "
+            "authored has changed since: the beats, `pace` and series.toml's "
+            "design are the ones that were signed",
+        )
+    )
+    typer.echo(
+        _detail(
+            "scope",
+            "the approval does NOT cover what drew these frames — engine.js, "
+            "planbuild.js, scene.html's CSS, the font this machine resolved, "
+            "Chromium and ffmpeg are all outside the approval, and the font is "
+            "the one that differs between machines. Nobody has looked at this "
+            f"video: `agsoc video probe {episode} --series {series}` puts one "
+            "frame per beat on disk in seconds",
+        )
+    )

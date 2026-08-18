@@ -3,10 +3,13 @@
 A vertical animated-typography brief, one episode per day. 1080×1920, 30fps,
 H.264 / yuv420p, silent, ~120s.
 
-| Episode | File | Runtime |
+Two episodes were made here by hand before the pipeline existed, and they are
+kept as regression fixtures rather than as a workflow:
+
+| Episode | Fixture | Runtime |
 |---|---|---|
-| Wed 12 Aug 2026 | `the-brief-2026-08-12.mp4` | 120s |
-| Fri 14 Aug 2026 | `the-brief-2026-08-14.mp4` | 120s |
+| Wed 12 Aug 2026 | `content/2026-08-12.js` | 120s |
+| Fri 14 Aug 2026 | `content/2026-08-14.js` | 120s |
 
 Bylined "Ali Abdukarim" — persistently at bottom-right, and full-size on the title
 and sign-off cards. The date appears in the filename, in the top-right chip on
@@ -17,56 +20,93 @@ every frame, on the title card, and in the file's embedded metadata.
 ```
 scene.html            the stage — styles + markup only, never changes per day
 engine.js             the render engine — seek(t), animation primitives, charts
-content/YYYY-MM-DD.js one file per episode: meta() + one scene() per beat
+planbuild.js          builds a scene from a plan.json beat
+content/YYYY-MM-DD.js the two hand-written fixture episodes
 coverage.json         the ledger of what has been covered
 coverage.mjs          query the ledger
-render.mjs            Playwright frame renderer
+render.mjs            Playwright frame renderer — takes a plan.json
+determinism.test.mjs  __seek(t) is pure, and every builder draws its text
+network.test.mjs      the render page cannot reach the network
+coverage.test.mjs     the ledger check cannot be talked past
 ```
 
 `window.__seek(t)` positions **every** element purely as a function of `t` — no CSS
 keyframes, no `Date.now()`, no randomness. So the render is reproducible and any
 single frame can be re-created for inspection.
 
-## Making a new day
+## The supported path
 
-**1. Check for repeats first.** This is the point of the ledger — the series should
-never re-tell a story as if it were new.
+**`agsoc video render <episode>` is how a video gets made.** It is the only path
+that passes the approval gate, and nothing in this directory is a shortcut around
+it. The pipeline is:
+
+```
+agsoc video new / ingest      the episode and its verification corpus
+   → the storyboard skill     writes script.yaml, stops at in_review
+agsoc video check             two-pass verification → claims.json
+agsoc video approve --by …    THE GATE — a named human
+agsoc video render            approved + undrifted + fresh ledger → out/*.mp4
+agsoc video probe   [--at T]  one frame per beat, or one at T — no encode
+```
+
+`render` resolves every time in the episode into a `plan.json` (Python does the
+arithmetic, D-007) and hands that to `render.mjs`, which renders frames and knows
+nothing about pacing, dates or content files. Then ffmpeg encodes, the frames are
+deleted, and the MP4 lands in the episode's `out/`.
+
+`render.mjs` refuses to run without `--plan`. Run it by hand only when you are
+debugging the renderer itself:
+
+```sh
+node render.mjs --plan <plan.json> --out <dir>            # every frame
+node render.mjs --plan <plan.json> --out <dir> --probe    # one frame per beat
+node render.mjs --plan <plan.json> --out <dir> --at 34    # one frame at t=34s
+```
+
+### What retired, and what did not
+
+`render.mjs --day <date>` used to render `content/<date>.js` straight to
+frames. **That path is gone.** It was a second route from an episode to an MP4,
+and it passed neither `check` nor `approve` — nothing it produced had been
+verified against a corpus or signed by a human.
+
+**`content/2026-08-12.js` and `content/2026-08-14.js` stay**, and stay exercised.
+They are the engine's only realistic regression fixtures — two complete episodes,
+every builder, both chart forms — and `determinism.test.mjs` drives them through
+`scene.html?day=2026-08-14`, which is also how you scrub the slider in a browser
+while working on layout. They are fixtures now, not a way to publish.
+
+## Coverage
+
+The series must never re-tell a story as if it were new. `coverage.json` is the
+ledger, and it is checked before an episode is written, not after:
 
 ```sh
 node coverage.mjs check gemini "supply chain" copilot
 ```
 
-A hit means: drop it, or cover it as an explicit **update** that says what changed.
-When you do run an update, add the entry with the *same* `id`, plus
-`"update": true` and `"updateOf": "<earlier date>"`.
+A hit means: drop the story, or cover it as an explicit **update** that says what
+changed — same `id`, plus `"update": true` and `"updateOf": "<earlier date>"`.
+Record one entry per story after a render.
 
-**2. Write `content/<YYYY-MM-DD>.js`.** Copy the previous day as a skeleton. It sets
-`meta({...})` then calls `scene(act, duration, sourceTag, build)` once per beat.
-Available inside `build`: `E` (create element), `rise` (masked word rise), `fade`,
-`draw` (rule), `count`, `kpis` (headline figures), `jumpChart` (before→after), and
-`an` for anything custom.
+## Working on the engine
 
-**3. Preview without rendering.** Open `scene.html?day=2026-08-14` and drag the
-slider. This is the fast way to check copy and layout.
+Open `scene.html?day=2026-08-14` in a browser and drag the slider: no render, no
+Playwright, instant feedback on layout and copy. `scene.html?plan=1` does the same
+for the plan written by the last `agsoc video render` or `probe`.
 
-**4. Probe, then render.**
+Three tests, all offline, all run by hand:
 
 ```sh
-node render.mjs --day 2026-08-14 --probe     # one frame per scene into probe/
-node render.mjs --day 2026-08-14             # all frames into frames/
-ffmpeg -y -framerate 30 -i frames/%05d.png \
-  -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart \
-  -metadata title="The Brief — 14 August 2026" \
-  -metadata artist="Ali Abdukarim" \
-  -metadata date="2026-08-14" \
-  -metadata comment="Stories: <story ids from coverage.json>" \
-  the-brief-2026-08-14.mp4
-rm -rf frames                                 # ~2.5 GB of intermediate PNGs
+node determinism.test.mjs   # __seek(t) is pure — the load-bearing invariant
+node network.test.mjs       # the page cannot reach the network
+node coverage.test.mjs      # the ledger check cannot be talked past
 ```
 
-`node render.mjs --day 2026-08-14 --at 42.9` renders a single frame for inspection.
-
-**5. Record it in `coverage.json`** — one entry per story, with a stable `id`.
+`determinism.test.mjs` ships green in the same commit as any engine change. That
+is not a style rule: a frame that depends on anything but `t` cannot be
+re-created for inspection, and inspection is the only thing that covers the
+pixels (D-116).
 
 ## Reproducibility
 
@@ -88,8 +128,9 @@ speed, it just holds longer before cutting. Pick it so the total lands near 120s
 pace ≈ 120 / (sum of the episode's scene durations)
 ```
 
-`render.mjs --pace 1.05` overrides it for one render, and `scene.html?pace=1.05`
-scrubs it in a browser without rendering anything.
+`agsoc video review` writes the derived `pace` into the episode, and it is one of
+the values the approval covers (D-116). `scene.html?pace=1.05` scrubs it in a
+browser without rendering anything.
 
 ## Adding music or voiceover
 
