@@ -482,26 +482,43 @@ def test_residual_risk_survives_onto_a_refused_claim_too(series):
 # --- M7, M8, M11: malformed, unjudged, and the evidence -----------------------------
 
 
+DELETE = object()
+
+# Each case is an override on a block that is otherwise well formed, so that the
+# check under test is the one that fires. Written as a full valid base rather
+# than as hand-built fragments because the first version of this table left
+# three cases refused by an EARLIER check than the one they were written for —
+# and a mutant removing the check they named survived the test that named it.
 MALFORMED = {
-    "not-a-dict": "supported",
-    "no-verdict": {"attempted_refutation": REFUTATION},
-    "unknown-verdict": {"verdict": "ok", "attempted_refutation": REFUTATION},
-    "empty-refutation": {"verdict": "supported", "attempted_refutation": "  "},
-    "missing-refutation": {"verdict": "supported"},
-    "refutation-not-a-string": {"verdict": "supported", "attempted_refutation": 1},
-    "no-author": {"verdict": "supported", "attempted_refutation": REFUTATION},
-    "claims-reproducible": {
-        "verdict": "supported",
-        "attempted_refutation": REFUTATION,
-        "reproducible": True,
-    },
-    "risk-not-a-string": {
-        "verdict": "supported",
-        "attempted_refutation": REFUTATION,
-        "residual_risk": 7,
-    },
-    "empty-block": {},
+    "no-verdict": {"verdict": DELETE},
+    "unknown-verdict": {"verdict": "ok"},
+    "empty-refutation": {"attempted_refutation": "  "},
+    "missing-refutation": {"attempted_refutation": DELETE},
+    "refutation-not-a-string": {"attempted_refutation": 1},
+    "no-author": {"judged_by": DELETE},
+    "blank-author": {"judged_by": "   "},
+    "claims-reproducible": {"reproducible": True},
+    "no-honesty-flag": {"reproducible": DELETE},
+    "risk-not-a-string": {"residual_risk": 7},
 }
+
+
+def malformed_block(series, name):
+    """A well-formed block with exactly one thing wrong with it."""
+    block = {
+        "verdict": "supported",
+        "attempted_refutation": REFUTATION,
+        "judged_by": JUDGE,
+        "judged_at": days_ago(1),
+        "reproducible": False,
+        "claim_sha256": V.claim_sha256(read_ledger_file(series)["claims"][0]),
+    }
+    for key, value in MALFORMED[name].items():
+        if value is DELETE:
+            block.pop(key, None)
+        else:
+            block[key] = value
+    return block
 
 
 @pytest.mark.parametrize("name", sorted(MALFORMED))
@@ -510,22 +527,41 @@ def test_a_malformed_adversarial_block_never_passes(series, name):
     is `open`, never `supported`. `attempted_refutation` is required and
     non-empty — a `supported` with no account of what was attacked records only
     that somebody looked, and that is what the other four overclaims (D-106,
-    D-110, D-112, D-118) all were."""
+    D-110, D-112, D-118) all were. `judged_by` is required for the same reason
+    §8.4's override needs a name: a judgement nobody signed is not one."""
     episode(series, [clean_beat()])
     assert check().exit_code == 0
-    block = MALFORMED[name]
-    if isinstance(block, dict) and name not in ("no-author", "empty-block"):
-        block = {"judged_by": JUDGE, "judged_at": days_ago(1), **block}
-        if name != "claims-reproducible":
-            block["reproducible"] = False
-        block["claim_sha256"] = V.claim_sha256(read_ledger_file(series)["claims"][0])
-    set_block(series, block)
+    set_block(series, malformed_block(series, name))
     record = read_ledger_file(series)["claims"][0]
     assert V.classify(record) == "open"
     assert V.is_blocking(record) is True
     result = approve()
     assert result.exit_code == 1, result.output
     assert status_on_disk(series) == "in_review"
+
+
+@pytest.mark.parametrize("block", [{}, "supported", [1], 7])
+def test_an_adversarial_block_of_the_wrong_shape_never_passes(series, block):
+    """M7's other half: an empty object, and a block that is not an object."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    set_block(series, block)
+    assert V.classify(read_ledger_file(series)["claims"][0]) == "open"
+    assert approve().exit_code == 1
+    assert status_on_disk(series) == "in_review"
+
+
+def test_a_malformed_block_does_not_get_its_residual_risk_quoted(series):
+    """A block nothing can read must not have half of it printed as though the
+    rest were sound — the screen would be quoting a risk out of a record whose
+    verdict nobody could parse."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    block = malformed_block(series, "unknown-verdict")
+    block["residual_risk"] = RISK
+    set_block(series, block)
+    assert "effective date" not in _screen(review())
+    assert "effective date" not in _screen(check())
 
 
 def test_an_unjudged_claim_is_not_a_badly_judged_one(series):
@@ -560,6 +596,23 @@ def test_the_screen_says_how_many_claims_pass_2_has_not_reached(series):
     assert "1 of 2" in line
 
 
+def test_the_coverage_line_is_printed_when_pass_2_has_judged_nothing(series):
+    """M8's loudest case, and the one a banner printed only on judged episodes
+    would lose: an episode nothing has attacked must say so on the screen the
+    operator reads before signing. Zero is the number this line exists for."""
+    episode(series, [clean_beat()])
+    result = check()
+    assert result.exit_code == 0, result.output
+    line = next(
+        line for line in result.output.splitlines() if line.lower().startswith("pass 2")
+    )
+    assert "0 of 1 claim" in line
+    assert "0 of 1 claim" in next(
+        line for line in review().output.splitlines()
+        if line.lower().startswith("pass 2")
+    )
+
+
 def test_the_approval_record_says_what_pass_2_covered(series):
     """M8, M12, in the artifact a human commits. An approval that cannot say how
     much of it was attacked is a signature on an unnamed document."""
@@ -581,6 +634,19 @@ def test_the_writer_refuses_an_empty_attempted_refutation(series):
     result = judge(refutation="   ")
     assert result.exit_code == 1, result.output
     assert "refut" in result.output.lower()
+    assert block_of(series) is None
+
+
+def test_the_writer_refuses_a_judgement_nobody_signed(series):
+    """A judgement is somebody's argument. `--by` carries the refuter's identity
+    — which model, run under which skill — and it is the only thing in the
+    record that says what made this call. §8.4 asks a human for a name on an
+    override for the same reason."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = judge(by="   ")
+    assert result.exit_code == 1, result.output
+    assert "author" in result.output.lower()
     assert block_of(series) is None
 
 
