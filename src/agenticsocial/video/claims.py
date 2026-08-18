@@ -290,9 +290,26 @@ def _name_token(token: str) -> str | None:
     (`iPhone`, `GPT-5.6`). The possessive is dropped — a source says "Google"
     far more often than "Google's", and an atom nobody can find in the corpus is
     a false refusal.
+
+    **A figure is never a name.** D-106 drew one boundary for the whole module —
+    a token beginning with a digit is a figure, one beginning with a letter is
+    an identifier — and this function did not have it: it asked only whether a
+    capital appeared anywhere, so `2.4T` and `95B` were filed as figures AND as
+    entities. The figure half verified by value; the entity half was looked for
+    verbatim in the corpus, was absent from a source writing "2.4 trillion", and
+    landed the token in `check`'s "names not found" list. D-102 left that list
+    ungated on the argument that it stays worth reading, and a
+    correctly-verified figure sitting in it is precisely the noise that ends
+    that. One boundary, asked once, in `claim_number`.
+
+    Note this drops the token from the NAME side only. It is still a number
+    atom, still compared by value, and — via `_entity_runs`' `pending` path —
+    still joins a name run it sits inside, so `Gemini 3.7 Flash` is unchanged.
     """
     bare = _POSSESSIVE.sub("", _bare(token))
     if not any(ch.isalpha() for ch in bare):
+        return None
+    if claim_number(token) is not None:
         return None
     if bare[0].isupper() or any(ch.isupper() for ch in bare[1:]):
         return bare

@@ -425,6 +425,8 @@ def test_review_exits_zero_with_unrenderable_beats(ws, series, monkeypatch):
             "series": ["AMIE (video)", "Primary care physician"],
             "caption": "Evaluator ratings, AMIE against primary care physicians",
             "footnote": "Direction only.",
+            "src": "nature",
+            "quote": "AMIE was rated higher than primary care physicians",
         }
     ]
     episode(series, beats)
@@ -509,6 +511,9 @@ EXEMPLARS = {
         "series": ["AMIE (video)", "Primary care physician"],
         "caption": "Evaluator ratings, AMIE against primary care physicians",
         "footnote": "Direction only.",
+        # Phase 6 Task 2: a dumbbell cites like every other chart.
+        "src": "nature",
+        "quote": "AMIE was rated higher than primary care physicians",
     },
     "quote": {
         "text": "Gemini 3.7 Flash is our new workhorse model",

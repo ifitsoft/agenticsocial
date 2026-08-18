@@ -953,3 +953,52 @@ def test_the_real_brief_yields_figures_and_no_identifier_digits():
         assert figure in got, figure
     for identifier in ("4", "3.8", "5.6", "5.3"):
         assert identifier not in got, f"{identifier} is part of a product name"
+
+
+# --- phase 6 task 2: one boundary, not two (D-106 + D-102) --------------------------
+#
+# D-106 settled where a figure ends and a name begins: a token BEGINNING WITH A
+# DIGIT is a figure and gets checked by value. `_name_token` did not get the
+# memo — it asks only whether the token carries a capital anywhere, so `2.4T`
+# and `95B` were filed as figures AND as entities. The figure verifies; the
+# entity is looked for verbatim in the corpus, does not appear there, and the
+# token lands in `check`'s "names not found" list. D-102 kept that list
+# ungated precisely because it must stay readable: a correctly-verified figure
+# sitting in it is the noise that stops it being read.
+
+
+@pytest.mark.parametrize(
+    "token", ["2.4T", "95B", "1,100%", "16", "2026", "$1.32", "0.756", "1.6T"]
+)
+def test_a_figure_token_is_never_also_an_entity_atom(token):
+    """precondition: the sentence starts lowercase, so the only capital in it is
+    the figure's own magnitude suffix. Anything returned here is the defect."""
+    assert entities(f"pricing moved to {token} this week") == []
+
+
+def test_a_magnitude_figure_is_a_number_atom_and_nothing_else():
+    """precondition: the figure half must survive the fix. Deleting the atom
+    instead of re-filing it would exempt `2.4T` from verification entirely —
+    D-106's failing-open, restored by its own repair."""
+    got = C.atoms("about 2.4T parameters with 95B active")
+    kinds = {a.kind for a in got}
+    assert kinds == {"number"}
+    assert [a.value for a in got] == ["2.4", "95"]
+
+
+def test_a_letter_initial_name_is_still_an_entity(): 
+    """precondition NEGATIVE (M4). The fix moves ONE class of token. Every
+    identifier in §8.2.2's table begins with a letter and must still be
+    recorded — D-102's list is ungated, not deleted."""
+    got = entities("DeepSeek V4-Pro and Qwen3.8-Max beat Gemini 3.7 Flash")
+    assert "DeepSeek V4-Pro" in got
+    assert "Qwen3.8-Max" in got
+    assert "Gemini 3.7 Flash" in got
+
+
+def test_a_figure_inside_a_name_run_still_belongs_to_the_run():
+    """precondition NEGATIVE: the spec's own example atom is `Gemini 3.7 Flash`.
+    A digit-initial token between two names is joined to the run by the
+    `pending` path, not by being a name itself — so the run must survive even
+    when the numeric token carries a capital."""
+    assert "Gemini 2.5B Flash" in entities("Google shipped Gemini 2.5B Flash today.")

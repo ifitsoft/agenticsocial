@@ -310,49 +310,6 @@ def shown_markup(v: Any) -> str | None:
     )
 
 
-_DIGIT = re.compile(r"\d")
-
-
-def dumbbell_prints_a_figure(raw: dict) -> str | None:
-    """Which of a dumbbell's own words carries a digit, if any.
-
-    "A dumbbell renders no numbers at all" is asserted in this module, in
-    `engine.js` and in a test, and it is true of `values` and false of the type.
-    `caption`, `footnote`, `kicker`, row `label` and row `note` are all
-    unconstrained text and all reach the stage, so an uncited card could print
-    `Rated 4.2 out of 5` and `+18 pts` with no `src` and no `quote` anywhere in
-    the pipeline. The justification for the exemption was a property the type
-    did not hold.
-
-    The exemption is kept and made CONDITIONAL on the property. Spec §7.1 does
-    not put `dumbbell` in the cited pair, and the AMIE chart the type exists for
-    carries no figure at all — making every dumbbell cited would be a spec
-    change wearing a bugfix. But §7.2's sentence is written about numbers rather
-    than about types: "there is no path to rendering a number that isn't in a
-    source". A dumbbell that prints a digit is on that path.
-
-    Refusing the digit instead was the other option and is worse: "n=159 cases"
-    is a real footnote from a real study, and a rule that bans it pushes the
-    operator into writing a vaguer one. Requiring the source is the rule the
-    spec already has.
-    """
-    fields: list[tuple[str, Any]] = [
-        ("`caption`", raw.get("caption")),
-        ("`footnote`", raw.get("footnote")),
-        ("`kicker`", raw.get("kicker")),
-    ]
-    rows = raw.get("rows")
-    if isinstance(rows, list):
-        for i, row in enumerate(rows):
-            if isinstance(row, dict):
-                fields.append((f"`rows[{i}]` `label`", row.get("label")))
-                fields.append((f"`rows[{i}]` `note`", row.get("note")))
-    for name, value in fields:
-        if isinstance(value, str) and _DIGIT.search(value):
-            return f"{name} reads {value!r}"
-    return None
-
-
 def jump_rows(v: Any) -> str | None:
     """`rows[{label, before, after, shown}]` — spec §7.1 as corrected by D-068.
 
@@ -677,11 +634,21 @@ BEAT_TYPES: dict[str, dict] = {
             "footnote": text,
         },
         "optional": {},
-        "cited": False,
-        # …unless it prints one. The uncited exemption is spec §7.1's, and its
-        # justification is "it renders no numbers"; where that is false the
-        # justification is too. See `dumbbell_prints_a_figure`.
-        "cited_when": dumbbell_prints_a_figure,
+        # Phase 6 Task 2 / D-109 #1. This was `cited: False` with a
+        # `cited_when` that fired only on a digit, and the two halves of the
+        # pipeline disagreed: `claims.py` has had `dumbbell` in
+        # `EXTRACTED_TYPES` since Phase 5, so an uncited one loaded cleanly and
+        # `check` then answered `no_source` and exit 1. The exemption the schema
+        # documented could not be reached, and an author following the schema
+        # wrote a file that was legal and unapprovable at once.
+        #
+        # Resolved towards citation, because the property the exemption rested
+        # on is false: a dumbbell renders a `caption`, a `footnote`, two series
+        # names and a label per row, and every one of those is a claim the
+        # extractor already reads. "It renders no numbers" was only ever true of
+        # `values` — and a chart asserting that A is rated above B is asserting
+        # something about the world whether or not a digit reaches the stage.
+        "cited": True,
         "cross": dumbbell_within_track,
     },
     "quote": {
@@ -828,31 +795,17 @@ def _beat(raw: Any, index: int, where: Any) -> Beat:
 
     if spec["cited"]:
         # spec §7.2 — there is no path to rendering a number that isn't in a
-        # source. Present-but-empty is not a citation.
+        # source. Present-but-empty is not a citation. Both field names appear
+        # in the message however only one is missing: they are a pair, and an
+        # author who learns about them one refusal at a time runs twice.
         for name in ("src", "quote"):
             if not _is_filled(raw.get(name)):
                 raise ScriptError(
                     f"{at} `{name}` is required and must not be empty — a "
-                    f"{kind} beat renders numbers, and spec §7.2 allows no path "
-                    "to rendering a number that isn't in a source"
+                    f"{kind} beat asserts something about the world, and spec "
+                    "§7.2 allows no path to rendering a claim that isn't in a "
+                    "source. Give it `src` and `quote`"
                 )
-
-    # The same rule for a type whose exemption is conditional on a property.
-    # Data, not a branch: `cited_when` is absent on every type whose answer does
-    # not depend on what the operator wrote. It reads `raw` rather than the
-    # payload because `kicker` is a shared field and reaches the stage too.
-    cited_when = spec.get("cited_when")
-    if cited_when is not None:
-        figure = cited_when(raw)
-        if figure and not all(_is_filled(raw.get(n)) for n in ("src", "quote")):
-            raise ScriptError(
-                f"{at} {figure}, so this card puts a number on the screen — it "
-                "needs `src` and `quote`. A "
-                f"{kind} is exempt from spec §7.2's citation because it renders "
-                "no numbers; §7.2's rule is written about numbers rather than "
-                "about types, so a card that prints one is on the path it says "
-                "does not exist. Cite it, or say it without the figure"
-            )
 
     payload: dict = {}
     for name, check in spec["required"].items():

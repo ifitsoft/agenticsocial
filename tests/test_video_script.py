@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from agenticsocial.video import claims as C
 from agenticsocial.video import script as S
 from agenticsocial.video.episode import create_episode, load_episode
 from agenticsocial.video import plan as plan_mod
@@ -112,6 +113,10 @@ VALID = {
         "series": ["AMIE (video)", "Primary care physician"],
         "caption": "Evaluator ratings, AMIE against primary care physicians",
         "footnote": "Direction only — the source reports evaluator ratings.",
+        # Phase 6 Task 2: a dumbbell cites like every other chart. The caption
+        # names a study and a comparison, and both are claims.
+        "src": "nature",
+        "quote": "AMIE was rated higher than primary care physicians",
     },
     "quote": {
         "type": "quote",
@@ -1191,7 +1196,7 @@ def test_beats_are_indexed_in_file_order(series):
 # --- R4: charts must cite (spec §7.2) -------------------------------------------
 
 
-CITED = ["kpis", "jumpChart"]
+CITED = ["kpis", "jumpChart", "dumbbell"]
 
 
 @pytest.mark.parametrize("kind", CITED)
@@ -1218,7 +1223,7 @@ def test_a_chart_whose_source_is_empty_is_refused(series, kind, field, bad):
     assert field in str(e.value)
 
 
-UNCITED = ["statement", "body", "list", "quote", "title", "signoff", "custom", "dumbbell"]
+UNCITED = ["statement", "body", "list", "quote", "title", "signoff", "custom"]
 
 
 @pytest.mark.parametrize("kind", UNCITED)
@@ -1232,13 +1237,25 @@ def test_a_non_chart_type_needs_no_citation(series, kind):
     assert script.beats[0].quote == ""
 
 
-def test_the_cited_types_are_exactly_the_two_the_spec_names():
-    """precondition: R4 names kpis and jumpChart. If a third type quietly joined
-    them, test_a_non_chart_type_needs_no_citation would be the thing to update,
-    not this — so pin the set directly."""
+def test_the_cited_types_are_exactly_the_three_charts():
+    """precondition: R4 named kpis and jumpChart; Phase 6 Task 2 adds dumbbell,
+    because `check` has refused an uncited one since Phase 5 and the schema's
+    exemption was therefore unreachable. If a fourth type quietly joined them,
+    test_a_non_chart_type_needs_no_citation would be the thing to update, not
+    this — so pin the set directly."""
     cited = {k for k, spec in S.BEAT_TYPES.items() if spec["cited"]}
-    assert cited == {"kpis", "jumpChart"}
+    assert cited == {"kpis", "jumpChart", "dumbbell"}
     assert set(UNCITED) == set(S.BEAT_TYPES) - cited
+
+
+def test_no_type_the_loader_forces_to_cite_is_one_check_exempts():
+    """precondition: M2 — the two modules must not disagree about citation.
+    `script.py`'s `cited` refuses at LOAD; `claims.EXTRACTED_TYPES` is what
+    `check` demands a source for. A type in the first and not the second would
+    be a beat the author must cite and nobody verifies."""
+    cited = {k for k, spec in S.BEAT_TYPES.items() if spec["cited"]}
+    assert cited <= set(C.EXTRACTED_TYPES)
+    assert not (cited & (set(C.EXEMPT_TYPES) | set(C.MANUAL_TYPES)))
 
 
 # --- R5: acts[] in series.toml --------------------------------------------------
@@ -1721,9 +1738,12 @@ DIGIT_FIELDS = [
 def test_a_dumbbell_that_prints_a_digit_needs_a_source(series, override):
     """precondition: each of these fields reaches the stage — `caption` is
     `.body`, `footnote` is `.foot`, `kicker` is drawn by planKicker and the row
-    label and note are the chart's own text. The uncited exemption is justified
-    by "it renders no numbers"; where that is false the justification is too."""
-    beat = dict(VALID["dumbbell"], **override)
+    label and note are the chart's own text. Phase 6 Task 2 made every dumbbell
+    cited, so this is now a special case of that rule — kept, because a digit
+    reaching the stage from a chart type documented as "renders no numbers" is
+    the specific hole F3 opened and it must stay closed by name."""
+    beat = {k: v for k, v in VALID["dumbbell"].items() if k not in ("src", "quote")}
+    beat.update(override)
     with pytest.raises(S.ScriptError) as e:
         _load(series, [beat])
     msg = str(e.value)
@@ -1739,8 +1759,24 @@ def test_a_dumbbell_that_prints_a_digit_renders_when_it_is_cited(series, overrid
     assert _load(series, [beat]).beats[0].type == "dumbbell"
 
 
-def test_a_digit_free_dumbbell_still_needs_no_citation(series):
-    """precondition NEGATIVE: spec §7.1 does not put `dumbbell` in the cited
-    pair, and the AMIE chart the type exists for carries no figure at all.
-    Making every dumbbell cited would be a spec change wearing a bugfix."""
+@pytest.mark.parametrize("field", ["src", "quote"])
+def test_even_a_digit_free_dumbbell_must_cite(series, field):
+    """precondition: M1, and the resolution of D-109's first defect. The
+    conditional exemption was justified by "it renders no numbers" — but a
+    dumbbell renders a CAPTION, a footnote, a pair of series names and a row
+    label per row, and `claims.py` has extracted every one of those as a claim
+    since Phase 5. So `check` answered `no_source` and exit 1 on precisely the
+    beat this schema told the author needed nothing. The exemption was
+    unreachable; the honest half of the disagreement is the one that verifies."""
+    beat = {k: v for k, v in VALID["dumbbell"].items() if k != field}
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    msg = str(e.value)
+    assert "src" in msg and "quote" in msg
+
+
+def test_a_cited_digit_free_dumbbell_still_loads(series):
+    """precondition NEGATIVE: the rule is a citation requirement, not a ban on
+    the type. The AMIE chart is what `dumbbell` exists for and it must remain
+    writable."""
     assert _load(series, [VALID["dumbbell"]]).beats[0].type == "dumbbell"

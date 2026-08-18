@@ -2433,3 +2433,303 @@ not know how to say?"* and *"what happens to input the rule cannot classify?"* �
 and the second one is the general form, because **a classifier with a third
 answer will eventually take it.** Phase 9's review effort should go there, not
 into more mutants.
+
+## D-109 · phase 6 / task 1 · the skill is written, and writing it found four pipeline defects
+
+`skills/storyboard/SKILL.md` lands in `fanout` house style. The author walked it
+against the operator's real brief in a scratch workspace: 24 beats, **21 of 22
+claims passed the first `check`**, one fix, then exit 0 with **zero overrides**
+and `runtime 120.0s · within tolerance (+0.0s)`.
+
+**The single most useful sentence in the report:** the one failing claim was
+*points to* versus *pointing to* — the author retyped a quote **with their own
+"never retype a quote" rule in front of them.** That is the argument for the
+blind acceptance test in one line: knowing the rule and following it are
+different acts, and an author is the worst possible judge of which one they just
+performed.
+
+Decisions made, all three defensible:
+
+- **Pacing is arithmetic, not iteration.** `pace = target_sec / sum(holds)`, so
+  runtime is `sum(holds) × pace` and tolerance is a calculation the author does
+  *before* writing. Checked against both committed episodes (24 scenes/83.6s →
+  `pace 1.435` → 119.97s; 25/92.8s → `1.293` → 119.99s). Rule of thumb: 22–26
+  beats, holds 2.6–5.6s, **≥ 4.0s on any counting chart** (D-087).
+- **Coverage** is stated as a rule with today's spelling in a bracket, so Phase
+  11's `agsoc coverage check` changes the bracket and nothing else. §13's command
+  is not presented as runnable, because it is not.
+- **`custom` is "a last resort — do not reach for it"**, documented completely
+  but never as a convenience (D-088).
+
+### Four defects found by writing the instructions
+
+Writing a skill is a review technique. None of these was visible from inside the
+code that caused them:
+
+1. **`dumbbell`'s citation status disagrees across modules.** Leader-verified:
+   `script.py` has `cited: False`, `claims.py` has it in `EXTRACTED_TYPES`. So an
+   uncited dumbbell gets `no_source` and `check` exits 1 — **the schema's
+   documented exemption is unreachable.**
+2. **D-087's count-fits-hold refusal is unreachable from the author's half of the
+   pipeline.** It lives in `planbuild.js` and fires only at render, which the
+   author may never run. The skill compensates with a generous floor; the real
+   fix is `check`/`review` reporting required-versus-actual hold, which is
+   arithmetic over the plan, not a render.
+3. **The only committed `script.yaml` fails this phase's own runtime criterion** —
+   9 beats, `37.5s`, `OUT OF TOLERANCE (-82.5s)`, while passing `check`.
+   Leader-verified. **The best artefact a blind runner can copy is the one that
+   misleads them.**
+4. **`check` never mentions runtime**; only `review` does. An agent that stops at
+   a green `check` never learns its episode is a third of its target length.
+
+3 and 4 compound: a passing check on a copied 37-second script is a green light
+that is wrong twice over.
+
+## D-110 · phase 6 / task 2 · the blind run passed, and the twelve things it guessed are the deliverable
+
+A fresh agent with no project context followed `skills/storyboard/SKILL.md`
+against the operator's real brief and produced **24 beats, 22/22 claims passing
+on the first `check`, zero overrides**, `runtime 120.0s · within tolerance`. It
+never opened a source file or the schema.
+
+**The phase's exit criterion, met once.** But the friction log is the artefact
+worth keeping, and two entries matter more than the pass.
+
+### The instruction that was wrong, not missing
+
+Step 3 said: *"If `agsoc video new` says the episode already exists, do not try
+again. You are re-drafting an episode that is already there."*
+
+**False when the day already holds a different episode — and following it edits
+someone else's work.** The runner was saved only by an external instruction not
+to touch `2026-08-17`; it minted `2026-08-17b` and *guessed* that was legal.
+
+A skill is executed, not read. An unconditional sentence that is true in the
+common case and destructive in the uncommon one is the most dangerous shape a
+line of instructions can take, because the author validates it against the case
+they were imagining.
+
+### The gap that would have failed most authors — RETRACTED, and the retraction is the finding
+
+**What I wrote here was false.** I recorded that the corpus keeps U+2011
+non-breaking hyphens and that "a quote hand-typed with an ASCII `-` fails
+`check`". Leader-measured against the real source:
+
+```
+typed 'V4-Pro generally available'  (ASCII hyphen)  -> quote found? True
+typed 'V4‑Pro generally available'  (exact bytes)   -> quote found? True
+typed 'V4-Pro generaly available'   (changed word)  -> quote found? False
+typed 'V4-Pro is generally available' (added word)  -> quote found? False
+```
+
+**The ASCII hyphen passes. That is exactly what §8.2.1's fold is for** — and I
+verified it myself in D-091, in this same session, before writing the opposite
+here. What refuses a quote is a changed, dropped or added *word*, which is
+precisely what happened to the skill's author: *points to* versus *pointing to*.
+
+**How the error was manufactured, because the mechanism is worth more than the
+correction.** The blind runner noticed exotic codepoints in the corpus, took a
+precaution (extract spans programmatically rather than type them), and passed.
+Their precaution was never tested, so nothing contradicted the explanation they
+attached to it. They reported it as a finding; I read a compelling causal story
+that fit D-071's shape and promoted it to established fact — then wrote it into a
+brief as the headline defect.
+
+**A precaution that is never tested looks like a cause.** Success under a
+precaution is not evidence the precaution was necessary, and an unfalsified
+belief travels further than a tested one because nobody has to defend it. The
+implementer caught it by doing the one thing neither of us did: typing the ASCII
+hyphen and running `check`.
+
+This is the same failure as D-031, D-091, D-094 and D-105 — measuring something
+adjacent to the property — with one difference that makes it worse: **the
+adjacent measurement was made by someone else, and I relayed it without
+re-deriving it.** Findings arriving from a subagent are inputs to verification,
+not conclusions of it.
+
+The real rule the skill now teaches: **the fold forgives punctuation and case;
+nothing forgives a word.** That is both narrower and more useful than "never
+retype", and it is true.
+
+### One alleged hole, verified as a display defect instead
+
+The runner suspected a magnitude suffix escapes numeric verification. Measured:
+
+```
+2.4T -> 2.4e12  vs "2.4 trillion"  present? True
+9.4T / 2.4B                        present? False
+```
+
+**The numeric half is correct.** But the token *also* emits an entity atom, so a
+correctly-verified figure appears in `check`'s "names not found" list and reads as
+unchecked. D-102 warned the risk with that list is that it stops being read — this
+is exactly how that starts, and it is now a code fix rather than a footnote.
+
+## D-110 · phase 6 / task 2 · a dumbbell asserts a comparison, and the schema now says so
+
+The four defects D-109 recorded are fixed. The one that needed an argument rather
+than an edit is `dumbbell`'s citation, and it is resolved **towards citation**:
+`script.py` now has `cited: True`, so `src` and `quote` are required at load, and
+`dumbbell_prints_a_figure` and the whole `cited_when` mechanism are deleted.
+
+The exemption rested on "it renders no numbers", and that property was false of
+the type: a dumbbell draws a `caption`, a `footnote`, two `series` names and a
+label per row, and `claims.py` has extracted every one of them as a claim since
+Phase 5. So the two halves of the pipeline had been disagreeing in the worst
+possible direction — the schema told an author their beat needed nothing, and
+`check` answered `no_source` and exit 1 on that same beat. **An exemption you
+cannot reach is not a permission, it is a trap**, and the honest half of a
+disagreement is the half that verifies. The conditional version (cite only when a
+digit appears) is subsumed: it fired on `V4-Pro` and not on
+"AMIE against primary care physicians", which is exactly backwards — the digit
+inside a product name is not the claim, and the comparison in the caption is.
+
+Cost, stated: this is a spec change. §7.1 does not list `dumbbell` in the cited
+pair. Two committed test fixtures gained a `src` and a `quote`; no episode in
+`workspace/` or `engine/content/` contains a dumbbell, so nothing that has ever
+rendered is affected.
+
+### The brief's own typography claim did not survive contact with the code
+
+The task brief named "the corpus keeps U+2011 non-breaking hyphens, so a
+hand-typed quote fails `check`" as the gap that would fail most authors. **It is
+false.** §8.2.1's fold normalises `‑` `–` `—` to `-`, curly quotes to straight,
+`…` to `...`, NBSP and tabs to spaces, and case away — verified through
+`check_claim`, both directions. What refuses a quote is a *word*: `points to`
+against `pointing to`, which is what actually happened to the skill's author.
+
+Worth recording as a process point, not a pedantry: the belief came from the
+blind runner, who read the bytes, saw exotic codepoints, concluded they were the
+hazard, and was never contradicted because their run passed. **A precaution that
+is taken and works cannot tell you whether it was necessary** — and it went into
+a brief as a finding. The skill now states which differences are forgiven and
+which are not, from a table run against the checker, because "the bytes are
+scary" is advice an author cannot act on and "one wrong word refuses" is.
+
+### The entity list is quieter, and still not quiet
+
+`_name_token` now asks `claim_number` where the figure boundary is, so `2.4T` and
+`95B` are numbers and nothing else. On the operator's own episode that removed
+exactly one row. The rest of the list is still glued runs and sentence-opening
+words — `OpenAI Anthropic, Google Chinese`, `Three`, `Also`, `Latest` — which is
+D-102's known cost, unchanged and still ungated. **The fix removed the rows that
+were provably wrong (a verified figure filed as a missing name), not the noise.**
+
+## D-111 · phase 6 · two blind runs, two clean first passes — and the pass was not the finding
+
+| | beats | claims | first `check` | overrides | runtime |
+|---|---|---|---|---|---|
+| Runner A | 24 | 22/22 | exit 0 | 0 | 120.0s |
+| Runner B | 26 | 24/24 | exit 0 | 0 | 120.0s |
+
+Two fresh agents, no project context, forbidden from reading any spec, plan or
+decision. Neither opened the schema. **Phase 6's exit criterion is met twice.**
+
+The skill works. What the runs were actually *for* is the friction each produced,
+and Runner B produced the most serious defect found in this phase.
+
+### The coverage check clears stories it should catch
+
+```
+node engine/coverage.mjs check gemini-3.7  ->  "NOT COVERED. Safe to run as new."
+node engine/coverage.mjs check gemini      ->  4 prior mention(s)
+```
+
+Leader-verified. Runner B passed `gemini-3.7`, got a clean bill, and **cleared
+the brief's headline story — one this series ran three days earlier as its own
+headline.** It survived only because the runner independently re-ran bare vendor
+terms and read the printed titles, which the skill never told it to do.
+
+CLAUDE.md states the invariant: *the series must never re-tell a story as if it
+were new.* This is that invariant failing **in the safe-looking direction**,
+which is the worst direction available to a check of this kind.
+
+The mechanism: the ledger stores product names with spaces (`gemini 3.7 flash`),
+the check is a substring match, so **every hyphenated product term is a possible
+false negative — and hyphenated is exactly how an author writes a product.**
+
+**The message is the second defect and the more general one.** "NOT COVERED.
+Safe to run as new" asserts a conclusion the search cannot support: a substring
+miss supports *"this string does not appear"*, nothing more. That is the third
+time in two phases that something in this pipeline has claimed more than it knew
+— after `verify.py`'s comment promising `bn`/`mn` were refused (D-106), and my
+own retracted typography finding (D-110). **A tool that says "safe" has to be
+right about it**, and `coverage.mjs` had no tests at all, which is why it was
+never asked.
+
+### Why two runners, and what the second one bought
+
+Runner A's log was 12 items and it passed. Had the phase stopped there, the
+coverage defect would have shipped: A used bare vendor terms by instinct and
+never hit it. **The second run was not a formality — it was the one that found
+the thing that matters**, and it found it by making a different arbitrary choice
+at a point the skill left open.
+
+That is the argument for repeating a behavioural test with a different actor
+rather than re-running it with the same one: **the variance between two
+executions is the measurement.** Where they diverged is precisely where the
+instructions were underspecified, and one of those divergences was load-bearing.
+
+### The skill's own arithmetic did not reconcile
+
+"22–26 beats, laid out as two cold-open beats + four acts of 4–6 beats + one
+signoff" yields **19–27**. Neither endpoint matches. Both runners landed inside
+the stated band anyway — A wrote 24, B wrote 26 — so the error was invisible to
+the outcome and visible only to a reader who did the sum. Worth keeping as a
+reminder that **a passing acceptance test does not validate the document that
+produced it.**
+
+## D-112 · phase 6 / task 3 · the coverage check is fixed, and the third overclaim was found where it was predicted
+
+```
+gemini-3.7  ->  3 prior mention(s)          (was: "NOT COVERED. Safe to run as new.")
+v4-pro      ->  no entry matches this string
+```
+
+The matcher now strips non-alphanumerics from **both** sides and asks for
+containment, so `gemini-3.7`, `gemini 3.7`, `gemini-3-7-flash` and `gemini3.7`
+are one query. **The change is one-directional: it can only add matches, never
+drop one** — which is the property that makes it safe to make in a hurry. Cost is
+false positives (`aiact` finds *EU AI Act*), and that is the correct direction to
+be wrong in for a check whose failure mode is re-telling a story as new.
+
+The message no longer says "safe". It names what was searched and states the
+bound — *the ledger holds only what a person wrote into it after an episode
+shipped* — and points at near-miss entries without counting them as hits. That
+pointer is the manual step Runner B had to invent for itself.
+
+`engine/coverage.test.mjs` is new: 27 assertions, plain node, driving the binary
+as a subprocess, invented ledgers in a temp file. **`coverage.mjs` had no tests at
+all**, which is the whole reason a tool that said "safe" was never asked whether
+it was.
+
+**The mutation sweep reported honestly: 15/17 first, then 21/21.** One survivor
+was a real gap (the no-separator spelling `gemini3.7`). The other was an
+*equivalent* mutant that proved half the new matcher was dead code — brute force
+found zero inputs where the spaced pass hits and the squashed pass does not, so
+it was deleted. **An equivalent mutant is usually noise; here it was a design
+review**, and the right response was to remove code rather than to argue for it.
+
+### The third overclaim, found where D-111 predicted one would be
+
+`agsoc video check` prints, in green:
+
+```
+the-brief/2026-08-17 · 7 claims · 6 pass · 1 manual
+7 claims verified, none open
+```
+
+**It counts as "verified" a claim the same screen calls *"attested by hand — no
+machine checked these"*.** Leader-confirmed — and I read that exact output
+earlier tonight without noticing, which is the point: the sentence is reassuring
+and scans as a summary of the table above it.
+
+Three for three now — `verify.py`'s comment (D-106), my typography claim (D-110),
+`coverage.mjs`'s "safe" (D-112) — and the pattern is stable enough to state as a
+rule: **wherever this system summarises, it rounds toward reassurance.** The
+summary line is written last, by someone who already knows the answer, and it
+inherits their confidence rather than the data's.
+
+It sits directly in front of Phase 7's approval gate, which consumes exactly
+these verdicts. **Fixed in Phase 7 Task 1**, not here, because the gate and its
+summary should agree by construction rather than by coincidence.
