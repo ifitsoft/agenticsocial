@@ -2957,3 +2957,115 @@ commits, never squash*. **The report was the only casualty, and a report is the
 one artefact that can be reconstructed from the commits.** Worth noting as
 evidence the process is robust to the machine dying, which is not something that
 had been tested until it happened.
+
+## D-118 · phase 8 / task 1 · the 26/26 was never verified, and re-running it found the same defect one layer down
+
+Task 1's report was reconstructed after the fact — the machine slept before it
+could be written. Reconstructing it meant deciding what to take on trust.
+`edddbb9` reports **26/26** with three named survivors it had fixed, which is
+the shape of a real sweep. **No harness, script or log survives.** So I ran my
+own rather than repeat a number I had not measured: 26 mutants,
+`PYTHONDONTWRITEBYTECODE=1` (D-100), **23 killed, 3 survived.**
+
+The instructive survivor is **M4b**, because `edddbb9` is the commit that was
+written to kill it:
+
+```
+edddbb9: "What collapsed was the FIX line — the half an operator acts on ...
+          Now each screen is asserted to carry its own remedy"
+```
+
+The assertion it added was `"put the change back" in screens["drift"]`. That
+sentence is `approval_drift`'s own wording (`approve.py:276`), and it arrives on
+the **why** line whatever the fix line says. **The test was reading the
+diagnosis and calling it the remedy**, so the drift and ledger remedies could be
+made identical with it green — the exact mutant, surviving the exact test.
+
+The other two (M9b, M9c) were a substring grep: `"plan.total_frames" in src`,
+with the string in three places, so deleting the *use* of it left the assertion
+true.
+
+Three lessons, and the second is the one that generalises:
+
+1. **A mutation score with no harness is a claim, not a measurement.** Sweeps
+   should leave a runnable file behind.
+2. **A test written to kill a mutant is not the same as a test that kills it.**
+   All three survivors passed *because* they searched a whole screen or a whole
+   file for a string that something else also produced. An assertion that
+   searches a large haystack for a small needle passes for reasons its author
+   did not intend.
+3. Fixing a defect at the level it was reported is not the same as fixing it.
+   `edddbb9` moved the test one step closer and stopped.
+
+23/26 → 26/26 after `1cb9788`; 34 mutants at HEAD after Tasks 2 and 3, 34/34
+after `14ba13e` (two more survivors, both the same "asserted on what ran, not on
+what was required" shape).
+
+## D-119 · phase 8 / task 2 · a second way to render is a second way past the gate
+
+`render.mjs --day <date>` rendered `engine/content/<date>.js` straight to frames.
+It produced the two videos in `engine/` and proved the plumbing in Phase 1.5.
+**It is retired**, along with `--pace`, the `FPS = 30` constant and the
+`Math.round(total * FPS)` fallback that existed to serve it.
+
+Nothing it produced had been verified against a corpus or signed by a human.
+That is the two-paths-to-one-answer shape Phase 7 spent three tasks eliminating
+(D-113, D-059) — rebuilt in Node, where nobody was looking for it.
+
+**What retires is the flag, not the files.** `content/2026-08-12.js` and
+`content/2026-08-14.js` are two complete episodes exercising every builder and
+both chart forms, and they are the only realistic input the determinism
+invariant has. They load through `scene.html?day=…` — the **browser's** loader,
+not the renderer's — which is precisely why the flag could go without costing
+the invariant its input. Two tests pin that they exist and that something still
+runs them, because a fixture nothing runs is a file the next cleanup deletes.
+
+Falling out of it, and worth more than the retirement: **there is now no timing
+arithmetic in `render.mjs` at all.** The fallback was a second answer to a
+question `plan.json` answers (D-007), and the two disagree at the rounding
+boundary — a video that stops one frame early. It also closed two of the three
+mutants that survived Task 1's sweep.
+
+Still open, and now the largest known gap in the phase: **D-056.** `ENGINE_DIR`
+is still a `parents[3]` count and `engine/` is still not packaged. D-056 called
+it *required before Phase 8*. Task 2 did not need it, so `render` works from a
+source checkout and from nowhere else.
+
+## D-120 · phase 8 / task 3 · the approval cannot reach the pixels, so looking at them costs a second
+
+`agsoc video probe <ep> [--at T]` — spec §6, never built. The behaviour existed
+as `preview --probe`: a flag on the command that renders the whole video.
+
+**Decided rather than defaulted, and the flag is gone.** `render`'s success
+screen says the approval stops short of the pixels (D-116) and that *nobody has
+looked at this video* — and then pointed the operator at a flag on the
+fourteen-minute command they were trying to avoid. One dropped flag and you get
+the render. An alias would have left two doors to one behaviour; amending the
+spec would have been writing down the weaker thing because it was already there.
+
+Measured, same episode, same machine:
+
+```
+agsoc video render          180 frames   50.2s
+agsoc video probe             3 frames    1.7s
+agsoc video probe --at 3.5    1 frame     1.0s
+```
+
+A probe scales with beats, not frames, so a real 120-second episode is still
+seconds against ~14 minutes. **That ratio is the whole answer to D-116.** The
+approval covers what the operator authors and cannot be extended over the font
+this machine resolved; what *can* be changed is the price of looking.
+
+Ungated on purpose: it moves no status and works at any status, including
+`rendered`. Probing is how you decide whether to approve, so requiring approval
+to probe inverts the workflow — and `rendered` being terminal (D-006) is a
+statement about transitions, not about whether you may look.
+
+**A defect the unit tests could not have found.** `--at 90` on a six-second
+episode refused correctly *and deleted the previous probe's frames*, because the
+clearing ran ahead of the range check. Found by running the real command; the
+suite was green. Fixed as a rule rather than a special case — every refusal now
+happens before anything is removed. **A command that has decided not to do
+anything must not have done something**, and this is the second time in this
+phase that running the real thing found what reading it did not (the first was
+`95d5cfe`, `rendered` being sent to `approve`).
