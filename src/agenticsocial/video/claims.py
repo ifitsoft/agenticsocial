@@ -131,9 +131,26 @@ def fold(text: str) -> str:
 # `95B`, which would let a beat claim `95B active` against a source saying `9B`.
 UNIT_SUFFIXES = frozenset("%KMBTXkmbtx")
 
+# The same idea spelled with more than one letter, longest first. §8.2.2 strips
+# exactly ONE trailing character, so `950bn` failed the digits-only test, was
+# classified an identifier, was ALSO rejected as a name — and yielded no atom at
+# all. A 10x fabrication verified clean on the operator's own episode, through
+# the spelling the rule did not know. A closed list, not a "trailing letters"
+# rule: the letters have to mean something, or the token falls to the unvaluable
+# branch below rather than being guessed at.
+UNIT_WORDS = ("bps", "bn", "mn", "tn")
+
 # Digits and the two separators that appear INSIDE a written number. A `-` is
-# not here on purpose: `0-70` is a range and `V4-Pro` is a name.
+# not here on purpose: `0-70` is a range and `V4-Pro` is a name. Neither is a
+# number this module can value, and neither is exempt — see `figure`.
 _DIGITS_ONLY = re.compile(r"^[0-9][0-9.,]*$")
+
+# After §8.2.1's fold, every dash in the table above is this one character, so a
+# sign test needs to know exactly one codepoint. It is deliberately checked on
+# FOLDED text: `claims.atoms` walks the beat and `verify.claim_values` walks the
+# folded beat, and two spellings of the same figure would break the guard that
+# holds those two walks together.
+_MINUS = "-"
 
 
 def _strippable(ch: str) -> bool:
@@ -149,31 +166,91 @@ def _strippable(ch: str) -> bool:
     return category.startswith("P") or (category.startswith("S") and category != "Sc")
 
 
-def _bare(token: str) -> str:
+def _edges(token: str) -> tuple[int, int]:
     start, end = 0, len(token)
     while start < end and _strippable(token[start]):
         start += 1
     while end > start and _strippable(token[end - 1]):
         end -= 1
+    return start, end
+
+
+def _bare(token: str) -> str:
+    start, end = _edges(token)
     return token[start:end]
+
+
+@dataclass(frozen=True)
+class Figure:
+    """A token that asserts a quantity — §8.2.2's claim number, plus a sign.
+
+    `digits` is None for a figure this module cannot READ: `1e9`, `3/4`,
+    `12:30`, `2010-2011`, `٣٠٠`. Those are not identifiers and they are not
+    exempt; they carry no value to compare, so §8.2 checks them by the only
+    honest comparison left — the quote must spell them exactly.
+    """
+
+    display: str  # what the atom records and what a refusal names
+    digits: str | None  # digits and separators, sign included; None if unreadable
+    suffix: str  # "" or the unit/magnitude the digits were glued to
+
+
+def figure(token: str) -> Figure | None:
+    """What this token asserts, or None if it is an identifier and exempt.
+
+    **The boundary, with its negative half.** Strip the surrounding punctuation,
+    a leading currency symbol and a sign; if what is left BEGINS WITH A DIGIT
+    the token is a figure and something must check it. If it begins with a
+    letter it is an identifier and is exempt — every name in §8.2.2's own table
+    (`V4-Pro`, `Qwen3.8-Max`, `GPT-5.6`) and the `M1` chip begin with a letter,
+    so D-071's rule, validated twice against real prose, costs nothing here.
+
+    A figure whose digits and suffix the rule can read is compared by value. One
+    it cannot is still returned, with `digits=None`: *"I cannot read this
+    figure"* and *"this figure is fine"* must never produce the same verdict,
+    and until this function returned something for `950bn` they did — the token
+    was neither a number nor a name, so it yielded no atom and nothing checked
+    it at all.
+
+    The sign belongs to the figure. `-` is `Pd` and U+2212 is `Sm`, so both were
+    stripped as decoration and a beat saying revenue fell 18% verified against a
+    source saying it rose. A sign is GLUED to its digits; a hyphen with anything
+    else on its left (`2010-2011`) is punctuation and is left where it is.
+    """
+    folded = fold(token)
+    start, end = _edges(folded)
+    body = folded[start:end]
+    sign = ""
+    if body[:1] and unicodedata.category(body[0]) == "Sc":
+        body = body[1:]
+    if not body or unicodedata.category(body[0]) != "Nd":
+        return None
+
+    suffix = ""
+    for word in UNIT_WORDS:
+        if len(body) > len(word) and body.endswith(word):
+            suffix = word
+            break
+    else:
+        if len(body) > 1 and body[-1] in UNIT_SUFFIXES:
+            suffix = body[-1]
+    digits = body[: len(body) - len(suffix)] if suffix else body
+
+    if _DIGITS_ONLY.match(digits):
+        return Figure(sign + digits, sign + digits, suffix)
+    return Figure(sign + body, None, "")
 
 
 def claim_number(token: str) -> str | None:
     """The figure this token asserts, or None if it is an identifier.
 
-    §8.2.2: strip surrounding punctuation, a leading currency symbol and a
-    trailing unit suffix; if what remains is only digits and separators, it is a
-    claim number and must appear in the quote. Only digits GLUED to letters are
-    exempt — in `Gemini 3.7 Flash` the token `3.7` stands alone and is checked,
-    because a beat saying 3.7 where the source says 3.6 is the error this pass
-    exists to catch.
+    §8.2.2's spelling of `figure().display`, kept because it is the question
+    most callers ask. In `Gemini 3.7 Flash` the token `3.7` stands alone and is
+    checked, because a beat saying 3.7 where the source says 3.6 is the error
+    this pass exists to catch; the `3.8` in `Qwen3.8-Max` is not.
     """
-    bare = _bare(token)
-    if bare and unicodedata.category(bare[0]) == "Sc":
-        bare = bare[1:]
-    if len(bare) > 1 and bare[-1] in UNIT_SUFFIXES:
-        bare = bare[:-1]
-    return bare if _DIGITS_ONLY.match(bare) else None
+    found = figure(token)
+    return None if found is None else found.display
 
 
 # --- entities (§8.2 step 3) -----------------------------------------------------------
@@ -263,9 +340,14 @@ def atoms(text: str) -> tuple[Atom, ...]:
     An empty tuple is a legitimate outcome — a prose beat with no figures and no
     names is a real beat, and Task 2 still gives it a verdict.
     """
+    # Tokenised on the FOLDED text, which is what `verify.claim_values` walks.
+    # Two tokenisations of one string is the divergence D-096 is about in
+    # miniature: a non-breaking space between a figure and its unit makes one
+    # token here and two there, and `check_claim` raises when the two walks
+    # disagree about what the beat says.
     numbers = _ordered(
         value
-        for value in (claim_number(token) for token in text.split())
+        for value in (claim_number(token) for token in fold(text).split())
         if value is not None
     )
     entities = _ordered(_entity_runs(text))

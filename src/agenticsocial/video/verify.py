@@ -50,7 +50,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -60,7 +59,7 @@ from ..workspace import atomic_write
 from . import claims as claims_mod
 from . import corpus as corpus_mod
 from . import script as script_mod
-from .claims import UNIT_SUFFIXES, Claim, claim_number, fold
+from .claims import Claim, claim_number, figure, fold
 from .models import Episode
 
 # Two helpers reached across the module boundary rather than re-spelled here.
@@ -220,18 +219,29 @@ def closest_span(quote: str, document: str) -> tuple[int, int] | None:
 
 _THOUSAND = Decimal(1000)
 
-# The suffix set is §8.2.2's. `%` and `x` are units rather than magnitudes and
-# multiply by one: `1,100%` is eleven hundred, not eleven hundred of anything.
+# The suffix set is §8.2.2's, plus the two-letter spellings `claims.UNIT_WORDS`
+# strips. `%`, `x` and `bps` are units rather than magnitudes and multiply by
+# one: `1,100%` is eleven hundred, not eleven hundred of anything, and 50 basis
+# points is fifty of them. Anything absent from this mapping is worth one, which
+# is safe precisely because `claims.figure` has already decided the token is a
+# figure — an unreadable one arrives here with no value at all.
 MAGNITUDES: dict[str, Decimal] = {
     "K": _THOUSAND,
     "M": _THOUSAND**2,
     "B": _THOUSAND**3,
     "T": _THOUSAND**4,
+    "BN": _THOUSAND**3,
+    "MN": _THOUSAND**2,
+    "TN": _THOUSAND**4,
 }
 
 # The spelled forms §8.2 names, plus their plurals — a source writes "95 billion"
-# and also "hundreds of billions". A closed list, not a suffix rule: "bn" and
-# "mn" are not here, and a beat using them is refused rather than guessed at.
+# and also "hundreds of billions". A closed list, not a suffix rule. The glued
+# spellings `95bn` and `95mn` are NOT here; they are stripped as suffixes by
+# `claims.UNIT_WORDS` and expanded by `MAGNITUDES` above. This comment used to
+# claim they were "refused rather than guessed at" — they were neither. They
+# produced no atom, and `about 950bn active` verified clean against a source
+# saying `about 95B active` (F1).
 MAGNITUDE_WORDS: dict[str, Decimal] = {
     word: value
     for stem, value in (
@@ -245,30 +255,30 @@ MAGNITUDE_WORDS: dict[str, Decimal] = {
 
 
 def _coefficient(token: str) -> tuple[str, Decimal | None, Decimal] | None:
-    """`(display, value, suffix magnitude)` for a §8.2.2 claim number, else None.
+    """`(display, value, suffix magnitude)` for a §8.2.2 figure, else None.
 
-    `claim_number` is the authority on *whether* this token is a claim number —
-    reused, never re-derived. What it throws away is the suffix, and the suffix
-    is the whole magnitude: it returns `"1"` for `1M` and `"95"` for `95B`, so a
-    check built on its output alone cannot tell one million from one.
+    `claims.figure` is the authority on *whether* this token is a figure and on
+    what it reads as — reused, never re-derived. What the atom string throws
+    away is the suffix, and the suffix is the whole magnitude: the display is
+    `"1"` for `1M` and `"95"` for `95B`, so a check built on it alone cannot
+    tell one million from one.
 
-    `value` is None when the digits do not parse — `1.2.3` satisfies §8.2.2's
-    "only digits and separators" and is not a number. Unvaluable is treated as
-    unverifiable, which fails; guessing at it would be the one direction this
-    module must never err in.
+    `value` is None when the token cannot be valued: `1.2.3` satisfies §8.2.2's
+    "only digits and separators" and is not a number, and `3/4`, `1e9`, `12:30`
+    and `٣٠٠` are figures whose arithmetic this module does not do. None of them
+    is guessed at — `check_claim` demands the quote spell them exactly, which is
+    the strictest comparison available rather than a relaxation of one.
     """
-    display = claim_number(token)
-    if display is None:
+    found = figure(token)
+    if found is None:
         return None
-    bare = _bare(token)
-    if bare and unicodedata.category(bare[0]) == "Sc":
-        bare = bare[1:]
-    suffix = bare[-1] if len(bare) > 1 and bare[-1] in UNIT_SUFFIXES else ""
-    try:
-        value = Decimal(display.replace(",", ""))
-    except InvalidOperation:
-        value = None
-    return display, value, MAGNITUDES.get(suffix.upper(), Decimal(1))
+    value: Decimal | None = None
+    if found.digits is not None:
+        try:
+            value = Decimal(found.digits.replace(",", ""))
+        except InvalidOperation:
+            value = None
+    return found.display, value, MAGNITUDES.get(found.suffix.upper(), Decimal(1))
 
 
 def _magnitude_word(token: str) -> Decimal | None:
@@ -346,6 +356,20 @@ def quote_values(text: str) -> frozenset[Decimal]:
     return frozenset(values)
 
 
+def quote_spellings(text: str) -> frozenset[str]:
+    """Every figure this text SPELLS that no arithmetic here can evaluate.
+
+    The companion to `quote_values`, and the reason an unreadable figure is
+    checked rather than refused outright. `3/4` is something a real beat writes;
+    when the source spells it the same way, equality after §8.2.1's fold is the
+    STRICTEST comparison available — stricter than the numeric one, which reads
+    `1M` and `1,000,000` as the same claim. What it cannot do is let a wrong
+    figure through, because "wrong" and "differently spelled" are the same thing
+    for a token nothing can value.
+    """
+    return frozenset(display for display, value in claim_values(text) if value is None)
+
+
 # --- R5 — `shown` against the row it labels (D-085 #1, handed over by D-094) ----------
 
 
@@ -381,7 +405,15 @@ def shown_problems(beat: script_mod.Beat) -> tuple[str, ...]:
     for i, row in enumerate(rows):
         if not isinstance(row, dict) or not isinstance(row.get("shown"), str):
             continue
-        figures = [value for _d, value in claim_values(_shown_text(row["shown"]))]
+        # Values only: a cell carrying a figure this pass cannot read (`1.2.3`)
+        # states nothing about the bar's geometry, and §8.2 already demands the
+        # quote spell it. Comparing a row value against `None` would refuse the
+        # row for the wrong reason.
+        figures = [
+            value
+            for _d, value in claim_values(_shown_text(row["shown"]))
+            if value is not None
+        ]
         if not figures:
             # R5's negative half: a cell that labels its direction rather than
             # restating its numbers is the override working as designed.
@@ -500,12 +532,14 @@ def check_claim(
         )
 
     found = quote_values(claim.quote)
+    spelled = quote_spellings(claim.quote)
     occurrences: dict[str, list[Decimal | None]] = {}
     for display, value in claim_values(claim.text):
         occurrences.setdefault(display, []).append(value)
 
     in_quote: list[str] = []
     missing: list[str] = []
+    unreadable: list[str] = []
     for display in _number_atoms(claim):
         seen = occurrences.get(display)
         if seen is None:
@@ -519,29 +553,49 @@ def check_claim(
             )
         if all(value is not None and value in found for value in seen):
             in_quote.append(display)
+        elif all(value is None for value in seen):
+            # A figure with no value. The comparison falls back to the spelling
+            # — never to silence: an exemption here is how `950bn` and `3/4`
+            # reached the screen as `pass` with nothing checked at all.
+            (in_quote if display in spelled else unreadable).append(display)
         else:
             missing.append(display)
 
     entities_missing = _missing_entities(entities, claim.quote, document)
-    verdict = "fail" if (missing or problems) else "pass"
+    verdict = "fail" if (missing or unreadable or problems) else "pass"
     return Mechanical(
         verdict=verdict,
         quote_found=True,
         quote_span=span,
         atoms_in_quote=tuple(in_quote),
         atoms_in_corpus=tuple(e for e in entities if e not in entities_missing),
-        atoms_missing=tuple(missing),
+        atoms_missing=tuple(missing + unreadable),
         entities_missing=entities_missing,
         shown_problems=problems,
-        reason=_reason(missing, problems),
+        reason=_reason(missing, unreadable, problems),
     )
 
 
-def _reason(missing: list[str], problems: tuple[str, ...]) -> str:
+def _reason(
+    missing: list[str], unreadable: list[str], problems: tuple[str, ...]
+) -> str:
+    """Why this claim failed, in the words the operator acts on.
+
+    The two numeric refusals are deliberately different sentences, because the
+    fixes are different: a wrong value is a rewrite, and a figure this pass
+    cannot read is a quote that has to carry it verbatim — or a `claim_override`
+    saying why it does not. A refusal that names no token is one nobody can act
+    on at all.
+    """
     parts = []
     if missing:
         parts.append(
             "the quote does not contain " + ", ".join(missing) + " by value"
+        )
+    if unreadable:
+        parts.append(
+            "this pass cannot read " + ", ".join(unreadable) + " as a value, and "
+            "the quote does not spell it"
         )
     parts.extend(problems)
     return "; ".join(parts)

@@ -621,7 +621,14 @@ def test_list_extracts_lead_and_every_item():
             )
         )
     )[0]
+    # `1M-token` begins with a digit, so it is a figure and not an identifier
+    # (Task 4, R1) — the same silence that exempted it exempted `950bn`, and a
+    # 1M-token window is a claim about quantity in a way `V4-Pro` is not. It
+    # cannot be VALUED (a hyphen is not a separator inside a number), so §8.2
+    # asks the quote to spell it. The display is folded, which is why it is
+    # lower case: `claims.atoms` and `verify.claim_values` must walk one string.
     assert [a.value for a in claim.atoms if a.kind == "number"] == [
+        "1m-token",
         "1.32",
         "1,100",
     ]
