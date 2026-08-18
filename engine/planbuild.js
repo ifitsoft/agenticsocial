@@ -246,6 +246,89 @@ function requireCitation(b) {
   }
 }
 
+/* R1, Task 3 — a beat whose value animation cannot finish inside its hold.
+ *
+ * Verified on the real renderer: a three-row kpis stack at a 2-second hold ends
+ * its LAST rendered frame on 40% for an authored 50%. The third row starts
+ * counting at 1.59s and takes 1.35s; the beat is over at 2.0s.
+ *
+ * D-083 allowed mid-count frames on the grounds that such a value is unstable,
+ * bounded and derived — a viewer sees it move, it never exceeds the authored
+ * figure, and the next frame corrects it. All three properties fail at the end
+ * of a beat: nothing follows to correct it, so the mid-count value IS the
+ * terminal value. If the beat is the last one, it is the number the video ends
+ * on. That is a figure in no source, no quote and no plan, which is exactly
+ * what requireExactAtDecimals refuses — arrived at through the clock instead of
+ * through rounding.
+ *
+ * This is the renderer's business and nowhere else's: script.py knows the hold
+ * and nothing about `.62`, and engine.js knows `.62` and nothing about the
+ * hold. Only this file sees both.
+ *
+ * The two entrance offsets below are this file's own — buildKpis and
+ * buildJumpChart pass them as `d0` — so they are named here and used in both
+ * places. Everything after `d0` is engine.js's, read from its constants rather
+ * than retyped: two copies of `.62` agree right up until somebody retimes the
+ * stack, and then this check passes beats that end mid-count again while still
+ * reporting ok.
+ */
+var KPI_D0 = 0.35;
+var JUMP_D0 = 0.3;
+
+function round3(n) {
+  /* plan.json's holds are rounded to 3dp by plan.py, and a requirement of
+   * 2.9400000000000004 would refuse the hold an operator typed after reading
+   * the error. */
+  return Math.round(n * 1000) / 1000;
+}
+
+/* The seconds this beat's value animation needs, or 0 if nothing counts.
+ *
+ * Not "how long the beat's animations run" — the footnote fade and the act chip
+ * are decoration, and a card whose footnote is still arriving at the cut is a
+ * pacing choice. This is only about animations whose END STATE is a figure the
+ * viewer will read off the screen.
+ */
+function requiredHold(b) {
+  if (b.type === 'kpis') {
+    /* The LAST item that actually counts, not the last item. `kpis()` only
+     * calls count() for a numeric value; a trailing string is printed verbatim
+     * at p>0 and has nothing to finish. Staggering from items.length would
+     * demand time for an animation that does not exist. */
+    var items = b.items || [];
+    var last = -1;
+    for (var i = 0; i < items.length; i++) {
+      if (typeof items[i].value === 'number') last = i;
+    }
+    if (last < 0) return 0;
+    return round3(KPI_D0 + last * KPI_STAGGER + KPI_COUNT_DUR);
+  }
+  if (b.type === 'jumpChart') {
+    /* jumpChart staggers differently and counts differently: no digit changes,
+     * but the gain segment and the `to` dot are positioned at
+     * `from + (to - from) * p`, so an unfinished bar sits at a value between
+     * the two — beside a `shown` cell that states the finished one. The frame
+     * contradicts its own label. */
+    var rows = b.rows || [];
+    if (!rows.length) return 0;
+    return round3(JUMP_D0 + (rows.length - 1) * JUMP_STAGGER + JUMP_GROW_D0 + JUMP_GROW_DUR);
+  }
+  return 0;
+}
+
+function requireCountFitsHold(b, index) {
+  var needed = requiredHold(b);
+  if (!needed) return;
+  var hold = typeof b.hold === 'number' ? b.hold : 0;
+  if (hold >= needed) return; /* inclusive: see the report on the quint tail */
+  throw new Error(
+    'beat ' + index + ' (' + b.type + ') holds ' + hold + 's, but its value ' +
+      'animation is still running at ' + needed + 's — the last frame of the ' +
+      'beat would freeze a mid-count figure that is in no source, no quote and ' +
+      'no plan. Give it a hold of ' + needed + 's or more, or fewer rows',
+  );
+}
+
 /* R2, and the heart of this file.
  *
  * count() formats with `decimals ? v.toFixed(decimals) : Math.round(v)`. So
@@ -305,12 +388,13 @@ function planKpiItems(b) {
  * `tone` is the engine's blue/warm switch and no beat field names it — spec
  * §7.1 gives kpis `items` and `kicker` and nothing else — so it stays 'blue',
  * the palette's `accent`. */
-function buildKpis(b) {
+function buildKpis(b, index) {
   requireCitation(b);
+  requireCountFitsHold(b, index);
   var items = planKpiItems(b);
   return function () {
     planKicker(b, 0.05);
-    kpis(items, 0.35, 'blue');
+    kpis(items, KPI_D0, 'blue');
   };
 }
 
@@ -361,15 +445,16 @@ function planJumpRows(b) {
  * changes what the chart claims. It fades in after the last bar has grown; the
  * offset is per-row layout, not plan timing, so R5 still holds (the plan's
  * `hold` is never read here). */
-function buildJumpChart(b) {
+function buildJumpChart(b, index) {
   requireCitation(b);
+  requireCountFitsHold(b, index);
   var rows = planJumpRows(b);
   return function () {
     planKicker(b, 0.02);
     var chart = E('div', 'chart');
-    jumpChart(rows, b.scale, 0.3, chart);
+    jumpChart(rows, b.scale, JUMP_D0, chart);
     var ft = E('div', 'foot', { p: chart, text: b.footnote });
-    fade(ft, 0.3 + rows.length * 0.34 + 0.6, { dur: 0.5, dy: 10, blur: 0 });
+    fade(ft, JUMP_D0 + rows.length * JUMP_STAGGER + 0.6, { dur: 0.5, dy: 10, blur: 0 });
   };
 }
 
@@ -416,6 +501,9 @@ function buildFromPlan(plan) {
      * [[structure.acts]]. Do NOT look it up here: this file has no series.toml,
      * and a second resolution is a second place for the join to drift.
      * `b.act` is the fallback for a plan written before act_label existed. */
-    scene(b.act_label || b.act || '', b.hold, b.src || '', make(b));
+    /* The index travels with the beat so a refusal can name it. An operator
+     * reading "a kpis beat holds 2s" in a twelve-beat episode has to find which
+     * one; `beat 7` is the row they are looking at in `agsoc video review`. */
+    scene(b.act_label || b.act || '', b.hold, b.src || '', make(b, i));
   }
 }

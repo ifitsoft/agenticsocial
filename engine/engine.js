@@ -102,6 +102,17 @@ function count(el,d0,dur,to,suffix,decimals,prefix){
   return d0+dur;
 }
 
+/* Value-animation timing, named rather than inlined.
+   A count-up that cannot finish inside its beat's hold leaves the LAST rendered
+   frame showing a mid-count figure, and a mid-count figure at the end of a beat
+   is not "on its way" to anything — it IS what the video says. planbuild.js
+   refuses such a beat, and it has to compute the hold it needs from the same
+   numbers the animation uses; a second copy of `.62` there would drift from
+   this one silently. Renamed, retimed or restaggered here, the requirement
+   moves with it. */
+const KPI_STAGGER=.62, KPI_COUNT_DUR=1.35;
+const JUMP_STAGGER=.34, JUMP_GROW_D0=.5, JUMP_GROW_DUR=.8;
+
 /* KPI stack — a column of headline figures. `tone` is 'blue' or 'warm'.
    item = [value, unit, suffix, decimals, prefix, sizeClass] */
 function kpis(items,d0,tone){
@@ -110,9 +121,9 @@ function kpis(items,d0,tone){
     const n=E('div','n',{p:row,text:'0'});
     const u=E('div','u',{p:row,text:it[1]});
     const rule=E('div','kpi-rule '+(tone||'blue'));
-    const t0=d0+i*.62;
+    const t0=d0+i*KPI_STAGGER;
     an(t0,.5,EZ.out,p=>{row.style.opacity=p;row.style.transform=`translateY(${(1-p)*20}px)`});
-    if(typeof it[0]==='number')count(n,t0,1.35,it[0],it[2],it[3],it[4]);
+    if(typeof it[0]==='number')count(n,t0,KPI_COUNT_DUR,it[0],it[2],it[3],it[4]);
     else an(t0,.5,EZ.out,p=>{n.textContent=p>0?it[0]:''});
     an(t0+.1,.7,EZ.expo,p=>{rule.style.transform=`scaleX(${p})`});
   });
@@ -130,14 +141,14 @@ function jumpChart(rows,max,d0,parent){
     const gain=E('div','jgain',{p:row});
     const dA=E('div','dot from',{p:row});
     const dB=E('div','dot to',{p:row});
-    const t0=d0+i*.34;
+    const t0=d0+i*JUMP_STAGGER;
     fade(head,t0,{dur:.5,dy:12,blur:5});
     draw(tr,t0+.05,.55);
     dA.style.left=(from/max*100)+'%';
     an(t0+.3,.45,EZ.back,p=>{dA.style.opacity=clamp(p*3);dA.style.transform=`scale(${lerp(.3,1,p)})`});
     // the blue segment grows from the old score to the new one — the gain IS the story
     gain.style.left=(from/max*100)+'%';
-    an(t0+.5,.8,EZ.quint,p=>{
+    an(t0+JUMP_GROW_D0,JUMP_GROW_DUR,EZ.quint,p=>{
       gain.style.width=((to-from)/max*100*p)+'%';
       gain.style.opacity=clamp(p*4);
       dB.style.left=(from/max*100+(to-from)/max*100*p)+'%';

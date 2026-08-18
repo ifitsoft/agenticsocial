@@ -114,8 +114,8 @@ HARNESS = textwrap.dedent(
 )
 
 
-def _run(plan: dict | None = None, expr: str | None = None):
-    env = {**os.environ, "ENGINE": str(ENGINE)}
+def _run(plan: dict | None = None, expr: str | None = None, engine: Path | None = None):
+    env = {**os.environ, "ENGINE": str(engine or ENGINE)}
     if plan is not None:
         env["PLAN"] = json.dumps(plan)
     if expr is not None:
@@ -123,10 +123,29 @@ def _run(plan: dict | None = None, expr: str | None = None):
     return subprocess.run(["node", "-e", HARNESS], capture_output=True, text=True, env=env)
 
 
-def _node(plan: dict | None = None, expr: str | None = None) -> dict:
-    proc = _run(plan, expr)
+def _node(
+    plan: dict | None = None, expr: str | None = None, engine: Path | None = None
+) -> dict:
+    proc = _run(plan, expr, engine)
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)
+
+
+def engine_with(tmp_path: Path, old: str, new: str) -> Path:
+    """A copy of the engine with one animation constant changed.
+
+    The only way a test can tell "derived from engine.js's constant" from "the
+    same number typed again in planbuild.js" is to move the constant and watch
+    whether the requirement follows. Reading the constant and recomputing the
+    formula in Python cannot: both implementations agree while the numbers do.
+    """
+    out = tmp_path / "engine"
+    out.mkdir(exist_ok=True)
+    src = (ENGINE / "engine.js").read_text()
+    assert old in src, f"{old!r} is no longer in engine.js — the evidence moved"
+    (out / "engine.js").write_text(src.replace(old, new))
+    (out / "planbuild.js").write_text((ENGINE / "planbuild.js").read_text())
+    return out
 
 
 def refuses(beats: list[dict], **plan) -> str:
@@ -740,6 +759,150 @@ def test_the_scale_reaches_the_engine_as_the_track_maximum():
     ], "scale": 70})])[0]["tree"]
     dots = [n for n in flatten(tree) if n["cls"] == "dot to"]
     assert dots and dots[0]["css"].get("left") == "50%"
+
+
+# --- Task 3 Step 0: a beat that runs out of time --------------------------------
+#
+# Leader-verified against the real renderer, sampling the LAST frame render.mjs
+# writes for a three-row kpis beat:
+#
+#     hold 2.0s -> last rendered frame: $0.75 in  $3.75 out  40% cheaper
+#     hold 3.0s -> last rendered frame: $0.75 in  $3.75 out  50% cheaper
+#
+# At a 2-second hold the video's final frame reads 40% for an authored 50%. R2
+# is defeated not by rounding but by running out of time: the mid-count value
+# BECOMES the terminal value. D-083 allowed mid-count frames because such a
+# value is unstable, bounded and derived — all three properties fail the moment
+# the count cannot finish.
+
+KPI_COUNTS_3 = {
+    **KPIS,
+    "items": [
+        {"value": 0.75, "prefix": "$", "label": "per 1M input tokens", "decimals": 2},
+        {"value": 3.75, "prefix": "$", "label": "per 1M output tokens", "decimals": 2},
+        {"value": 50, "unit": "%", "label": "cheaper than 3.6 Flash"},
+    ],
+}
+
+
+def required_hold(b: dict, engine: Path | None = None) -> float:
+    return _node(expr="requiredHold(" + json.dumps(b) + ")", engine=engine)["value"]
+
+
+@needs_node
+def test_a_kpis_beat_whose_count_cannot_finish_in_its_hold_is_refused():
+    """R1 (M1). The exact defect, at the exact hold the leader verified. The
+    third row starts counting at 1.59s and takes 1.35s, so a 2s hold ends the
+    beat — and, if it is the last beat, the video — at 40%."""
+    msg = refuses([beat("kpis", hold=2.0, **KPI_COUNTS_3)])
+    assert "2.94" in msg, msg
+    assert "2" in msg and "kpis" in msg
+
+
+@needs_node
+def test_the_refusal_names_the_beat_the_hold_it_has_and_the_hold_it_needs():
+    """R1. An operator fixes this by typing a number into script.yaml. A message
+    that says "too short" and not "2.94" makes them binary-search it."""
+    msg = refuses([beat("statement", text="a"), beat("kpis", hold=2.0, **KPI_COUNTS_3)])
+    assert "beat 1" in msg
+    assert "kpis" in msg
+    assert "2.0" in msg or "2s" in msg
+    assert "2.94" in msg
+
+
+@needs_node
+def test_a_hold_exactly_equal_to_the_requirement_renders():
+    """R1's boundary, inclusive. The eased count is a quint: 1/30s before the
+    end it is within 1e-8 of its target and rounds to the authored figure, so a
+    hold that exactly contains the animation shows the authored number on the
+    last frame. Exclusive here would refuse the beat the fix produces."""
+    scene = build([beat("kpis", hold=2.94, **KPI_COUNTS_3)])[0]
+    assert scene["tree"]["kids"]
+
+
+@needs_node
+def test_a_jumpchart_whose_bars_cannot_finish_growing_is_refused():
+    """R1 on the other chart. jumpChart staggers by .34 and its gain segment
+    starts .5 in and takes .8 — different constants, same failure: the last
+    frame freezes a bar short of the value the row's own label states."""
+    rows = [{"label": f"row {i}", "before": 1, "after": 2} for i in range(4)]
+    msg = refuses([beat("jumpChart", hold=2.0, **{**JUMP, "rows": rows})])
+    assert "2.62" in msg, msg
+    assert "jumpChart" in msg
+
+
+@needs_node
+@pytest.mark.parametrize("kind", ["statement", "body", "list", "quote", "title", "signoff"])
+def test_a_beat_with_no_count_is_unaffected_however_short_it_is(kind):
+    """R1 NEGATIVE (M2). Nothing on these cards counts up to a figure, so a
+    short one is a fast cut, not a false number. A check applied to every type
+    would refuse the entire text vocabulary at any brisk pace."""
+    scene = build([beat(kind, hold=0.1, **RENDERABLE_BEATS[kind])])[0]
+    assert scene["tree"]["kids"]
+
+
+@needs_node
+def test_a_kpis_beat_whose_values_are_all_strings_is_unaffected():
+    """R1 NEGATIVE (M2), where it is easy to get wrong. `kpis()` only calls
+    `count()` for a numeric value; a string one is printed verbatim at p>0. A
+    check keyed on the beat TYPE rather than on what actually counts refuses a
+    legal card that has nothing to finish."""
+    scene = build([beat("kpis", hold=0.1, **{**KPIS, "items": [
+        {"value": "half", "label": "the price of 3.6"},
+    ]})])[0]
+    assert scene["tree"]["kids"]
+
+
+@needs_node
+def test_the_requirement_ends_with_the_last_item_that_actually_counts():
+    """R1 NEGATIVE, finer. A trailing string item is drawn but never counts, so
+    it must not extend the hold the beat demands — `items.length` is the wrong
+    number to stagger from."""
+    numeric_last = {**KPIS, "items": [
+        {"value": 1, "label": "a"},
+        {"value": 2, "label": "b"},
+    ]}
+    string_last = {**KPIS, "items": [
+        {"value": 1, "label": "a"},
+        {"value": 2, "label": "b"},
+        {"value": "and rising", "label": "c"},
+    ]}
+    assert required_hold(beat("kpis", **numeric_last)) == required_hold(
+        beat("kpis", **string_last)
+    )
+
+
+@needs_node
+def test_the_requirement_moves_when_the_engines_stagger_does(tmp_path):
+    """R1 (M3). The requirement must be COMPUTED from the constants the
+    animation uses, not typed a second time in planbuild.js. Two copies of
+    `.62` agree until somebody retimes the stack, and then the check silently
+    passes beats that end mid-count again — which is this defect returning with
+    a test that still says ok.
+
+    So move the constant and watch the requirement follow."""
+    b = beat("kpis", **KPI_COUNTS_3)
+    slower = engine_with(tmp_path, "KPI_STAGGER=.62", "KPI_STAGGER=1.62")
+    assert required_hold(b, slower) == pytest.approx(required_hold(b) + 2.0)
+
+
+@needs_node
+def test_the_requirement_moves_when_the_engines_count_duration_does(tmp_path):
+    """M3's other half: the stagger is only one of the two constants, and a
+    formula that derives one and hardcodes the other is half-fixed."""
+    b = beat("kpis", **KPI_COUNTS_3)
+    slower = engine_with(tmp_path, "KPI_COUNT_DUR=1.35", "KPI_COUNT_DUR=3.35")
+    assert required_hold(b, slower) == pytest.approx(required_hold(b) + 2.0)
+
+
+@needs_node
+def test_the_jumpchart_requirement_moves_with_the_engines_growth_duration(tmp_path):
+    """M3 on the type that staggers differently. jumpChart's bars grow from
+    `JUMP_GROW_D0` for `JUMP_GROW_DUR`, and both are the engine's numbers."""
+    rows = [{"label": f"row {i}", "before": 1, "after": 2} for i in range(4)]
+    b = beat("jumpChart", **{**JUMP, "rows": rows})
+    slower = engine_with(tmp_path, "JUMP_GROW_DUR=.8", "JUMP_GROW_DUR=2.8")
+    assert required_hold(b, slower) == pytest.approx(required_hold(b) + 2.0)
 
 
 # --- R1 negative: the documented HTML override stays HTML ------------------------
