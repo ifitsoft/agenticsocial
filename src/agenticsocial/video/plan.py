@@ -28,8 +28,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..workspace import atomic_write
-from .models import Episode, Series
+from .models import Episode, Series, SeriesError
 from .script import (
+    BEAT_TYPES,
     DEFAULT_HOLD,
     RENDERABLE,
     Script,
@@ -37,6 +38,7 @@ from .script import (
     load_script_with_digest,
     validate_acts,
 )
+from .series import validate_design
 
 FPS = 30
 # The renderable gate, named for the callers that already import it. It is
@@ -51,6 +53,7 @@ __all__ = [
     "SUPPORTED_BEATS",
     "FORMATS",
     "PlanError",
+    "act_labels",
     "RuntimeCheck",
     "build_plan",
     "check_runtime",
@@ -60,6 +63,32 @@ __all__ = [
 
 class PlanError(Exception):
     pass
+
+
+def act_labels(series: Series) -> dict[str, str]:
+    """`act id -> display label`, resolved once so `planbuild.js` does no lookup.
+
+    A beat names its act by ID; the label is display text. Resolving here means
+    an operator can reword `label = "03 — Agents"` without silently unwiring
+    every beat that points at act `03`.
+
+    Falls back to the id when an act declares no usable `label`. `validate_acts`
+    requires an `id` and deliberately does not constrain `label` — spec §6's own
+    cold-open row carries `label = ""` — so `""` is a label an operator chose and
+    is kept, while a missing or non-string one is not a label at all and would
+    otherwise be interpolated into the chip as `None` or `5`.
+    """
+    labels: dict[str, str] = {}
+    for act in series.acts:
+        if not isinstance(act, dict):
+            continue
+        act_id = act.get("id")
+        if not isinstance(act_id, str):
+            continue
+        label = act.get("label")
+        # First declaration wins, so a duplicated id resolves deterministically.
+        labels.setdefault(act_id, label if isinstance(label, str) else act_id)
+    return labels
 
 
 @dataclass(frozen=True)
@@ -142,6 +171,16 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
     except ScriptError as e:
         raise PlanError(str(e)) from e
 
+    # Again, having already run in load_series. Not redundant: this is the last
+    # point before plan.json exists on disk and Node is started, and build_plan
+    # takes a `Series` from its caller — the same reason check_runtime's docstring
+    # gives for why a gate must re-verify rather than trust what it was handed.
+    try:
+        validate_design(series.design, series.dir / "series.toml")
+    except SeriesError as e:
+        raise PlanError(str(e)) from e
+
+    labels = act_labels(series)
     pace = script.pace
     beats_out: list[dict] = []
     at = 0.0
@@ -159,19 +198,50 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
                 f"one frame at {FPS}fps — it would not appear in the render"
             )
         start, end = round(at, 3), round(at + hold, 3)
+        # The type's own fields, in catalogue order (required, then optional),
+        # and only the ones the operator actually wrote — script.py keeps
+        # "absent" and "written empty" distinct and a plan that blanks the
+        # difference hands the renderer a decision the operator did not make.
+        #
+        # Driven off BEAT_TYPES rather than dumping `beat.fields`: `fields` also
+        # carries `claim_override`, which is Phase 5's verification input and not
+        # content. Nothing the renderer cannot draw belongs in front of it.
+        spec = BEAT_TYPES[beat.type]
+        payload = {
+            name: beat.fields[name]
+            for name in (*spec["required"], *spec["optional"])
+            if name in beat.fields
+        }
         # emit in the documented order
         beats_out.append(
             {
                 "type": beat.type,
                 "act": beat.act,
+                # The id is kept alongside the label: Phase 5 anchors claims to
+                # beats, and it must join on the stable key, not on display text.
+                # An undeclared id falls through as its own label rather than
+                # raising — a script written before its series declared acts
+                # still renders (R3 negative, spec §6 "advisory").
+                "act_label": labels.get(beat.act, beat.act),
                 "hold": hold,
                 "start": start,
                 "end": end,
                 "start_frame": round(start * FPS),
                 "end_frame": round(end * FPS),
                 "kicker": beat.kicker,
-                "text": beat.fields["text"],
+                **payload,
                 "src": beat.src,
+                # The citation travels only with the types that may not render
+                # without it, and it travels because `planbuild.js` enforces
+                # that rule at the far end. A plan can reach the page without
+                # passing through this module at all — `render.mjs --plan`
+                # reads any JSON file, and engine/determinism.test.mjs writes
+                # its own — so the renderer's gate is the one that holds for
+                # spec §7.2's "no path", and a gate cannot check a field it was
+                # never handed. On an uncited type there is nothing to enforce,
+                # and a `quote` key in front of the renderer would be one more
+                # field it has no business drawing.
+                **({"quote": beat.quote} if spec["cited"] else {}),
             }
         )
         at = end
@@ -179,6 +249,10 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
     return {
         "episode": episode.id,
         "series": series.slug,
+        # The display name, next to the slug it belongs to. `title` and
+        # `signoff` render it at 150px; the slug is a filesystem key and
+        # `the-brief` is not what the brand card says.
+        "series_name": series.name,
         "byline": series.byline,
         "script_sha256": digest,
         "format": {"name": fmt, **FORMATS[fmt]},

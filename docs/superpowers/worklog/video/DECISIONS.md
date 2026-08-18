@@ -1556,3 +1556,573 @@ An honest caveat it volunteered: with `RENDERABLE == {"statement"}`, 10 of 12
 rows carry the cannot-render mark, so the margin flag is near-noise this phase
 and the footer does the real work. It becomes informative as `RENDERABLE` widens,
 and inverting it would be wrong the moment the ratio flips.
+
+## D-075 · phase 4 · beat text reaches innerHTML — the rendered bytes are not the verified bytes
+Found by the Task 0 implementer while answering "what else does the renderer
+interpolate that nothing validates". Leader-verified in a real browser:
+
+```
+script: "The model is <thinking> about it"
+screen: "The model is  about it"          <- the word is GONE
+
+script: "AT&amp;T raised prices"
+screen: "AT&T raised prices"
+
+script: "Qwen3.8-Max <em>self-hostable</em> at 2.4T"
+screen: "Qwen3.8-Max self-hostable at 2.4T"
+```
+
+`engine.js` defines `const P=(t)=>({html:t})` and `E` does
+`e.innerHTML=opts.html`; `planbuild.js` builds every statement with `P(b.text)`
+and `P(b.kicker)`. So markup in a beat is *interpreted*, and entities *decode*.
+
+**This is a verification defect, not a rendering one.** Spec §4's whole promise
+is that a claim is checked against bytes. Phase 5 will check the *script's*
+bytes, and the video shows something else — a claim can pass verification while
+the frame displays different text. Nothing errors; the render looks fine. Same
+family as `accent = 5`, one layer deeper and considerably worse, because the
+divergence is in the thing being fact-checked.
+
+**Fix is not blanket escaping.** `jumpChart`'s `shown` is a *documented* HTML
+override — `2026-08-14.js` uses `<s>34.4</s> &rarr; 43.6` deliberately. So:
+prose fields (`text`, `kicker`, `lead`, `label`, `caption`, `footnote`,
+`attribution`) render through `textContent`; only fields the schema marks as HTML
+go through `innerHTML`. Rendering prose as text needs no escaping and cannot
+diverge. **First item in Task 1.**
+
+## D-076 · phase 4 / task 0 · acts join by id — and the real argument is stronger than mine
+I argued ids are "stable under rewording". The implementer gave the better case
+and I am recording its version, not mine:
+
+> A label join fails **silently**. Rename an act and every beat still renders,
+> the chip still shows a string, `warm_acts` just stops matching and the warm
+> treatment quietly disappears. **That is `accent = 5` in different clothes.**
+
+Two arguments I had not made: Phase 5 anchors claims to beats, so a label join
+invalidates anchors on edits unrelated to the claim; and `validate_acts` **already
+decided this** — it requires `id`, does not require `label` at all, so choosing
+labels would mean joining the optional free-form field against the mandatory one.
+
+And the line worth keeping:
+
+> The committed episode's labels are not evidence for labels; they are evidence
+> the question had not been asked.
+
+## D-077 · phase 4 / task 0 · type_scale wired, type_family dropped
+The implementer split a question I had posed as one:
+
+> Wire `type_scale`: three enumerated values, validatable like `register`. **Drop
+> `type_family`**: a font stack naming a family the render host lacks falls back
+> silently — the same silent-wrong-render class — and unlike a colour it *cannot*
+> be validated, because whether `SF Pro Display` resolves is a property of the
+> machine, not the string. Making it honest means embedding fonts as data URIs
+> and validating against the embedded set, which is a feature, not a knob.
+
+Adopted. A knob that cannot be checked and fails silently is worse than no knob.
+
+Also carried: `warm_acts` is now validated and warned about, then **ignored** —
+`planbuild.js` hardcodes `warmActs: []`. Wiring it needs resolved *labels*, since
+`engine.js:191` compares against `S.act`. Belongs to the task that draws the warm
+treatment.
+
+Its own sweep caught S5 surviving: `assert "act_label" in src` is satisfied by
+`scene(b.act || b.act_label || '')`, which prints the bare id and ignores the
+label — the defect the resolution exists to prevent. Same weak-assertion class as
+the falsy-value problem, in a string.
+
+## D-078 · phase 4 / task 1 · the divergence is closed. 1068 tests, 23/23.
+Leader-verified in a real render:
+
+```
+on screen : "The model is <thinking> about it & bold too"    bold tag: true
+```
+
+The word survives, `&` stays one character, `**bold**` became a real `<b>`.
+Escape-then-convert, in that order — the reverse escapes the tag it just made.
+
+**Two of its own mutants survived the first sweep**, both real: a *greedy*
+`**…**` regex, so `**A** and **B**` becomes one bold run that swallows the
+connective; and `P()` left in the shared kicker helper, invisible because only
+`statement` built its own kicker. Both now pinned.
+
+**And its browser check had two holes it found and fixed itself.** It read
+`#stage`, whose chrome carries the brand chip and date — so a title card that
+rendered **nothing** still passed. And its fixture used `pace: 1`, which makes a
+pace-leak mutant invisible. Now `#scenes` and `pace: 1.293`. A verification
+harness that includes the chrome is measuring the frame, not the beat.
+
+## D-079 · phase 4 / task 1 · CSS judgement worth keeping
+No new CSS classes. `quote` is a composition of `.lede` + `.rule blue` +
+`.kicker`. Two rejections with real reasons:
+
+- **`.byline` for the attribution** — `seek()` does
+  `SC.querySelector('.byline')` to suppress the corner byline, so a quote beat
+  using that class would have **silently hidden the episode's author**.
+- **`.para`** — it is the *watermark* motif's class in `2026-08-12.js`. Machine
+  text, wrong connotation for a person's words.
+
+That is design reasoning from the existing system rather than from taste, and it
+caught a real interaction a new class would have introduced.
+
+Known consequence: `.kicker` is `text-transform: uppercase`, so attributions
+render `GOOGLE DEEPMIND`.
+
+## D-080 · SPEC · the markup vocabulary widens by exactly one token
+Asked whether `**bold**` alone is enough, the implementer counted **49 committed
+scenes** rather than guessing:
+
+| Markup | Count | Verdict |
+|---|---|---|
+| `<b>` | 20 | covered by `**bold**` |
+| `<br>` | 4 | **all** inside `.big-title` on cards the engine now builds itself — a script never needs it |
+| `<em>` + `<span class="warm-t">` | 3 | **not covered** |
+
+> Those three are one thing: a second emphasis that speaks in **colour** rather
+> than weight, used exactly where each episode pivots.
+
+**Adopted: `*accent*` → `<em>`.** One token, CSS already exists, one line and two
+tests. Not `<br>` (the engine owns the cards that used it), and not `warm-t`,
+which belongs to `[structure] warm_acts` rather than to prose.
+
+Widening deliberately now, on counted evidence, beats having it smuggled in the
+first time a storyboard needs emphasis — which is how a closed surface quietly
+reopens.
+
+## D-081 · carried to Phase 5 · two places byte comparison will legitimately disagree
+From the same report, and both are Phase 5's problem rather than Phase 4's:
+
+1. **`jumpChart.shown` is a documented HTML override** (`<s>34.4</s> &rarr; 43.6`).
+   It is the one field where the frame and the script *should* differ. Phase 5
+   needs an explicit exemption or tag-stripped comparison.
+2. **CSS `text-transform: uppercase` on `.kicker`/`.byline`** means a verifier
+   reading `innerText` without case-folding will false-positive on **every
+   kicker in the series**. §8.2.1's fold already case-folds — this is why that
+   requirement is load-bearing rather than cosmetic.
+
+Two out-of-scope defects the render surfaced, recorded not fixed: **`date_long`
+never reaches the screen** (the title card shows `2026-08-17`, not
+`Monday, 17 August 2026` — `script.py` does not read it), and **`warm_acts` is
+dropped on the floor** by `planbuild.js`.
+
+## D-082 · phase 4 / task 2 · a too-short beat ends on a number nobody authored
+Leader-verified against the real renderer, sampling the last frame `render.mjs`
+actually captures:
+
+```
+hold 2.0s -> last rendered frame: $0.75 in  $3.75 out  40% cheaper
+hold 3.0s -> last rendered frame: $0.75 in  $3.75 out  50% cheaper
+```
+
+**At a 2-second hold the video's final frame reads 40% for an authored 50%.**
+That figure is in no source, no quote and no plan. R2 — "every number the frame
+displays is a number the plan carried" — is defeated not by rounding but by
+*running out of time*.
+
+Predicted by the Task 2 implementer before I measured it:
+
+> The count must finish inside the hold, or the mid-count value **is** the
+> terminal value and all three arguments collapse.
+
+**Fix: the renderer refuses a beat whose count-up cannot complete within its
+hold**, the same way it refuses an uncited chart. It owns both the animation
+constants and the hold, so it is the only layer that can know. Task 3 Step 0.
+
+## D-083 · phase 4 / task 2 · why mid-count frames are acceptable and rounding is not
+I asked whether `__seek(t)` sampling mid-count defeats the verified-numbers
+guarantee. The answer is the most rigorous argument an implementer has given on
+this project, and it is worth keeping in full because Phase 5 depends on it:
+
+> A mid-count value is never **stable** — a count-up's convention is "arriving",
+> and the claim is what it stops on. `count()` is `to * EZ.quint(p)`, monotone
+> with no overshoot, so it **cannot over-claim**, only under-claim on the way.
+> And every intermediate is a function of the authored value alone — lossy,
+> never different.
+>
+> `0.756 → $0.8` is the inverse on all three: **stable, unbounded, and a
+> replacement.**
+
+Three properties — stability, boundedness, derivation — separate motion from
+misstatement. Adopted as the standing test for any future animation that touches
+a figure.
+
+**Consequence for Phase 5:** a frame reader must sample **past the count**, never
+mid-beat. Recorded because a verifier that samples the midpoint would report
+every KPI in the series as wrong.
+
+## D-084 · SPEC · kpis field names corrected
+The engine's `kpis` slot `[1]` is called `unit` in its own signature but holds
+what the schema calls `label`, and one `unit` field cannot express both `$0.75`
+and `50%` — which the committed episode renders from a single call.
+
+Resolved: **`unit` is a suffix, `prefix` is a leading symbol**, both optional.
+Spec §7.1 and its example updated; the example previously said `unit: "$"`, which
+under the corrected mapping would render `0.75$`.
+
+A currency-symbol lookup table was considered and **rejected**: it would
+retroactively change past renders the day someone adds `₹`. The implementer
+removed one that already existed in `cli.py`.
+
+## D-085 · carried to Phase 5 · what a chart can show that nothing can verify
+Ranked by the Task 2 implementer, and the first is unclosable by design:
+
+1. **`jumpChart.shown`** — free HTML, the only digits a viewer actually reads,
+   with **no enforced relation** to `before`/`after`. It cannot be closed
+   mechanically, because `before: 48.0` with `shown: "48–49 → 65.3"` is the
+   committed episode being *honest about a published range*.
+2. **`scale`** — 0–70 scores on `scale: 100` shifts every bar with no wrong digit
+   anywhere.
+3. The `gain` segment is a computed delta rendered as a **length**.
+4. Footnote text.
+
+And the one that matters most, stated plainly: **nothing anywhere yet checks that
+a `value` appears in its `quote`.** R1 only checks the quote exists. That is
+Phase 5's central job and it is correctly still undone.
+
+---
+
+## D-086 · phase 4 / task 3 · the catalogue is closed: `RENDERABLE == set(BEAT_TYPES)`
+
+Phase 4's exit criterion is met. All ten §7.1 types build, `determinism.test.mjs`
+carries a fixture for every one of them, and the assertion `every builder has a
+fixture (10)` is itself a test — so the next type added to §7.1 fails the suite
+until someone writes its fixture, rather than silently rendering nothing.
+
+Three sub-decisions worth keeping:
+
+**The dumbbell renders zero digits, pinned as a forbid-list.** Spec §7.2 says the
+type exists *because a source published ratings rather than scores*. A numeric
+axis would quietly convert an ordinal comparison into a measurement. The test
+asserts the rendered text matches no digit at all, which is stronger than
+asserting particular numbers are absent and cannot rot as the layout changes.
+`footnote` is required for the same reason: the caveat that it encodes direction
+only has to reach the screen.
+
+**Coincident values draw one two-tone marker, not two stacked dots.** Taken from
+`2026-08-12.js`'s own comment. Stacking hides a series, and a chart that silently
+omits a series is worse than one that refuses to draw.
+
+**Gates that stopped firing were re-pointed, not deleted.** With the catalogue
+closed, `plan.py`'s "valid but cannot be rendered yet" path is unreachable
+through a valid script. Every affected test now injects a narrower `RENDERABLE`
+rather than being removed. *A gate whose test was deleted on the day it stopped
+firing is a gate that comes back broken* — and the next §7.1 type is valid before
+its builder exists, which is exactly when an operator needs telling.
+
+## D-087 · phase 4 / task 3 · a beat that runs out of time ends on a false number
+
+Leader-verified against the real renderer, last frame `render.mjs` captures:
+
+```
+hold 2.0s -> last rendered frame: $0.75 in  $3.75 out  40% cheaper
+hold 3.0s -> last rendered frame: $0.75 in  $3.75 out  50% cheaper
+```
+
+**At a 2-second hold the final frame reads 40% for an authored 50%.** D-083
+argued mid-count frames are acceptable because a mid-count value is *unstable,
+bounded and derived* — motion, not assertion. All three properties fail the
+instant the count cannot finish: the mid-count value *becomes* the terminal
+value, and a viewer who pauses on the last frame reads a figure nobody wrote and
+Phase 5 will never check, because Phase 5 verifies the script.
+
+Refused in the renderer, which is the only layer that knows both the animation
+constants and the hold, with the requirement **derived from those constants**
+rather than hardcoded — a hardcoded threshold drifts out of agreement with the
+easing the day someone retunes it. The error names the beat, the hold it has and
+the hold it needs.
+
+## D-088 · phase 4 / task 3 · the `custom` determinism check is a lint, and says so
+
+`custom.js` is author JavaScript executed in the page. `script.py` rejects a `js`
+string containing `Date.now()`, `Math.random()` or `performance.now()` — the
+three ways to break `__seek(t)` purity, the one invariant this project has never
+had to re-fix.
+
+**It catches the accident, not the adversary.** `window['Ma'+'th'].random()`
+walks straight past it, and the error text and docstring both say so. Same
+framing as D-062 on freezing: the guard raises the floor, it is not a boundary.
+Claiming otherwise is how a lint gets mistaken for a sandbox by the next person
+to read it.
+
+The honest substitute for a check is **`attest`**: a required non-empty string in
+which the author states what the beat displays and takes responsibility for it,
+surfaced in `agsoc video review`. No mechanical check can verify arbitrary
+rendering output, so the record is a claim a person made — not a check nobody
+ran. Phase 5 lands `custom` as `manual` with its `attest` recorded, never as
+`pass`.
+
+## D-089 · phase 4 / task 4 · the render page cannot reach the network, and that is a network boundary only
+
+Task 3 was asked what `custom` can actually do and answered honestly rather than
+comfortably. Leader-verified in a real browser:
+
+```
+outbound requests from a custom beat: [ 'https://example.com/exfil?x=The%20Brief' ]
+can it reassign the escaper?  true
+is __seek writable?           true
+```
+
+**The request left the machine carrying page data.** And a beat can reassign
+`escapeHTML` — reintroducing the exact divergence D-078 closed, *after*
+validation passed, from inside a `script.yaml`.
+
+The threat chain is not hypothetical: spec §1 has the agent drafting from fetched
+sources, so hostile text in a source → corpus → storyboard skill → a `custom`
+beat → execution with network access. Every link already exists; that is the
+design, not a misuse.
+
+A CSP now sits in `scene.html`. **In the page, deliberately, not in `render.mjs`**
+— `scene.html` is also opened by hand to scrub the slider, and a runner-side
+block leaves that path open. Ten vectors delivered before it (`fetch`, XHR, `img`,
+`script`, `iframe`, dynamic `import()`, `sendBeacon`, WebSocket, `prefetch`,
+`EventSource`); all thirty checks pass after it, every run over `file://`.
+
+Two things worth more than the policy itself:
+
+**The oracle is a real HTTP server on 127.0.0.1, not Playwright's request event.**
+With the policy on, Chromium still emits a `request` event for a CSP-refused XHR
+— so asserting on that event reports a *working* policy as a leak. Bytes arriving
+at a socket are unambiguous. This is D-035 harness blindness caught before it
+cost anything: *ask what the test would do if the code did nothing*, and also ask
+what it would do if the code worked.
+
+**`script-src` needs `'unsafe-eval'` because `buildCustom` is `new Function`.**
+The policy therefore cannot even pretend to constrain what executes. Stated
+plainly so the closed half is not mistaken for the whole: **a CSP is a network
+boundary, not an execution boundary.** A custom beat can still do everything
+except tell anyone — measured, after the policy: `escapeHTML` reassigned to
+identity from inside a beat, no violation, `pwned: true`. The control for
+`custom` remains `attest` plus a human reading it.
+
+## D-090 · carried · top-level navigation is a real hole a CSP cannot close
+
+Tested rather than reasoned about: `location.href`, `window.open` and
+`<a>.click()` each delivered `document.title` to the sink with **no violation**.
+CSP cannot stop it — `navigate-to` was dropped from the spec and never shipped;
+`form-action` and `worker-src` close the form and Worker variants, and those are
+green.
+
+It is loud and one-shot — the document is replaced, `__seek` disappears, the
+render dies — which makes it a poor exfiltration channel and an obvious failure.
+But it is real and it is unclosed, and recording it as such is the point: the
+alternative is a policy that reads as complete.
+
+Two follow-ups, neither blocking Phase 4:
+
+- `render.mjs` refusing any non-`file:` navigation, as defence in depth. Runner-
+  side, so it does **not** replace the page policy and does not protect the
+  hand-scrubbing path.
+- **Phase 5's verifier flagging any `custom` beat that touches `location` or
+  `window.open`** for the approver. That is the right home for it: the same lint
+  framing as D-088, surfaced to the human who is already reading the `attest`.
+
+## D-091 · SPEC · the NFKC sentence was right in conclusion and wrong in fact
+
+§8.2.1 said U+2011 "is not a compatibility variant and survives NFKC unchanged."
+Leader-measured, that is false:
+
+```
+U+2011 NON-BREAKING HYPHEN   -> U+2010 HYPHEN       still not ASCII
+U+2013 EN DASH / U+2014 EM DASH / U+2212 MINUS  -> unchanged
+U+00A0 / U+202F              -> U+0020 SPACE       fixed
+```
+
+NFKC fixes the **space** family and leaves the **hyphen** family non-ASCII. The
+conclusion — an explicit fold table is required — stands, and stands for a
+stronger reason than the one written down.
+
+**How it nearly went the other way.** My first probe asked `"‑" not in
+normalize("NFKC", s)` and printed **True**, which reads exactly like NFKC solving
+the problem. It doesn't: the codepoint is gone because it became U+2010, and
+`V4‑Pro` still fails to match `V4-Pro`. Same class as D-031 — I verified the
+wrong property, and the wrong property answered comfortably. The rule that
+catches it: **ask whether the fold reached the target, not whether a particular
+input disappeared.**
+
+Spec corrected with the measurements inline, so the next reader is not asked to
+trust a claim of the same shape.
+
+## D-092 · phase 5 / task 1 · years and ordinals are claim numbers, and nobody decided that
+
+Running §8.2.2's rule over the real brief before writing Task 1 produced 18 claim
+numbers including `2026,` (a year) and `14,` (the brief's own list numbering).
+Both are digits-only, so both must appear in a quote or the beat is refused.
+
+The spec's table never considered them. This is D-040's false-refusal end
+arriving somewhere nobody looked, and it is exactly the kind of thing that turns
+a gate into theatre one reflexive override at a time.
+
+**Handed to Task 1 as an explicit decision rather than a default**, with both
+directions costed: exempting years is not free, because a stale date presented as
+current is a real failure mode §8.3 names. Recorded here because the finding is
+worth more than whichever answer it gets — *the rule was validated against real
+prose twice, and produced a new question both times.*
+
+## D-093 · phase 4 / gate · the documented exemption was the hole
+
+The blind gate review found `jumpChart.rows[].shown` executes arbitrary
+JavaScript. Leader-reproduced before acting: a plain `jumpChart` — no `custom`,
+no `attest` — carrying `shown: '<img src=x onerror="…">'` runs the handler, and
+
+```
+load 1, frame t=1.0 : THE BRIEF|T1787015967789
+load 2, frame t=1.0 : THE BRIEF|T1787015970251
+*** NOT REPRODUCIBLE: same t, same plan, different frame ***
+```
+
+**`__seek(t)` purity — the invariant this project has never had to re-fix —
+broken from a `script.yaml` field.**
+
+**Why it hid, and this is the transferable part.** `shown` was the one field
+*documented* as an innerHTML override (D-078), and being documented is what made
+it invisible. Three independent controls each skipped it for a different reason:
+
+- the `NONDETERMINISTIC` lint only ever inspects `custom.js`;
+- `attest` (D-088) is required on `custom` and nothing else, so a `cited: True`
+  type carried executable content with no attestation at all;
+- `beat_summary` shows the approver the row label, not `shown` — so no human was
+  reading it either.
+
+**A documented exception is not a reviewed one.** Each control was written
+against the *type* that was known to execute rather than against the *capability*
+of reaching innerHTML, and `shown` had the capability without the label. The
+check that generalises: enumerate the fields that reach a dangerous sink, and
+verify each control covers the enumeration — not the one case that prompted it.
+Task 5's report is required to redo that enumeration from the code, on the
+assumption it was never done properly.
+
+**What the blind gate bought.** Every vector in `network.test.mjs` is driven from
+a `custom` beat, because `custom` is what Task 4 was thinking about. That is
+exactly why this surface was invisible to a test suite that otherwise scores
+21/21. A reviewer who had read the Task 3 and Task 4 reports would have inherited
+their frame — that `custom` is the execution surface — and looked where they
+looked. **Blind review earned its cost here.**
+
+**One correction, in the CSP's favour.** The review reported exfiltration
+succeeding. It does not: measured, `server hits: []` and
+`Content-Security-Policy refused … (connect-src)`. **Task 4's policy blocked a
+vector that did not exist when it was written** — the strongest evidence in this
+record for a boundary placed by capability rather than by threat model. The
+network half was closed by something written for a different reason; the
+execution half is Task 5.
+
+**Fix shape: a closed vocabulary, not a blocklist.** D-080 settled this once for
+prose — a `script.yaml` is authored by an agent against a fetched source, so its
+markup surface must be closed. An `on*` blocklist is D-088's `window['Ma'+'th']`
+again: a lint sold as a boundary. Attribute-free tags plus named entities, since
+every event handler is an attribute, and `<s>34.4</s> &rarr; 43.6` in
+`2026-08-14.js` is the whole real requirement.
+
+## D-094 · phase 4 / task 5 · the surface is closed, and my brief was wrong about why
+
+`shown` now has a **closed vocabulary — `<s>`, `</s>` and character references,
+nothing else.** Verified by re-running the original attack against the fix:
+
+```
+load 1 : ["THE BRIEF", false]     load 2 : ["THE BRIEF", false]
+VERDICT: reproducible — handler did not run
+```
+
+1312 tests, `deterministic`, `no request escapes the page`, both probes clean.
+**18/18 mutants killed, including the two the gate review reported as survivors.**
+
+Three implementation choices worth keeping:
+
+- **Two gates of different kinds.** `script.py` *refuses*; `planbuild.js`
+  *escapes*. Both, because a plan reaches the page without Python at all
+  (`render.mjs --plan`, both node suites), and because a `custom` beat can
+  reassign `escapeHTML` at seek time (D-089) — so the conversion happens eagerly
+  while the plan is walked, not lazily when the DOM is built.
+- **Tags matched verbatim**, so no attribute has a path through and *the spelling
+  of the handler is never a question the code has to answer.* That is the
+  difference between a vocabulary and a blocklist, made structural.
+- **F3 resolved by making the exemption conditional on the property that
+  justifies it**: a dumbbell whose caption/footnote/label carries a digit must
+  carry `src` and `quote`. Not a digit ban — that makes `n=159 cases`
+  unwritable — and not `cited: True`, which is a spec change. The docstring
+  claim is now enforced rather than merely asserted.
+
+### The brief defect, which is mine
+
+I wrote: *"The network exfiltration half is ALREADY CLOSED. Do not re-fix it."*
+The implementer tested it anyway and, at the tests-only commit, got bytes:
+
+```
+FAIL shown (jumpChart) nothing reached the sink — RECEIVED ["GET /shown?d=The%20Brief"]
+```
+
+The vector is `location.href` — **the channel D-090 records as the one CSP cannot
+close, which I wrote myself one turn earlier.**
+
+The error is D-091's exactly: I ran `fetch` from a `shown` field, watched
+`connect-src` refuse it, and generalised from one vector to the channel. *A
+blocked `fetch` is evidence about `fetch`.* Two instances in two turns is a
+pattern, not a slip — the failure is **concluding from the probe that succeeded
+instead of the one that would hurt**, and it is the same shape as D-031.
+
+What actually saved it: the brief said "do not re-fix" and the implementer tested
+it regardless. **A brief instruction not to look is worth less than a test**, and
+the ground rule that briefs are fallible — 24 defects across five phases against
+zero implementer errors — is what licensed ignoring me. That rule earns its place
+in every brief.
+
+The closed vocabulary shuts this vector too; the CSP was never touched.
+
+### Carried to Phase 5
+
+`shown` can still **state a figure the bar does not draw** (F2). D-081 already
+carries the field as a legitimate frame/script divergence; it now needs the
+stronger form — **`shown`'s digits checked against the row's own `before`/`after`,
+which sit in the same mapping.** Cheap, local, and closes the last way a chart
+can assert a number nothing verifies.
+
+Also recorded: `engine/content/*.js` are hand-written author JS and bypass the
+sanitiser by design, so `--day 2026-08-14` is a regression test for the *engine*,
+not evidence the sanitiser ran.
+
+## D-095 · phase 4 / gate · the re-gate could not break it, and the reason is structural
+
+A second blind reviewer attacked the closed `shown` vocabulary with 100+ distinct
+payloads and got nothing:
+
+- **63 payloads through the page's own `shownHTML()`, parsed by real Chromium** —
+  casing and whitespace inside the tag, attributes, raw `img`/`svg`/`script`/
+  `iframe srcdoc`/`base`/`form`, character references decoding into markup
+  (`&#60;`, `&#x3c;`, zero-padded, semicolon-less, double- and triple-encoded,
+  legacy uppercase `&LT;`), fullwidth `＜s＞`, RTL overrides, ZWSP, BOM, a
+  2000-deep nest. **The only element the parser ever built was `S`, with zero
+  attributes in any case.**
+- **13 payloads compared across two separate page loads** — DOM byte-identical,
+  screenshot SHA-256 identical, `page.url()` unchanged. That is the decisive
+  test; two seeks in one page load would have passed a persistent injected node.
+- **The eager-conversion defence is real, not aspirational.** A `custom` beat
+  reassigning `escapeHTML`, `shownHTML`, and mutating `window.__PLAN` directly is
+  inert, because `planJumpRows` runs while the plan is walked — the row tuple is
+  already strings by the time any authored `js` executes.
+- **18 other authored fields** carrying `<img onerror>` are inert; `E()` is the
+  only `innerHTML` sink and the plan path feeds it only escape-first output.
+- **The two gates are consistent in the safe direction.** Of 63 payloads Python
+  accepts 26, and every one renders as text-or-`<s>`. `planbuild.js` is the
+  stricter of the two — the correct asymmetry, since a plan reaches the page
+  without Python at all.
+
+**Why it holds is worth more than the fact that it does.** `shownHTML` has no
+production that can emit an attribute or any tag name other than `s`. The surface
+is bounded by what the function can *construct*, not by a list of what it
+rejects — so it cannot be out-spelled. That is the general form of the D-088
+lesson: **a boundary you can enumerate the outputs of beats a boundary you can
+only enumerate the inputs to.**
+
+### The usability cost, accepted with its mitigation
+
+`shown: '<1% &rarr; 3%'` is a plausible real cell and is now refused. That is a
+correct rule charging a real cost, not a defect — and the refusal names the fix:
+*"Write a literal `<` as `&lt;`"*, with `&lt;1% &rarr; 3%` verified rendering
+correctly. D-040's failure mode is a gate that refuses without teaching; a
+refusal carrying its own remedy is the version an operator does not learn to
+override.
+
+Also closed en route: ANSI escapes in `shown` cannot spoof the review screen —
+`cli.py::_one_line` maps C0 controls and DEL to spaces, so ESC never reaches the
+terminal.
+
+**Verdict: Phase 4 merges.**

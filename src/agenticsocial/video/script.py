@@ -12,8 +12,9 @@ Two gates, deliberately separate:
   * **validity** — the type is in `BEAT_TYPES` and its fields check out. Every
     catalogue type is valid today, including the ones no renderer exists for.
   * **renderability** — `RENDERABLE` is the subset `plan.py` can currently
-    emit. A `dumbbell` is a real beat that this phase cannot draw, and an
-    operator must be able to tell that from a typo.
+    emit. Phase 4 Task 3 closed the gap, so the two coincide today; they are
+    still separate questions, and the next type §7.1 grows will be valid before
+    anything can draw it. An operator must be able to tell that from a typo.
 
 READ ONLY. Nothing here writes: `script.yaml`'s bytes are load-bearing for
 `script_sha256` (spec §10, DECISIONS D-026), so not even normalisation is
@@ -21,7 +22,9 @@ allowed. `read_script` hands us document 2 verbatim; we parse a copy.
 """
 from __future__ import annotations
 
+import decimal
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -35,7 +38,35 @@ DEFAULT_HOLD = 3.0
 
 # What plan.py can currently emit. Widening this is a rendering decision, not a
 # schema one — see the module docstring.
-RENDERABLE = frozenset({"statement"})
+#
+# Phase 4 Task 1 added a builder in engine/planbuild.js for each of the five
+# text types alongside `statement`; Task 2 added the two chart types spec §7.2
+# calls strictly verifiable; Task 3 adds `dumbbell`, whose two-tone merged
+# marker the engine had CSS for and no function, and `custom`, which runs the
+# author's own JS. That closes the catalogue: RENDERABLE == set(BEAT_TYPES).
+#
+# It stays a separate name rather than becoming `set(BEAT_TYPES)`. The two gates
+# answer different questions — "is this a well-formed beat?" and "can plan.py
+# emit it?" — and the next type added to §7.1 is valid before anyone has written
+# its builder. Collapsing them would make that type render a blank card on the
+# day it is described. A name added here without a builder renders a blank card,
+# so
+# tests/test_video_planbuild.py::test_every_renderable_type_has_a_builder holds
+# this set and `BUILDERS` to each other.
+RENDERABLE = frozenset(
+    {
+        "statement",
+        "body",
+        "list",
+        "quote",
+        "title",
+        "signoff",
+        "kpis",
+        "jumpChart",
+        "dumbbell",
+        "custom",
+    }
+)
 
 
 class ScriptError(Exception):
@@ -110,14 +141,215 @@ def text_list(v: Any) -> str | None:
     return None
 
 
-def rows(v: Any) -> str | None:
-    """A non-empty list. The per-row shape is deliberately unconstrained — see
-    the module note on `dumbbell` in the Phase 3 report; the committed episode
-    builds its rows inline and the spec does not name their columns."""
+def dumbbell_rows(v: Any) -> str | None:
+    """`rows[{label, values[2], shown?}]` — the AMIE chart, named.
+
+    Phase 3 left this shape unconstrained on purpose: spec §7.1 writes only
+    `rows[]`, and the one chart that had ever been drawn built its rows inline
+    in `engine/content/2026-08-12.js`. Phase 4 Task 3 draws it, so the columns
+    have to be named, and they are named after that episode — the only evidence
+    there is.
+
+    `values` is a PAIR aligned with `series[2]`, not two keys. The two numbers
+    are the same measurement of two entities and `series` already says which is
+    which; `a`/`b` would leave the operator holding that mapping in their head.
+
+    They are FRACTIONS OF THE TRACK, in `[0, 1]`, checked by
+    `dumbbell_within_track`. There is no `scale` field because there is no
+    numeric axis: this type exists for sources that publish ratings rather than
+    scores (spec §7.2), and it renders no numbers at all.
+
+    The episode's row spec has a fifth column, a boolean `up` saying whether the
+    two markers separate. It is deliberately NOT a field: it is exactly
+    `a != b`, and a declared copy of something the numbers already state can
+    disagree with them. `up: false` on a row whose values differ would draw one
+    merged marker over two different ratings — the hidden-series failure spec
+    §7.2 names, with the schema's blessing.
+
+    `note` is the row's finding in words ("on par"). Optional, and free text:
+    a row without one has an empty cell, which is not the same as a crash.
+    """
     if not isinstance(v, list):
         return f"must be a list, got {_type_name(v)}"
     if not v:
         return "must not be empty"
+    for i, item in enumerate(v):
+        if not isinstance(item, dict):
+            return (
+                f"[{i}] must be a mapping with `label` and `values`, got "
+                f"{_type_name(item)}"
+            )
+        if "label" not in item:
+            return f"[{i}] needs a `label`"
+        if not _is_filled(item["label"]):
+            return (
+                f"[{i}] `label` must be a non-empty string, got "
+                f"{_type_name(item['label'])}"
+            )
+        if "values" not in item:
+            return f"[{i}] needs `values`"
+        values = item["values"]
+        if not isinstance(values, list):
+            return f"[{i}] `values` must be a list, got {_type_name(values)}"
+        if len(values) != 2:
+            return (
+                f"[{i}] `values` must be one number per series, so exactly two, "
+                f"got {len(values)}"
+            )
+        for k, value in enumerate(values):
+            if not _is_number(value):
+                return (
+                    f"[{i}] `values[{k}]` must be a number, got {_type_name(value)}"
+                )
+        if "note" in item and not _is_str(item["note"]):
+            return f"[{i}] `note` must be a string, got {_type_name(item['note'])}"
+    return None
+
+
+def dumbbell_within_track(payload: dict) -> str | None:
+    """Every position is a fraction of the track, so `[0, 1]` inclusive.
+
+    The same geometry rule as `jump_rows_within_scale`, and it needs no `scale`
+    to state it: the engine positions each marker at `value * 100 + '%'`, so
+    `1.4` is drawn 40% past the right edge and `-0.2` off the left. Inclusive at
+    both ends — a marker at 0 or at 1 is at an end of the track, which is on the
+    card — and `0` is a real position, so this may not be written `if not v`.
+    """
+    for i, row in enumerate(payload.get("rows", [])):
+        if not isinstance(row, dict):
+            continue  # dumbbell_rows has already refused it
+        values = row.get("values")
+        if not isinstance(values, list):
+            continue
+        for k, value in enumerate(values):
+            if not _is_number(value):
+                continue
+            if not 0 <= value <= 1:
+                return (
+                    f"`rows[{i}]` `values[{k}]` is {value!r}, outside the track "
+                    "— a dumbbell has no `scale` because it has no numeric "
+                    "axis: a value is a fraction of the track, from 0 at the "
+                    "left end to 1 at the right, and the engine draws each "
+                    "marker at `value * 100%`"
+                )
+    return None
+
+
+# --- `shown`: the one authored field that reaches innerHTML ----------------------
+
+# The closed vocabulary. `<s>` and `</s>`, written exactly, and nothing else.
+#
+# Counted rather than chosen, the way D-080 widened the prose vocabulary: all
+# four `shown` cells in engine/content/2026-08-14.js are `<s>34.4</s> &rarr;
+# 43.6`, so a strikethrough and a named entity are the entire real requirement.
+# `<b>` and `<em>` are deliberately absent — no committed `shown` uses either,
+# and a tag added because it might be wanted is how a closed surface reopens. A
+# storyboard that needs one should be refused here and the vocabulary widened on
+# the same counted evidence, in the open.
+SHOWN_TAGS = ("<s>", "</s>")
+
+
+def _shown_markup(v: str) -> str | None:
+    """The first fragment of `v` that is outside the vocabulary, or None.
+
+    Every tag, comment, doctype and CDATA section in HTML starts with `<`, so
+    that is the character this walks. Attribute-free is what makes the rule
+    safe, and it is why the tags are compared VERBATIM rather than parsed:
+    `<s onclick="…">` is not `<s>`, so there is no attribute — event handler,
+    `style`, or whatever a future Chromium adds — with a path through.
+
+    The NEGATIVE half is deliberate. A bare `&` is an ampersand and a bare `>`
+    is a greater-than: neither can open a tag, both render as themselves, and
+    refusing them would be a ban on punctuation dressed as a security rule.
+    """
+    for i, ch in enumerate(v):
+        if ch != "<":
+            continue
+        if any(v.startswith(tag, i) for tag in SHOWN_TAGS):
+            continue
+        end = v.find(">", i)
+        return v[i : end + 1] if 0 <= end <= i + 60 else v[i : i + 40]
+    return None
+
+
+def shown_markup(v: Any) -> str | None:
+    """`shown` is DATA, not a script. R1–R3 of Phase 4 Task 5.
+
+    The engine sets this field with `html:`, and innerHTML does not only grant
+    tags — it grants ATTRIBUTES, and every inline event handler is an attribute.
+    Leader-verified in a real browser from a plain `jumpChart` beat, no `custom`
+    and no `attest` anywhere in the plan:
+
+        shown: '<img src=x onerror="…document.createTextNode(Date.now())…">'
+        load 1, frame t=1.0 : THE BRIEF|T1787015967789
+        load 2, frame t=1.0 : THE BRIEF|T1787015970251
+
+    `__seek(t)` purity — the one invariant this project has never had to re-fix
+    — broken by a data field, and the same beat reached a loopback sink through
+    `location.href`, the channel D-090 records as the one a CSP cannot close.
+
+    Refused HERE, before any render, and not left to the renderer's sanitiser:
+    the plan is the contract, and a human approves this script by reading a
+    screen. A script that validates and then relies on the renderer to defuse it
+    has already been signed off.
+    """
+    reason = free_text(v)
+    if reason:
+        return reason
+    bad = _shown_markup(v)
+    if bad is None:
+        return None
+    return (
+        f"carries markup outside the closed vocabulary: {bad!r}. `shown` is set "
+        "as innerHTML, and innerHTML grants attributes as well as tags — every "
+        "inline event handler is an attribute, so this field can run JavaScript "
+        "and break `__seek(t)` purity. It may contain `<s>` and `</s>`, written "
+        "exactly and with no attributes, and character references such as "
+        "`&rarr;` — that is what the committed episodes use. Write a literal "
+        "`<` as `&lt;`"
+    )
+
+
+_DIGIT = re.compile(r"\d")
+
+
+def dumbbell_prints_a_figure(raw: dict) -> str | None:
+    """Which of a dumbbell's own words carries a digit, if any.
+
+    "A dumbbell renders no numbers at all" is asserted in this module, in
+    `engine.js` and in a test, and it is true of `values` and false of the type.
+    `caption`, `footnote`, `kicker`, row `label` and row `note` are all
+    unconstrained text and all reach the stage, so an uncited card could print
+    `Rated 4.2 out of 5` and `+18 pts` with no `src` and no `quote` anywhere in
+    the pipeline. The justification for the exemption was a property the type
+    did not hold.
+
+    The exemption is kept and made CONDITIONAL on the property. Spec §7.1 does
+    not put `dumbbell` in the cited pair, and the AMIE chart the type exists for
+    carries no figure at all — making every dumbbell cited would be a spec
+    change wearing a bugfix. But §7.2's sentence is written about numbers rather
+    than about types: "there is no path to rendering a number that isn't in a
+    source". A dumbbell that prints a digit is on that path.
+
+    Refusing the digit instead was the other option and is worse: "n=159 cases"
+    is a real footnote from a real study, and a rule that bans it pushes the
+    operator into writing a vaguer one. Requiring the source is the rule the
+    spec already has.
+    """
+    fields: list[tuple[str, Any]] = [
+        ("`caption`", raw.get("caption")),
+        ("`footnote`", raw.get("footnote")),
+        ("`kicker`", raw.get("kicker")),
+    ]
+    rows = raw.get("rows")
+    if isinstance(rows, list):
+        for i, row in enumerate(rows):
+            if isinstance(row, dict):
+                fields.append((f"`rows[{i}]` `label`", row.get("label")))
+                fields.append((f"`rows[{i}]` `note`", row.get("note")))
+    for name, value in fields:
+        if isinstance(value, str) and _DIGIT.search(value):
+            return f"{name} reads {value!r}"
     return None
 
 
@@ -137,7 +369,8 @@ def jump_rows(v: Any) -> str | None:
     `before`/`after` are checked as numbers, not as truthy: a benchmark that
     scored 0 before is a real bar. `shown` is a display override — the engine
     sets it as `html` — so an empty one deliberately blanks the value cell, the
-    way `sub: ""` blanks a title card's subtitle.
+    way `sub: ""` blanks a title card's subtitle. Its markup vocabulary is
+    closed (`shown_markup`): a display override is not a script.
     """
     if not isinstance(v, list):
         return f"must be a list, got {_type_name(v)}"
@@ -163,8 +396,48 @@ def jump_rows(v: Any) -> str | None:
                 return (
                     f"[{i}] `{name}` must be a number, got {_type_name(item[name])}"
                 )
-        if "shown" in item and not _is_str(item["shown"]):
-            return f"[{i}] `shown` must be a string, got {_type_name(item['shown'])}"
+        if "shown" in item:
+            reason = shown_markup(item["shown"])
+            if reason:
+                return f"[{i}] `shown` {reason}"
+    return None
+
+
+def jump_rows_within_scale(payload: dict) -> str | None:
+    """R4 — a row value outside `[0, scale]` is refused, not clipped.
+
+    A cross-field rule, so it cannot live in a per-field checker: `rows` and
+    `scale` only mean anything together. The engine positions every dot as
+    `value / max * 100 + '%'` and sizes the gain segment the same way, so a row
+    above the scale is drawn past the end of its track — off the card, or
+    clipped by whatever overflow the stage happens to have — and a negative one
+    is drawn to the left of zero.
+
+    Clipping to the scale would be worse than refusing: the bar would sit at
+    100% and read as the maximum, which is a number the plan did not carry.
+    That is R2's failure wearing a geometry costume, and it is silent.
+
+    The bound is INCLUSIVE at both ends. `0` is a benchmark that scored nothing
+    before — the most interesting bar on the chart — and a value equal to the
+    scale is drawn at 100% of the track, which is on the card.
+    """
+    scale = payload.get("scale")
+    if not _is_number(scale):
+        return None  # positive_number has already refused it, with a better message
+    for i, row in enumerate(payload.get("rows", [])):
+        for name in ("before", "after"):
+            value = row.get(name)
+            if not _is_number(value):
+                continue  # jump_rows has already refused it
+            if not 0 <= value <= scale:
+                return (
+                    f"`rows[{i}]` `{name}` is {value!r}, outside the chart's "
+                    f"`scale` of {scale} — the engine draws every dot at "
+                    f"`{name} / scale`, so this bar lands off its track. Raise "
+                    "`scale` or fix the value; it is not clipped, because a "
+                    "clipped bar reads as the maximum and that is a number "
+                    "nothing in the script says"
+                )
     return None
 
 
@@ -180,13 +453,58 @@ def series_pair(v: Any) -> str | None:
     return None
 
 
+def _as_displayed(value: float, decimals: int) -> str:
+    """The glyphs `count()` would put on screen for this value.
+
+    Message-only, but it has to be right or the error tells an operator to look
+    for a number the frame never shows. `toFixed` and `Math.round` both round
+    half AWAY from zero on the decimal the operator wrote; Python's `round` and
+    `format` round half to EVEN, so `format(0.75, '.0f')` is `0` where the
+    engine renders `1`. `repr` first, so the value quantised is the one they
+    typed rather than its binary neighbour.
+    """
+    step = decimal.Decimal(1).scaleb(-decimals)
+    return str(decimal.Decimal(repr(value)).quantize(step, decimal.ROUND_HALF_UP))
+
+
+# `Number.prototype.toFixed` accepts 0–100 and throws a RangeError outside it,
+# and every JavaScript number at or above 1e21 stringifies as `1e+21` rather
+# than as digits. Both are the engine's limits rather than this module's, which
+# is why they are named here rather than typed into a message.
+MAX_DECIMALS = 100
+EXPONENTIAL_AT = 1e21
+
+
 def kpi_items(v: Any) -> str | None:
-    """`items[{value, unit, label, decimals}]` — spec §7.1.
+    """`items[{value, unit, label, decimals}]` — spec §7.1, plus `prefix`.
 
     `value` may be a string: the engine's `kpis()` falls back to printing a
     non-numeric value rather than counting up to it. §7.2 constrains the numeric
     ones ("every numeric `value` must appear inside that `quote`"), which is
     Phase 5's check, not this one.
+
+    **R2 — display rounding is refused.** `count()` formats with
+    `decimals ? v.toFixed(decimals) : Math.round(v)`, so `value: 0.756,
+    decimals: 1` puts `0.8` on the screen. `0.8` is in no source, in no quote
+    and in no plan: Phase 5 would verify `0.756` against the quote, pass, and
+    ship a video showing a number nobody checked. If an author wants `0.8` on
+    screen the script says `0.8`, because the script is what gets verified.
+
+    Note where the hole is widest: `decimals` is OPTIONAL, and its absence is
+    not "print the value as written" — it is `Math.round(v)`. So absent is
+    checked as 0, and `value: 0.75` with no `decimals` is refused for reaching
+    the frame as `1`.
+
+    `prefix` and `unit` are the opposite case and are deliberately free:
+    `$0.75` and `0.75` are the same figure differently read, and so is `2,000`.
+    A symbol changes how a number reads, not what it is.
+
+    `prefix` is not in the spec's field list; `unit` alone cannot express the
+    committed episode, which renders `$0.75` AND `50%` from the same engine
+    call. `unit` is the SUFFIX and `prefix` the leading symbol — a fixed table
+    of "symbols that lead" would be a global that retroactively changes what
+    past episodes rendered, which is the class of failure this phase exists to
+    close.
     """
     if not isinstance(v, list):
         return f"must be a list, got {_type_name(v)}"
@@ -204,12 +522,117 @@ def kpi_items(v: Any) -> str | None:
             return f"[{i}] needs a `label`"
         if not _is_filled(item["label"]):
             return f"[{i}] `label` must be a non-empty string, got {_type_name(item['label'])}"
-        if "unit" in item and not _is_str(item["unit"]):
-            return f"[{i}] `unit` must be a string, got {_type_name(item['unit'])}"
-        if "decimals" in item:
-            d = item["decimals"]
-            if not _is_int(d) or d < 0:
-                return f"[{i}] `decimals` must be a non-negative integer, got {d!r}"
+        for name in ("unit", "prefix"):
+            if name in item and not _is_str(item[name]):
+                return f"[{i}] `{name}` must be a string, got {_type_name(item[name])}"
+        decimals = item.get("decimals", 0)
+        # The upper bound is `toFixed`'s own, and it is inclusive. Above it the
+        # engine throws a RangeError while the plan is being walked — a script
+        # that validates and then kills the render, after the operator has
+        # already got as far as `agsoc video render`.
+        if "decimals" in item and (
+            not _is_int(decimals) or decimals < 0 or decimals > MAX_DECIMALS
+        ):
+            return (
+                f"[{i}] `decimals` must be a non-negative integer no greater "
+                f"than {MAX_DECIMALS}, got {decimals!r} — the engine formats "
+                "with `toFixed`, which throws above that and would fail the "
+                "render rather than this check"
+            )
+        # Only numbers are formatted; a string value is printed verbatim.
+        if _is_number(val) and abs(val) >= EXPONENTIAL_AT:
+            return (
+                f"[{i}] `value` {val!r} would reach the frame as "
+                f"{float(val):g}"
+                f" — at {EXPONENTIAL_AT:g} and above JavaScript switches to "
+                "exponential notation, so the frame carries a figure written in "
+                "a notation the plan does not. Both display-rounding gates pass "
+                "it, because both ask whether the value survives a round trip "
+                "and `1e+21` does"
+            )
+        if _is_number(val) and round(val, decimals) != val:
+            return (
+                f"[{i}] `value` {val!r} would reach the frame as "
+                f"{_as_displayed(val, decimals)} at `decimals: {decimals}`"
+                + ("" if "decimals" in item else " (the default)")
+                + " — display rounding invents a figure that is in no source, "
+                "no quote and no plan; write the number you want on screen"
+            )
+    return None
+
+
+# --- `custom`: executed, and therefore attested ---------------------------------
+
+# The three spellings a custom beat is most likely to reach for, written as
+# calls rather than as bare words: `Math.round` and an identifier called
+# `randomised` are not non-determinism, and a guard that refuses them teaches
+# authors that the check is noise. `\s*` around the dot because `Math . random`
+# is the same call.
+NONDETERMINISTIC = (
+    (re.compile(r"\bDate\s*\.\s*now\s*\("), "Date.now"),
+    (re.compile(r"\bMath\s*\.\s*random\s*\("), "Math.random"),
+    (re.compile(r"\bperformance\s*\.\s*now\s*\("), "performance.now"),
+)
+
+
+def custom_js(v: Any) -> str | None:
+    """The one authored field that is EXECUTED, in the page, as written.
+
+    `__seek(t)` positioning every element from `t` alone is the invariant that
+    makes a render reproducible and any single frame re-creatable months later.
+    Nothing else an operator writes can break it; this can, because everything
+    else is data and this is code.
+
+    **This is a lint, not a sandbox.** It is a regex over three spellings. It
+    catches the accident — an author who reaches for `Math.random()` out of
+    habit — and it does not catch anyone who does not want to be caught:
+    `window['Ma'+'th'].random()` walks straight past it, and so does any value
+    fetched, computed or read off the DOM. Same framing as D-062: the guard
+    raises the floor, it is not a boundary. What the beat renders is covered by
+    `attest`, which is a person's signature rather than a check.
+    """
+    reason = text(v)
+    if reason:
+        return reason
+    for pattern, name in NONDETERMINISTIC:
+        if pattern.search(v):
+            return (
+                f"calls {name}() — a custom beat is executed in the page, and "
+                "`__seek(t)` must position every element from `t` alone or the "
+                "render stops being reproducible. Derive the value from the "
+                "animation's own progress instead. (This is a LINT, not a "
+                "sandbox: it greps for three spellings and catches the "
+                "accident, not the adversary — a computed call goes straight "
+                "past it, so determinism here is still yours to keep.)"
+            )
+    return None
+
+
+def attestation(v: Any) -> str | None:
+    """R5 — spec §7.1 says `custom` needs "manual attestation" and names no field.
+
+    This is that field. No mechanical check can verify what arbitrary rendering
+    code puts on a screen; that is what "arbitrary" means. The honest substitute
+    is not a weaker check dressed as a strong one — it is a sentence in which a
+    person states what the beat displays and takes responsibility for it, shown
+    to the operator in `agsoc video review` before they approve.
+
+    Empty is refused for the same reason a blank `src` is not a citation: it
+    satisfies every "is the key there" check and states nothing, which is the
+    approval theatre the field exists to avoid.
+    """
+    if not _is_str(v):
+        return (
+            f"must be a string, got {_type_name(v)} — a `custom` beat renders "
+            "whatever its `js` draws, and nothing can check that mechanically; "
+            "`attest` is where a person says what it shows and signs for it"
+        )
+    if not v.strip():
+        return (
+            "must not be empty — an attestation nobody wrote is worse than "
+            "none: it puts a record of a judgement in front of the approver "
+            "that was never made"
+        )
     return None
 
 
@@ -239,16 +662,27 @@ BEAT_TYPES: dict[str, dict] = {
         },
         "optional": {},
         "cited": True,
+        # R4. Runs after every field has checked out, because it reads two of
+        # them at once. See `jump_rows_within_scale`.
+        "cross": jump_rows_within_scale,
     },
     "dumbbell": {
         "required": {
-            "rows": rows,
+            "rows": dumbbell_rows,
             "series": series_pair,
             "caption": text,
+            # Spec §7.2: a dumbbell "encodes direction only and must carry a
+            # footnote saying so". It renders no numbers, so the footnote is the
+            # only place the reader is told what the markers mean.
             "footnote": text,
         },
         "optional": {},
         "cited": False,
+        # …unless it prints one. The uncited exemption is spec §7.1's, and its
+        # justification is "it renders no numbers"; where that is false the
+        # justification is too. See `dumbbell_prints_a_figure`.
+        "cited_when": dumbbell_prints_a_figure,
+        "cross": dumbbell_within_track,
     },
     "quote": {
         "required": {"text": text, "attribution": text},
@@ -257,7 +691,14 @@ BEAT_TYPES: dict[str, dict] = {
     },
     "title": {"required": {}, "optional": {"sub": free_text}, "cited": False},
     "signoff": {"required": {}, "optional": {"text": free_text}, "cited": False},
-    "custom": {"required": {"js": text}, "optional": {}, "cited": False},
+    # Executed, and therefore attested. `js` is linted for the three obvious
+    # non-determinism sources (a lint, not a sandbox — see `custom_js`), and
+    # `attest` is the manual attestation spec §7.1 requires and does not name.
+    "custom": {
+        "required": {"js": custom_js, "attest": attestation},
+        "optional": {},
+        "cited": False,
+    },
 }
 
 # Present on every type (spec §7.1, "shared optional fields on every type").
@@ -341,6 +782,23 @@ def _beat(raw: Any, index: int, where: Any) -> Beat:
                     "to rendering a number that isn't in a source"
                 )
 
+    # The same rule for a type whose exemption is conditional on a property.
+    # Data, not a branch: `cited_when` is absent on every type whose answer does
+    # not depend on what the operator wrote. It reads `raw` rather than the
+    # payload because `kicker` is a shared field and reaches the stage too.
+    cited_when = spec.get("cited_when")
+    if cited_when is not None:
+        figure = cited_when(raw)
+        if figure and not all(_is_filled(raw.get(n)) for n in ("src", "quote")):
+            raise ScriptError(
+                f"{at} {figure}, so this card puts a number on the screen — it "
+                "needs `src` and `quote`. A "
+                f"{kind} is exempt from spec §7.2's citation because it renders "
+                "no numbers; §7.2's rule is written about numbers rather than "
+                "about types, so a card that prints one is on the path it says "
+                "does not exist. Cite it, or say it without the figure"
+            )
+
     payload: dict = {}
     for name, check in spec["required"].items():
         if name not in raw:
@@ -356,6 +814,15 @@ def _beat(raw: Any, index: int, where: Any) -> Beat:
         if reason:
             raise ScriptError(f"{at} `{name}` {reason}")
         payload[name] = raw[name]
+    # Rules that read more than one field at once, once every field is known to
+    # be well-formed on its own. Data, not a branch — `cross` is absent on the
+    # types that have no such rule.
+    cross = spec.get("cross")
+    if cross is not None:
+        reason = cross(payload)
+        if reason:
+            raise ScriptError(f"{at} {reason}")
+
     if "claim_override" in raw:
         payload["claim_override"] = raw["claim_override"]
 

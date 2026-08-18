@@ -379,42 +379,56 @@ def test_review_still_reports_the_scaled_total(ws, series):
 # --- R4: beats that validate but cannot render ----------------------------------
 
 
-UNRENDERABLE = sorted(set(BEAT_TYPES) - set(RENDERABLE))
+# Phase 4 Task 3's exit criterion, asserted where the operator's screen is
+# tested: there is nothing left in the catalogue that cannot be drawn. The
+# `!` margin, the footer and their tests survive by injecting a narrower gate —
+# see test_review_names_the_unrenderable_beats on why they are not deleted.
+def test_every_catalogue_type_can_be_rendered():
+    """precondition: RENDERABLE == set(BEAT_TYPES) is what closes Phase 4."""
+    assert set(BEAT_TYPES) - set(RENDERABLE) == set()
 
 
-def test_review_names_the_unrenderable_beats(ws, series):
+def test_review_names_the_unrenderable_beats(ws, series, monkeypatch):
     """precondition: R4 + M7. An operator who approves a script full of beats
-    this phase cannot draw gets a render missing most of the episode, and the
-    only place they could have found out is here."""
+    the renderer cannot draw gets a render missing most of the episode, and the
+    only place they could have found out is here.
+
+    Phase 4 Task 3 drew the last two types, so `BEAT_TYPES - RENDERABLE` is
+    empty and no real script can reach this warning today. The warning is not
+    dead — the next type added to spec §7.1 is valid before anyone writes its
+    builder, which is precisely when an operator needs to be told — so the
+    narrower gate is injected. Deleting the test would mean rediscovering the
+    warning is broken on the day it next matters."""
     beats = statements([3.0]) + [
-        {
-            "type": "quote",
-            "hold": 4.0,
-            "text": "Gemini 3.7 Flash is our new workhorse model",
-            "attribution": "Google",
-        }
+        {"type": "custom", "hold": 4.0, "js": "const h = E('h2', null, P('x'));\n",
+         "attest": "Draws the headline 'x'. — A. B."}
     ]
     episode(series, beats)
+    monkeypatch.setattr(video_cli, "RENDERABLE", RENDERABLE - {"custom"})
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
-    assert "quote" in out
+    assert "custom" in out
     assert "cannot" in out.lower() and "render" in out.lower()
 
 
-def test_review_exits_zero_with_unrenderable_beats(ws, series):
-    """precondition: R4 negative + M8. A `dumbbell` is a real beat that Phase 3
-    cannot draw yet. The fix is to implement it, not to edit the script — so it
-    is not an operator error and must not be reported as one."""
+def test_review_exits_zero_with_unrenderable_beats(ws, series, monkeypatch):
+    """precondition: R4 negative + M8. A valid beat no builder exists for is
+    fixed by implementing the renderer, not by editing the script — so it is not
+    an operator error and must not be reported as one. Gate injected, as above.
+    """
     beats = statements([3.0]) + [
         {
             "type": "dumbbell",
             "hold": 4.0,
-            "rows": [["History-taking", 0.72, 0.72, "on par"]],
+            "rows": [
+                {"label": "History-taking", "values": [0.72, 0.72], "note": "on par"}
+            ],
             "series": ["AMIE (video)", "Primary care physician"],
             "caption": "Evaluator ratings, AMIE against primary care physicians",
             "footnote": "Direction only.",
         }
     ]
     episode(series, beats)
+    monkeypatch.setattr(video_cli, "RENDERABLE", RENDERABLE - {"dumbbell"})
     result = run("video", "review", "2026-08-17", "--series", "the-brief")
     assert result.exit_code == 0
     assert "dumbbell" in result.output
@@ -422,19 +436,20 @@ def test_review_exits_zero_with_unrenderable_beats(ws, series):
     assert "invalid" not in result.output.lower()
 
 
-def test_review_counts_the_unrenderable_beats_by_type(ws, series):
+def test_review_counts_the_unrenderable_beats_by_type(ws, series, monkeypatch):
     """precondition: R4. "some beats cannot render" is not actionable; which
     types, and how many of each, is."""
     beats = statements([3.0, 3.0]) + [
+        {"type": "custom", "hold": 3.0, "js": "x\n", "attest": "draws x. — A."},
+        {"type": "custom", "hold": 3.0, "js": "y\n", "attest": "draws y. — A."},
         {"type": "quote", "hold": 3.0, "text": "a", "attribution": "b"},
-        {"type": "quote", "hold": 3.0, "text": "c", "attribution": "d"},
-        {"type": "title", "hold": 3.0},
     ]
     episode(series, beats)
+    monkeypatch.setattr(video_cli, "RENDERABLE", RENDERABLE - {"custom", "quote"})
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
     assert "3 beats" in out and "cannot" in out.lower()
-    assert "quote (2)" in out
-    assert "title (1)" in out
+    assert "custom (2)" in out
+    assert "quote (1)" in out
 
 
 def test_review_says_nothing_about_rendering_when_everything_renders(ws, series):
@@ -466,7 +481,14 @@ EXEMPLARS = {
         "items": ["Gemini API & AI Studio", "Antigravity", "The Spark agent"],
     },
     "kpis": {
-        "items": [{"value": 0.75, "unit": "$", "label": "per 1M input tokens"}],
+        # `decimals: 2`, and not optional decoration: with `decimals` absent the
+        # engine's count-up is `Math.round(v)`, so this exemplar rendered `1`
+        # for a value of 0.75. Phase 4 Task 2's R2 check refuses it — the first
+        # thing that rule caught was a fixture already in the tree.
+        "items": [
+            {"value": 0.75, "prefix": "$", "label": "per 1M input tokens",
+             "decimals": 2}
+        ],
         "src": "venturebeat",
         "quote": "priced at $0.75 per million input tokens",
     },
@@ -481,7 +503,9 @@ EXEMPLARS = {
         "quote": "FrontierCode 1.1 rises from 34.4 to 43.6",
     },
     "dumbbell": {
-        "rows": [["History-taking", 0.72, 0.72, "on par"]],
+        "rows": [
+            {"label": "History-taking", "values": [0.72, 0.72], "note": "on par"}
+        ],
         "series": ["AMIE (video)", "Primary care physician"],
         "caption": "Evaluator ratings, AMIE against primary care physicians",
         "footnote": "Direction only.",
@@ -492,7 +516,10 @@ EXEMPLARS = {
     },
     "title": {"sub": "Five stories from the last 24 hours."},
     "signoff": {"text": "Same time tomorrow."},
-    "custom": {"js": "const h = E('h2', null, P('x'));\n"},
+    "custom": {
+        "js": "const h = E('h2', null, P('x'));\n",
+        "attest": "Draws the headline 'x' and nothing else. — A. B.",
+    },
 }
 
 
@@ -507,22 +534,27 @@ def test_the_exemplars_cover_the_whole_catalogue():
     assert set(EXEMPLARS) == set(BEAT_TYPES)
 
 
-@pytest.mark.parametrize("kind", UNRENDERABLE)
-def test_every_unrenderable_type_is_named_in_the_display(ws, series, kind):
+@pytest.mark.parametrize("kind", sorted(BEAT_TYPES))
+def test_every_unrenderable_type_is_named_in_the_display(ws, series, monkeypatch, kind):
     """precondition: M7 dropped for ONE type is the mutant a single-type test
-    cannot see. Nine of the ten catalogue types cannot render this phase, and
-    every one of them must reach the operator's screen."""
+    cannot see. With nothing renderable, every catalogue type must reach the
+    operator's screen — which is the widest this assertion has ever been, and
+    the reason it is worth injecting an empty gate rather than deleting it."""
     episode(series, one_of_each())
+    monkeypatch.setattr(video_cli, "RENDERABLE", frozenset())
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
     assert f"{kind} (1)" in out
 
 
 def test_a_full_catalogue_script_still_exits_zero(ws, series):
-    """precondition: R4 negative, at maximum breadth."""
+    """precondition: R4 negative, at maximum breadth — and now also Phase 4's
+    exit criterion, read off the operator's screen. Every one of the ten
+    catalogue types renders, so a script containing all of them says nothing
+    about anything being undrawable."""
     episode(series, one_of_each())
     result = run("video", "review", "2026-08-17", "--series", "the-brief")
     assert result.exit_code == 0
-    assert "9 beats" in result.output and "cannot" in result.output.lower()
+    assert "cannot" not in result.output.lower()
 
 
 # --- R5: review never writes ----------------------------------------------------
@@ -655,16 +687,18 @@ def test_the_total_is_scaled_once_not_per_beat(ws, series):
     assert check.total_sec == pytest.approx(4.0)
 
 
-def test_the_margin_marks_only_the_unrenderable_rows(ws, series):
+def test_the_margin_marks_only_the_unrenderable_rows(ws, series, monkeypatch):
     """precondition: R4 + M7. The footer counts them; the margin says WHICH.
     A `!` on every row, or on none, is the same amount of information."""
     episode(
         series,
         [
             {"type": "statement", "hold": 3.0, "text": "this one renders"},
-            {"type": "quote", "hold": 3.0, "text": "this one", "attribution": "does not"},
+            {"type": "custom", "hold": 3.0, "js": "this one does not\n",
+             "attest": "draws nothing yet. — A. B."},
         ],
     )
+    monkeypatch.setattr(video_cli, "RENDERABLE", RENDERABLE - {"custom"})
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
     rows = [ln for ln in out.splitlines() if re.match(r"^\s*!?\s+\d+\s", ln)]
     assert len(rows) == 2
@@ -723,7 +757,10 @@ def test_review_shows_the_source_of_a_cited_beat(ws, series):
             {
                 "type": "kpis",
                 "hold": 4.0,
-                "items": [{"value": 0.75, "unit": "$", "label": "per 1M input tokens"}],
+                "items": [
+                    {"value": 0.75, "prefix": "$", "label": "per 1M input tokens",
+                     "decimals": 2}
+                ],
                 "src": "venturebeat",
                 "quote": "priced at $0.75 per million input tokens",
             }
@@ -738,6 +775,26 @@ def test_every_catalogue_type_has_a_summariser():
     beat they are approving. Adding a type in Phase 4 must not produce a blank
     row, and a `.get(type, "")` default is exactly how it would."""
     assert set(video_cli.SUMMARISERS) == set(BEAT_TYPES)
+
+
+def test_a_custom_beat_shows_its_attestation_not_its_source(ws, series):
+    """precondition: R5. The attestation is only worth requiring if the person
+    who approves the episode reads it — an attestation nobody sees is a field an
+    author fills in for the schema. This row is the whole delivery mechanism.
+
+    It replaces the `js` in the text column rather than joining it: the column
+    is ~40 characters, and a truncated first line of code tells an approver less
+    than nothing about what the beat draws. The code is in script.yaml; the
+    claim about what it renders is only here."""
+    episode(
+        series,
+        [{"type": "custom", "hold": 3.0,
+          "js": "const h = E('h2', null, P('x'));\n",
+          "attest": "Draws the headline and no figures. — A. B."}],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    assert "Draws the headline" in out
+    assert "E('h2'" not in out
 
 
 @pytest.mark.parametrize("kind", sorted(BEAT_TYPES))
@@ -776,3 +833,88 @@ def test_review_of_a_missing_series_fails(ws):
     result = run("video", "review", "2026-08-17", "--series", "nope")
     assert result.exit_code == 1
     assert "agsoc series new" in result.output
+
+
+def test_a_kpi_reads_on_the_review_line_the_way_it_reads_on_the_frame(ws, series):
+    """precondition: found by this task's sweep. `_kpi` positioned the symbol
+    from a table of currency characters — `$` in front, everything else
+    behind — while `planbuild.js` composes `prefix + value + unit` in the order
+    the script names them. A `unit: "$"` therefore read as `$0.75` here and
+    rendered as `0.75$` there. This line is what the operator approves, and a
+    review that reads differently from the render is a review of a different
+    video."""
+    episode(
+        series,
+        [
+            {
+                "type": "kpis",
+                "hold": 4.0,
+                "items": [
+                    {"value": 0.75, "prefix": "$", "label": "in", "decimals": 2},
+                    {"value": 50, "unit": "%", "label": "cheaper"},
+                ],
+                "src": "venturebeat",
+                "quote": "priced at $0.75 per million input tokens, 50% cheaper",
+            }
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    assert "$0.75" in out
+    assert "50%" in out
+
+
+# --- Task 5, R4: `shown` reaches the approver ------------------------------------
+#
+# D-081 records `jumpChart.shown` as the ONE field where the frame and the
+# script legitimately differ — it is an HTML display override, so the bar says
+# 34.4→43.6 and the cell says whatever `shown` says. The summariser printed only
+# the row LABEL, so the field never reached the review screen at all. That is how
+# an unattested markup surface stayed invisible to the one control that is a
+# person rather than a check.
+
+
+def test_review_shows_the_shown_cell_of_a_jumpchart_row(ws, series):
+    """precondition: this is the one field where the frame and the script
+    legitimately differ (D-081), so it is the one field an approver cannot
+    reconstruct from the rest of the row. A label they can read off the chart is
+    not what needs showing."""
+    episode(
+        series,
+        [
+            {
+                "type": "jumpChart",
+                "hold": 3.0,
+                "rows": [
+                    {"label": "Code", "before": 34.4, "after": 43.6,
+                     "shown": "<s>34.4</s> &rarr; 43.6"}
+                ],
+                "scale": 70,
+                "footnote": "Scores as published.",
+                "src": "deepmind",
+                "quote": "rises from 34.4 to 43.6",
+            }
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    assert "<s>34.4</s> &rarr; 43.6" in out
+
+
+def test_review_still_names_the_row_when_there_is_no_shown(ws, series):
+    """NEGATIVE half. precondition: `shown` is optional — an absent one blanks
+    the value cell — so the label must not disappear with it."""
+    episode(
+        series,
+        [
+            {
+                "type": "jumpChart",
+                "hold": 3.0,
+                "rows": [{"label": "FrontierCode", "before": 34.4, "after": 43.6}],
+                "scale": 70,
+                "footnote": "Scores as published.",
+                "src": "deepmind",
+                "quote": "rises from 34.4 to 43.6",
+            }
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    assert "FrontierCode" in out

@@ -288,8 +288,8 @@ beats:
     hold: 4.6
     kicker: "And it costs half of what 3.6 Flash did"
     items:
-      - { value: 0.75, unit: "$", label: "per 1M input tokens",  decimals: 2 }
-      - { value: 3.75, unit: "$", label: "per 1M output tokens", decimals: 2 }
+      - { value: 0.75, prefix: "$", label: "per 1M input tokens",  decimals: 2 }
+      - { value: 3.75, prefix: "$", label: "per 1M output tokens", decimals: 2 }
     src: venturebeat
     quote: "priced at $0.75 per million input tokens and $3.75 per million output"
 
@@ -311,7 +311,7 @@ composition of existing primitives.
 | `statement` | `text`, `kicker?` | masked word rise | yes |
 | `body` | `text` (bold via `**`) | blur-to-sharp fade | yes |
 | `list` | `lead?`, `items[]`, `kicker?` | staggered slide from left | yes |
-| `kpis` | `items[{value,unit,label,decimals}]`, `kicker?` | eased count-up | **yes, strictly** |
+| `kpis` | `items[{value,label,prefix?,unit?,decimals?}]`, `kicker?` | eased count-up | **yes, strictly** |
 | `jumpChart` | `rows[{label,before,after,shown}]`, `scale`, `footnote` | value morph on a common scale | **yes, strictly** |
 | `dumbbell` | `rows[]`, `series[2]`, `caption`, `footnote` | dots apart → together | direction only |
 | `quote` | `text`, `attribution` | fade + rule draw | **yes, verbatim** |
@@ -421,9 +421,23 @@ punctuation. Without folding, **the mechanical pass refuses correct claims
 routinely** — and a gate that cries wolf is one operators learn to override,
 which is D-040's failure mode arriving through the front door.
 
-`unicodedata.normalize("NFKC", …)` **does not do this.** U+2011 is not a
-compatibility variant and survives NFKC unchanged. Verified. The fold must be an
-explicit table.
+`unicodedata.normalize("NFKC", …)` **does not do this.** Measured, per class:
+
+```
+U+2011 NON-BREAKING HYPHEN  -> U+2010 HYPHEN      still not ASCII
+U+2013 EN DASH              -> U+2013             unchanged
+U+2014 EM DASH              -> U+2014             unchanged
+U+2212 MINUS SIGN           -> U+2212             unchanged
+U+00A0 NO-BREAK SPACE       -> U+0020 SPACE       fixed
+U+202F NARROW NO-BREAK SPACE-> U+0020 SPACE       fixed
+```
+
+NFKC fixes the **space** family and leaves the **hyphen** family non-ASCII. The
+real case is the trap: U+2011 *does* change under NFKC — to U+2010, another
+non-ASCII hyphen — so `V4‑Pro` still fails to match `V4-Pro`, and a check written
+as "is U+2011 gone after normalising?" answers **yes** while the comparison it
+was standing in for still fails. Ask whether the fold reached ASCII, not whether
+a particular codepoint disappeared. The fold must be an explicit table.
 
 **Why folding cannot weaken the check:** it touches punctuation and whitespace
 only. **No digit is ever folded**, so no fold can make a wrong number match a

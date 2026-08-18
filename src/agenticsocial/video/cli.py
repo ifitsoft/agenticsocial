@@ -263,9 +263,37 @@ def _join(parts) -> str:
 
 
 def _kpi(item: dict) -> str:
-    value, unit, label = item.get("value", ""), item.get("unit", ""), item.get("label", "")
-    head = f"{unit}{value}" if unit in ("$", "£", "€", "¥") else f"{value}{unit}"
-    return f"{head} {label}".strip()
+    """One KPI, read the way the frame reads it.
+
+    `prefix` leads, `unit` follows — the same order `planbuild.js` composes
+    them in. It used to guess from a table of currency symbols, which put `$`
+    in front of a value the engine would have rendered it behind: this line is
+    what an operator approves, and a review that reads differently from the
+    render is a review of something else.
+    """
+    value = item.get("value", "")
+    prefix, unit = item.get("prefix", ""), item.get("unit", "")
+    label = item.get("label", "")
+    return f"{prefix}{value}{unit} {label}".strip()
+
+
+def _jump_row(row: dict) -> str:
+    """One jumpChart row, with the cell that does not follow from the bar.
+
+    `shown` is an HTML display override, and D-081 records it as the one field
+    where the frame and the script legitimately differ: the bar is drawn from
+    `before`/`after` and this text is drawn from nothing else. So it is the one
+    field an approver cannot reconstruct from the rest of the row, and printing
+    only the label is how it stayed invisible to the only control that is a
+    person rather than a check — it can carry markup, and until Phase 4 Task 5
+    it could carry an inline event handler.
+
+    Shown verbatim, as authored, because that is the string in the file they are
+    about to edit.
+    """
+    label = row.get("label", "")
+    shown = row.get("shown")
+    return _join([label, shown]) if isinstance(shown, str) else _one_line(label)
 
 
 # One summariser per catalogue type. A dict rather than a chain of `if`s for the
@@ -277,7 +305,7 @@ SUMMARISERS = {
     "body": lambda b: _one_line(b.fields.get("text", "")),
     "list": lambda b: _join([b.fields.get("lead", ""), *b.fields.get("items", [])]),
     "kpis": lambda b: _join(_kpi(i) for i in b.fields.get("items", [])),
-    "jumpChart": lambda b: _join(r.get("label", "") for r in b.fields.get("rows", [])),
+    "jumpChart": lambda b: _join(_jump_row(r) for r in b.fields.get("rows", [])),
     "dumbbell": lambda b: _one_line(b.fields.get("caption", "")),
     "quote": lambda b: _one_line(
         f"“{b.fields.get('text', '')}” — {b.fields.get('attribution', '')}"
@@ -288,7 +316,12 @@ SUMMARISERS = {
     # reachable and therefore testable — two would leave the outer one dead.
     "title": lambda b: _one_line(b.fields.get("sub", "")),
     "signoff": lambda b: _one_line(b.fields.get("text", "")),
-    "custom": lambda b: _one_line(b.fields.get("js", "")),
+    # The attestation, not the code. `custom` renders whatever its `js` draws
+    # and no check can say what that is, so the only thing worth putting in
+    # front of an approver is the sentence in which the author says what it
+    # shows and signs for it. A clipped first line of JavaScript in a 40-column
+    # column tells them less than nothing; the code is in script.yaml.
+    "custom": lambda b: _one_line(b.fields.get("attest", "")),
 }
 
 
