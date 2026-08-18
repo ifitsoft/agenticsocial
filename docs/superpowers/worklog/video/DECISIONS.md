@@ -2341,3 +2341,95 @@ output looks wrong.
 Standing rule, now in the briefs: use `$PIPESTATUS` or an unpiped run before
 reporting any exit-code finding, and never pipe the command whose status you are
 about to quote.
+
+## D-106 · phase 5 / task 4 · the extractor failed open, and the fix is a boundary you can measure
+
+The blind gate found two ways to display a fabricated number and pass. Both
+leader-reproduced before dispatch:
+
+```
+atoms('about 950bn active') -> ()        # no atom at all -> nothing checked -> pass
+_bare('-18') -> '18'                     # "-18" matches "rose 18%"
+```
+
+F1's shape is the important part. §8.2.2 strips exactly one trailing suffix
+character, so `950bn` failed the digits-only test, was classified an identifier,
+was *also* rejected as a name, and **produced no atom whatsoever.** Verified end
+to end on the operator's own episode: `95B` → `950bn`, source unchanged, verdict
+`pass`. A 10× fabrication, clean. **Both defects are one decision made wrongly in
+two places: a token the rule cannot parse was treated as "not a claim" rather
+than "cannot be checked."** Failing open, in the component whose entire job is to
+notice.
+
+**The new boundary is a measurement, not an argument:** a token beginning with a
+digit is a figure and gets checked; one beginning with a letter is an identifier
+and is exempt. Every identifier in §8.2.2's table, the `M1` chip, and every
+product name in the operator's brief begins with a letter. The decisive property
+is that **the old rule could answer "neither a number nor a name" — and neither
+means no atom, which means no check. The new one cannot produce that answer.**
+
+Verified through the real `check_claim` path:
+
+```
+'about 95 bn active' vs 'roughly 95 million active' -> fail
+'about 95 bn active' vs 'roughly 95 billion active' -> pass
+'about 950bn active' vs 'about 95B active'          -> fail
+'revenue fell -18%'  vs 'revenue rose 18%'          -> fail
+```
+
+1573 tests, **17/17 non-equivalent mutants**, and **zero false refusals on real
+content** — 10 → 10 figures on the committed episode, 18 → 18 on the operator's
+brief, not one token changing side. The cost is not zero in principle (`5th`,
+`1080p`, `95-billion` are now checked by spelling); it is zero in the corpus we
+have, which is the honest way to state it.
+
+### The deviation, ruled on and accepted
+
+R1 said an unparseable token must *refuse*. The implementer made it **checked by
+exact spelling in the quote** — which refuses when absent and verifies when the
+source spells it the same way. Accepted: byte equality after folding is *stricter*
+than the numeric comparison (which reads `1M` and `1,000,000` as one claim), it
+cannot admit a wrong figure, and unconditional refusal is a false-refusal
+generator **no correct quote can ever clear** — D-040's exact shape. The brief was
+wrong and the deviation was flagged rather than taken silently, which is the
+behaviour the ground rules exist to produce.
+
+### One space from the one the gate found
+
+`95 bn` writes the magnitude as its own token, so the suffix strip never saw it —
+the atom was a bare `95`, matching a source saying "95 million". **Three orders of
+magnitude, passing, through code this task had just hardened.** Found by the
+implementer looking further than the brief asked, and fixed test-first.
+
+The lesson generalises past this bug: **the gate found `bn` because it looked,
+and there was another one space away.** When a defect is a spelling the rule does
+not know, the correct assumption is that more spellings exist.
+
+## D-107 · carried to Phase 9 · a beat that spells its figures in words is unchecked
+
+`"Ninety-five billion parameters"` against a source saying "nine billion" passes
+with **zero atoms**. §8.2.2 is a rule about digits, end to end.
+
+Recorded rather than patched. It is not a bug in the rule — it is the rule's
+domain — and word-number parsing belongs with the adversarial pass, which reads
+meaning rather than tokens. **Phase 9 work, and Phase 9's brief must carry it**,
+because it is the last route by which a figure reaches the screen with nothing
+having checked it.
+
+## D-108 · phase 5 / gate · the residual risk has moved from implementation to specification
+
+The gate's own summary of its mutation run is the most useful sentence in it:
+33/38 killed, and **every code defect it found is one no mutant reaches, because
+the defect is in what the rule *is* rather than whether it runs.**
+
+That is a real threshold. For five phases, mutation testing found nearly every
+defect. In Phase 5 it found none of the four that mattered — F1, F2, the `95 bn`
+spacing, and D-107 are all rule-scope errors, invisible to any mutant because the
+code does exactly what it says.
+
+**Consequence for how later phases are reviewed:** mutation score is necessary and
+no longer sufficient. The questions that found these were *"what does this rule
+not know how to say?"* and *"what happens to input the rule cannot classify?"* —
+and the second one is the general form, because **a classifier with a third
+answer will eventually take it.** Phase 9's review effort should go there, not
+into more mutants.
