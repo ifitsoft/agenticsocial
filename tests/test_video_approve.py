@@ -167,7 +167,7 @@ def write_ledger_file(series, ledger, ep_id=EP):
 def test_approve_takes_identifiers_not_objects():
     """M1. D-072: there must be no argument a caller can shape to change the
     verdict — no `Script`, no ledger, no pre-loaded `Episode` or `Series`."""
-    params = inspect.signature(approve_mod.approve_episode).parameters
+    params = inspect.signature(approve_mod.approve_episode, eval_str=True).parameters
     assert list(params) == ["ws", "series_slug", "ep_id", "by", "now"]
     for name in ("series_slug", "ep_id", "by"):
         assert params[name].annotation is str
@@ -215,6 +215,7 @@ def test_a_fail_claim_refuses_and_names_it(series):
 def test_a_no_source_claim_refuses_and_names_it(series):
     """M3. `no_source` is not a pass: nothing was checked at all."""
     episode(series, [{"type": "body", "hold": 3.0, "text": "Prices moved a lot."}])
+    assert check().exit_code == 1
     result = approve()
     assert result.exit_code == 1, result.output
     assert "c-001" in result.output
@@ -283,6 +284,7 @@ def test_an_override_does_not_clear_a_fail_in_this_task(series):
             )
         ],
     )
+    assert check().exit_code == 1
     result = approve()
     assert result.exit_code == 1, result.output
     assert "c-001" in result.output
@@ -346,6 +348,7 @@ def test_a_stale_corpus_refuses(series):
         url="https://local-ai-zone.example/x",
         key="local-ai-zone",
         fetched_at="2026-08-17",
+        replace=True,
     )
     result = approve()
     assert result.exit_code == 1, result.output
@@ -636,6 +639,7 @@ def test_the_refusal_says_what_to_do_about_the_claim(series):
     """M12 / D-040: a checker that refuses without teaching trains an operator
     to override everything."""
     episode(series, [fabricated_beat()])
+    assert check().exit_code == 1
     result = approve()
     assert result.exit_code == 1, result.output
     assert "fix" in result.output

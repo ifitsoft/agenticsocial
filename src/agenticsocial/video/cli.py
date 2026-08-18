@@ -7,7 +7,9 @@ from typing import Optional
 
 import typer
 
+from ..models import TransitionError
 from ..workspace import Workspace, WorkspaceError
+from . import approve as approve_mod
 from . import claims as claims_mod
 from . import corpus as corpus_mod
 from . import ingest as ingest_mod
@@ -287,23 +289,13 @@ def _join(parts) -> str:
 # will read — rather than over anything either command happens to hold.
 
 
-def is_blocking(record: dict) -> bool:
-    """Would §8.4 refuse this claim? `fail`, `no_source`, or an unattested `manual`.
-
-    An override does NOT clear it. §8.4 puts the override in front of `approve`,
-    not in front of the measurement: `check` reports what was measured, and a
-    check that went quiet because someone wrote a sentence would be reporting
-    the sentence. Phase 7 is what consumes `override`; this is not that gate.
-
-    Written over the ledger record, not over `Mechanical`, because the record is
-    what survives to the gate. A `manual` claim whose `attest` was lost between
-    the check and the file is unattested to everyone who reads the file.
-    """
-    mechanical = record.get("mechanical") or {}
-    verdict = mechanical.get("verdict")
-    if verdict == "manual":
-        return not str(mechanical.get("attest") or "").strip()
-    return verdict in ("fail", "no_source")
+# The predicate itself now lives in `verify`, next to the ledger it reads and
+# where `approve` can reach it without importing the CLI. It is re-exported here
+# — as the SAME object, not a wrapper — because `check`'s screen and `approve`'s
+# gate answering the same question from two code paths is D-059's shape, and
+# because a wrapper is where the two would drift apart.
+is_blocking = verify_mod.is_blocking
+classify = verify_mod.classify
 
 
 def _verdict(record: dict) -> str:
@@ -733,6 +725,30 @@ def _claim_row(record: dict) -> str:
     )
 
 
+def _cleared_summary(records: list[dict]) -> str:
+    """The line printed when nothing is open — and it must not overclaim.
+
+    It used to say "7 claims verified, none open" on a screen that also said
+    *"attested by hand — no machine checked these"* about one of the seven
+    (D-112, the third overclaim in two phases). A `manual` is not verified; it
+    is attested, and the difference is the whole of D-088.
+
+    Counted through `classify`, the same function `approve` gates on, so the
+    denominator cannot drift from the decision. Every claim lands in exactly one
+    of the three buckets, which is what stops a summary rounding toward
+    reassurance by quietly dropping one.
+    """
+    kinds = [classify(record) for record in records]
+    verified = kinds.count("verified")
+    attested = kinds.count("attested")
+    if not attested:
+        return f"{_plural(verified, 'claim')} verified, none open"
+    return (
+        f"{verified} verified · {attested} attested by hand, NOT verified "
+        f"(D-088) · {_plural(len(records), 'claim')}, none open"
+    )
+
+
 def _counts(records: list[dict]) -> str:
     order = list(verify_mod.VERDICTS)
     tally: dict[str, int] = {}
@@ -918,9 +934,112 @@ def video_check(
             f"{len(blocked)} of {_plural(len(records), 'claim')} not verified — "
             "this episode is not approvable until they clear"
         )
-    typer.secho(
-        f"{_plural(len(records), 'claim')} verified, none open",
-        fg=typer.colors.GREEN,
+    typer.secho(_cleared_summary(records), fg=typer.colors.GREEN)
+
+
+def _print_open_claims(records: list[dict]) -> None:
+    """Name every claim that refused, and say what to do about each.
+
+    D-040: a checker that refuses without teaching trains an operator to
+    override everything, including the true refusal sitting in the same run.
+    """
+    for record in records:
+        typer.secho(_claim_row(record).rstrip(), fg=typer.colors.RED)
+        if _reason(record):
+            typer.echo(_detail("why", _reason(record)))
+        typer.echo(_detail("fix", _next_step(record)))
+
+
+@video_app.command("approve")
+def video_approve(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    by: str = typer.Option(
+        ...,
+        "--by",
+        help="who is approving — recorded in script.yaml, required",
+    ),
+) -> None:
+    """THE GATE (§8.4). Move an episode `in_review → approved`.
+
+    Refuses while any claim is `fail`, `no_source` or an unattested `manual`,
+    and refuses on a stale or absent `claims.json` — approving against a ledger
+    that no longer describes the script is the same defect as never checking.
+
+    Takes IDENTIFIERS and loads what it gates (D-072). It does not re-run
+    `check`: the ledger on disk is the artifact of record and the screen a human
+    read before signing, and computing a second set of verdicts in here would be
+    two paths to one answer with only one of them on the screen.
+
+    `--by` is required and is never inferred. The series `byline` is a display
+    credit on the frame, not an account of who spent this gate, and an OS
+    username is whoever's laptop the command ran on.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    approver = _text(by, "The approver")
+    try:
+        record = approve_mod.approve_episode(ws, series, episode, by=approver)
+    except approve_mod.ApprovalRefused as e:
+        head = f"{series}/{episode} · NOT approved"
+        if e.kind == "claims":
+            typer.secho(f"{head} — {e}", fg=typer.colors.RED)
+            typer.echo("")
+            _print_open_claims(e.claims)
+            typer.echo("")
+            raise _fail(
+                f"run `agsoc video check {episode} --series {series}` for the "
+                "full detail. Nothing moved; the episode is still in_review"
+            )
+        if e.kind == "ledger":
+            typer.secho(f"{head} — the check does not describe this script", fg=typer.colors.RED)
+            typer.echo(_detail("why", str(e)))
+            raise _fail(
+                _detail(
+                    "fix",
+                    f"run `agsoc video check {episode} --series {series}`, read "
+                    "it, then approve",
+                )
+            )
+        raise _fail(f"{head} — {e}")
+    except TransitionError as e:
+        raise _fail(
+            f"{series}/{episode} · NOT approved — {e}. Only a script an agent "
+            "has finished and marked `status: in_review` can be approved"
+        )
+    except (SeriesError, EpisodeError, verify_mod.VerifyError) as e:
+        raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot write script.yaml: {e}")
+
+    typer.secho(f"{series}/{episode} · approved", fg=typer.colors.GREEN)
+    typer.echo(_detail("by", record["by"]))
+    typer.echo(_detail("at", record["at"]))
+    typer.echo(_detail("script", f"sha256 {record['script_sha256']} (the beats document)"))
+    counted = record["claims"]
+    if counted["total"]:
+        attested = counted["attested"]
+        tail = (
+            f" · {attested} attested by hand, not verified (D-088)" if attested else ""
+        )
+        typer.echo(
+            _detail(
+                "claims",
+                f"{counted['verified']} of {counted['total']} verified{tail}, "
+                f"checked {record['claims_checked_at']}",
+            )
+        )
+    else:
+        typer.echo(
+            _detail("claims", "none — this script asserts nothing about the world")
+        )
+    typer.echo(
+        _detail(
+            "next",
+            "edit the beats and this approval no longer describes them — "
+            "`script_sha256` is what says so",
+        )
     )
 
 

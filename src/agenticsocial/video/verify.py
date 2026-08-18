@@ -746,6 +746,55 @@ def verify_episode(episode: Episode) -> dict:
     }
 
 
+def classify(record: dict) -> str:
+    """`verified` · `attested` · `open` — one answer per claim, for every screen.
+
+    This is the single place §8.4's list is spelled out. `check`'s summary,
+    `review`'s table and `approve`'s gate all derive from it, because two paths
+    to one answer is the D-059 shape: the bypass that published a draft was a
+    gate and a second writer that disagreed about the same episode.
+
+    **It fails closed.** Anything this function does not recognise — a verdict
+    from a phase that does not exist yet, a hand-edited ledger, a record with no
+    `mechanical` block at all — is `open`. The predicate used to name the
+    blocking verdicts (`fail`, `no_source`) and answer "not blocking" for
+    everything else, so `verdict: supported` would have approved with nothing
+    checked. That is D-106's failure exactly: a value the rule cannot read
+    treated as *nothing to check* rather than *cannot be checked*.
+
+    An override does NOT clear a claim here. §8.4 puts the override in front of
+    `approve`, not in front of the measurement, and Task 2 is what applies one.
+
+    Written over the ledger RECORD, not over `Mechanical`, because the record is
+    what survives to the gate. A `manual` claim whose `attest` was lost between
+    the check and the file is unattested to everyone who reads the file.
+    """
+    mechanical = record.get("mechanical") or {}
+    verdict = mechanical.get("verdict")
+    if verdict == "pass":
+        return "verified"
+    if verdict == "manual" and str(mechanical.get("attest") or "").strip():
+        return "attested"
+    return "open"
+
+
+def is_blocking(record: dict) -> bool:
+    """Would §8.4 refuse this claim? Derived from `classify`, never restated."""
+    return classify(record) == "open"
+
+
+def claim_records(ledger: dict | None) -> list[dict]:
+    """The ledger's claim records, defensively — a ledger is a file on disk."""
+    if not isinstance(ledger, dict):
+        return []
+    return [r for r in (ledger.get("claims") or []) if isinstance(r, dict)]
+
+
+def open_claims(records: list[dict]) -> list[dict]:
+    """Every claim §8.4 refuses on. `approve` gates on exactly this list."""
+    return [r for r in records if is_blocking(r)]
+
+
 def ledger_path(episode: Episode) -> Path:
     return episode.dir / CLAIMS_NAME
 
