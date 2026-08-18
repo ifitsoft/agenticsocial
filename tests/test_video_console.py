@@ -434,6 +434,23 @@ def test_a_refuted_claim_never_shows_a_bare_pass(series, tmp_path):
     )
 
 
+def test_the_beat_row_shows_the_binding_verdict_too(series, tmp_path):
+    """precondition: M4c. The beat list is the column an operator scans, and a
+    cell built from the measurement puts a green word on the row the gate
+    refuses — the same defect as D-123's summary line, one column across."""
+    ep = checked(series, [clean_beat()])
+    V.record_adversarial(
+        ep,
+        "c-001",
+        verdict="refuted",
+        attempted_refutation="The date belongs to another product.",
+        by="Ali Abdukarim",
+    )
+    beat = block(console(out=tmp_path / "c.html"), "beat-0")
+    assert "refuted" in beat
+    assert not re.search(r"class=\"[^\"]*verdict[^\"]*\"[^>]*>\s*pass\s*<", beat)
+
+
 def test_the_console_never_compares_against_a_pass_1_verdict_word(series):
     """precondition: M4 by construction. Pass 1's verdict is REPORTED by this
     module and never branched on — a comparison here is the beginning of a
@@ -495,25 +512,30 @@ def test_a_pass_2_supported_claim_is_marked_as_a_judgement(series, tmp_path):
     claim = block(console(out=tmp_path / "c.html"), "claim-c-001")
     assert "NOT a measurement" in claim
     assert "judgement" in claim
+    # Author and expiry, both labelled: a judgement has an author and a date it
+    # stops standing, and a value with no label beside it is a value nobody
+    # reads as either (D-121).
+    assert "judged by" in claim
     assert "Ali Abdukarim" in claim
+    assert "stops standing" in claim
     assert "Checked the date against the two other sources." in claim
 
 
 def test_a_judged_claim_is_styled_apart_from_a_mechanical_pass(series, tmp_path):
     """precondition: M6 stated as the mutant does — "styled identically". The
-    distinction has to reach the markup, not only the prose."""
+    distinction has to reach the markup, not only the prose, and the rule it
+    names has to actually paint something."""
     ep = checked(series, [clean_beat(), clean_beat(text="Pricing started August 16.")])
     _support(ep, "c-002")
     html = console(out=tmp_path / "c.html")
-    plain = set(re.findall(r'class="([^"]+)"', block(html, "claim-c-001")))
-    judged = set(re.findall(r'class="([^"]+)"', block(html, "claim-c-002")))
-    assert judged - plain, "a judged claim carries no class a measured one does not"
+    assert '<div class="judged' in block(html, "claim-c-002")
+    assert '<div class="judged' not in block(html, "claim-c-001"), (
+        "a claim pass 2 never touched must not wear pass 2's styling"
+    )
     css = "\n".join(_Page(html).styles)
-    for extra in judged - plain:
-        for name in extra.split():
-            if name.startswith("judg") or name.startswith("pass2"):
-                assert f".{name}" in css
-                break
+    rule = re.search(r"\.judged\s*\{([^}]*)\}", css)
+    assert rule, "`.judged` is not styled at all"
+    assert "background" in rule.group(1) or "border" in rule.group(1), rule.group(1)
 
 
 def test_residual_risk_is_shown_on_a_supported_claim(series, tmp_path):
@@ -525,6 +547,16 @@ def test_residual_risk_is_shown_on_a_supported_claim(series, tmp_path):
     claim = block(console(out=tmp_path / "c.html"), "claim-c-001")
     assert "The source does not state an effective date." in claim
     assert "residual risk" in claim.lower()
+
+
+def test_the_header_says_how_many_claims_are_open(series, tmp_path):
+    """precondition: S3 — a header that counts what cleared and stays quiet
+    about what did not is the summary line rounding toward reassurance
+    (D-112). The open count is the number the operator is deciding about."""
+    checked(series, [clean_beat(), fabricated_beat()])
+    html = console(out=tmp_path / "c.html")
+    assert "1 open" in text_of(html)
+    assert "1 verified" in text_of(html)
 
 
 def test_pass_2_coverage_is_reported_even_at_zero(series, tmp_path):
@@ -604,6 +636,18 @@ def test_the_console_refuses_to_write_inside_the_workspace(series, ws):
     assert _tree(ws.root) == before
 
 
+def test_the_refusal_resolves_the_path_before_it_compares(series, ws, tmp_path):
+    """precondition: M9c. A refusal that can be spelled around is not one — a
+    symlink into the workspace is the same write as a path that says so."""
+    ep = checked(series, [clean_beat()])
+    link = tmp_path / "link"
+    link.symlink_to(ws.root)
+    before = _tree(ws.root)
+    output = console(out=link / "series" / "the-brief" / "console.html", expect=1)
+    assert "workspace" in output
+    assert _tree(ws.root) == before
+
+
 def test_the_default_path_is_outside_the_workspace(series, ws, tmp_path):
     """precondition: M9's default half — a refusal is worthless if the ordinary
     invocation writes there anyway."""
@@ -660,6 +704,16 @@ def test_an_open_claim_gets_an_adjudication_block(series, tmp_path):
     assert "why" in adj.lower()
 
 
+def test_a_claim_cleared_on_a_persons_word_is_also_adjudicated(series, tmp_path):
+    """precondition: S5. Screen D is not only for what the gate refuses: an
+    attested `manual` and a written override both PASS the gate on a person's
+    sentence, and those are exactly the claims where somebody is attaching
+    their name to something no machine checked (D-088, §8.4)."""
+    checked(series, [custom_beat()])
+    adj = block(console(out=tmp_path / "c.html"), "adjudicate-c-001")
+    assert "Draws the price ladder from the two figures above." in adj
+
+
 def test_the_override_is_shown_as_a_statement_with_the_diff_it_will_make(
     series, tmp_path
 ):
@@ -668,11 +722,20 @@ def test_the_override_is_shown_as_a_statement_with_the_diff_it_will_make(
     in the file as a diff." §8.4's asymmetry is the whole design."""
     checked(series, [fabricated_beat()])
     adj = block(console(out=tmp_path / "c.html"), "adjudicate-c-001")
-    assert "claim_override:" in adj
-    assert "reason:" in adj and "by:" in adj
-    assert "+" in adj, "the YAML is shown as the diff it will make"
     assert "script.yaml" in adj
     assert "NOT verified" in adj
+    # Every line the operator adds is an ADDED line, marked as one. A diff whose
+    # additions are not marked is a snippet, and §12 asks for the diff.
+    added = re.findall(r"<ins>\+([^<]*)</ins>", adj)
+    assert any("claim_override:" in line for line in added), added
+    assert any("reason:" in line for line in added), added
+    assert any("by:" in line for line in added), added
+    # And it is presented as authoring a statement, not as a formality. §8.4's
+    # asymmetry is the whole design: passing verification is automatic,
+    # bypassing it costs a written sentence with your name on it.
+    prose = text_of(adj)
+    assert "on-the-record statement" in prose
+    assert "you write the sentence yourself" in prose.lower()
 
 
 def test_the_adjudication_shows_the_refuters_reasoning(series, tmp_path):
@@ -736,6 +799,26 @@ def test_every_beat_carries_its_hold_and_the_runtime_is_reported(series, tmp_pat
     assert "OUT OF TOLERANCE" in html  # one beat is nowhere near 120s
 
 
+def test_an_approval_that_no_longer_describes_the_script_is_on_the_page(
+    series, tmp_path
+):
+    """precondition: S14 and §10. An approval that stopped being true is
+    invisible to everything until `render` refuses — the expensive step the rule
+    was written to protect. `review` and `check` both print it; the console
+    reads the same answer from the same function."""
+    ep = checked(series, [clean_beat()])
+    body = ep.script_path.read_text(encoding="utf-8").split("---\n")[2]
+    ep.script_path.write_text(
+        "---\nepisode: '2026-08-17'\nseries: the-brief\nstatus: approved\n"
+        "approval:\n  by: Ali Abdukarim\n  script_sha256: deadbeef\n  pace: 1.0\n"
+        "---\n" + body,
+        encoding="utf-8",
+    )
+    html = console(out=tmp_path / "c.html")
+    assert "no longer describes it" in text_of(html)
+    assert "deadbeef" in text_of(html)
+
+
 def test_an_episode_rendered_but_never_recorded_is_surfaced(series, tmp_path):
     """precondition: Phase 11's gap — `check` cannot tell "not covered" from
     "covered but never recorded", and nothing nags after a render. The console
@@ -768,6 +851,10 @@ def test_without_a_probe_the_page_prints_the_command_that_draws_one(series, tmp_
     html = console(out=tmp_path / "c.html")
     assert f"agsoc video probe {EP}" in html
     assert "data:image/png" not in html
+    assert "D-116" in html, (
+        "and it says WHY looking matters: the approval covers the beats, the "
+        "pace and the design, and never this machine's fonts or Chromium"
+    )
 
 
 def test_an_unreadable_script_refuses_rather_than_writing_half_a_page(series, tmp_path):
