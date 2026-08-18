@@ -541,12 +541,12 @@ def _print_claim_summary(ledger: dict) -> None:
             f"{'!' if is_blocking(record) else '*'} {record.get('id')} · "
             f"beat {record.get('beat_index')} · {_verdict(record)}"
         )
+        # No "— no reason recorded" filler: a passing claim that carries an
+        # override has nothing to explain, and inventing a clause there reads
+        # like the check lost something.
+        why = f" — {_reason(record)}" if _reason(record) else ""
         typer.secho(
-            "  "
-            + _clip(
-                _one_line(f"{head} — {_reason(record) or 'no reason recorded'}"),
-                ROW_WIDTH - 2,
-            ),
+            "  " + _clip(_one_line(head + why), ROW_WIDTH - 2),
             fg=typer.colors.RED if is_blocking(record) else None,
         )
         if override:
@@ -659,7 +659,7 @@ def video_review(
 # useless one. What an operator needs, in one place, is the figure, the quote it
 # was checked against, and the source it came from.
 
-LABEL_WIDTH = 8  # "override" — the longest label in a detail block
+LABEL_WIDTH = 9  # "override" plus the space that keeps it off the value
 EXCERPT = 2 * ROW_WIDTH  # the near-miss window, before clipping
 
 
