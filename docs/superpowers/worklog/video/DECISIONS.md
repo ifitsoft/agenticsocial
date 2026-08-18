@@ -2859,3 +2859,51 @@ Phase 8's `render` gate is therefore **three checks, not one** —
 `assert_transition` + `approval_drift` + `stale_reason` — and they stay
 distinguishable so an operator is told *which* thing moved. Folding them together
 would rebuild the second-path shape D-113 just eliminated.
+
+## D-116 · phase 7 / task 3 · the covered set is derived from the AST, and the regex would have lied
+
+Design drift is closed. `plan.series_reads()` walks `build_plan`'s **AST** and
+returns `{slug, name, byline, design, acts, dir}`; `SERIES_ATTR_COVERAGE` marks
+each `frame` or `identity`; `[design]` is covered as a whole table, so **a token
+added tomorrow is covered with no edit anywhere.** 1737 tests, 18/18 mutants.
+
+**Why the AST and not a text scan, which is the detail worth keeping:**
+`build_plan`'s own *comments* contain the string `series.toml`, which a regex
+turns into a phantom attribute named `toml`. The naive implementation would have
+produced a covered-set that looked plausible, included something that does not
+exist, and nobody would have questioned it — **a wrong answer of exactly the
+shape nobody audits.**
+
+What cannot be derived is **refused loudly** (D-096's precedent): an unclassified
+attribute, `s = series` aliasing, `series` passed whole to a helper outside the
+known set, or a value JSON cannot compare — each raises and refuses the approval
+naming the key. The failure mode is a stopped approval, never a silent gap.
+
+Drift stays a **third answer**: one `classify()`, one `approval_drift`, and it
+names the token that moved — `[design] accent was '#2E6BFF', now '#12A150'` —
+rather than claiming the beats document changed.
+
+### What an approval covers, stated exactly, for Phase 8
+
+**The approval covers everything the operator authors, and nothing the renderer
+is.**
+
+*Bound:* beats bytes, `pace`, palette, series name, byline, act labels.
+*Unbound:* `engine.js`, `planbuild.js`, `content/*.js`, `scene.html`'s CSS,
+**the resolved font — the one thing that differs between machines** —
+Chromium/Playwright, the ffmpeg binary and its flags, and the chosen `--format`.
+
+That sentence is the honest scope of the guarantee, and Phase 8 must not describe
+it as more.
+
+### A false positive, caused by the plan rather than the check
+
+`type_family` and `type_scale` are copied into `plan.json` and **the engine
+ignores them** — leader-verified, neither string appears anywhere in `engine/`,
+where `PLAN_TOKENS` maps the six colours only. So the approval binds two values
+that reach no pixel, while **the type that is actually drawn lives in
+`scene.html`, uncovered.**
+
+Two knobs an operator would reasonably believe control the typography, that
+control nothing. Recorded for Phase 10 (wide format), which is the next phase to
+touch layout — and it is a spec-versus-implementation gap, not a drift bug.
