@@ -129,6 +129,13 @@ def approve_episode(
         # attested claim is NOT verified (D-088, and D-112's overclaim), and
         # neither is one a person cleared by hand.
         "claims": verify_mod.claim_tally(records),
+        # What pass 2 covered, and what kind of thing it is. §8.4 does not
+        # refuse an unjudged claim — absence is not on its list — so an episode
+        # can legitimately be signed with pass 2 never run, and the artifact has
+        # to say which one this was. `reproducible: false` travels with the
+        # count because a number that does not say what it counted is the
+        # overclaim this project has now made four times (D-118).
+        "adversarial": verify_mod.pass2_tally(records),
         # What the frame will look like. `script.yaml` says what the video
         # SAYS; `series.toml` says what it LOOKS like — the palette, the type,
         # the show's name at 150px, the act chip on every beat — and it is a

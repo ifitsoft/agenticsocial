@@ -60,7 +60,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -86,6 +86,15 @@ class VerifyError(Exception):
 CLAIMS_NAME = "claims.json"
 
 VERDICTS = ("pass", "fail", "no_source", "manual")
+
+# §8.3's pass-2 verdicts. `unsupported` is what a refuter defaults to under
+# uncertainty, so it is a refusal, not a shrug — §8.4 lists it beside `fail`.
+ADVERSARIAL_VERDICTS = ("supported", "unsupported", "refuted")
+
+# How long a pass-2 verdict is believed. Argued in the Phase 9 Task 1 report and
+# in `adversarial_state` below: the corpus and the script are covered by
+# digests, and the JUDGE is not.
+PASS2_HORIZON_DAYS = 90
 
 
 # --- §8.2.1 folding, with a map back to the original bytes ---------------------------
@@ -673,7 +682,7 @@ def _span(value: tuple[int, int] | None) -> list[int] | None:
     return None if value is None else [value[0], value[1]]
 
 
-def _record(claim: Claim, result: Mechanical) -> dict:
+def _record(claim: Claim, result: Mechanical, carried: dict | None = None) -> dict:
     """§8.1's record shape. The example's VALUES are not reproduced, deliberately.
 
     Two defects Task 1 flagged in §8.1's worked example, neither load-bearing:
@@ -702,9 +711,12 @@ def _record(claim: Claim, result: Mechanical) -> dict:
             "reason": result.reason,
             "attest": result.attest,
         },
-        # Phase 9 fills this in. `None` rather than an absent key: "not run yet"
-        # and "ran and said nothing" must not look the same to the gate.
-        "adversarial": None,
+        # Pass 2, §8.3. `None` rather than an absent key: "not judged yet" and
+        # "judged and said nothing" must not look the same to the gate. It is
+        # never computed here — this module makes no judgements — and it is
+        # carried from a previous ledger only when the claim it judged has not
+        # moved (`_carry_forward`).
+        "adversarial": carried,
         "override": claim.override,
     }
 
@@ -719,6 +731,7 @@ def verify_episode(episode: Episode) -> dict:
     """
     script = script_mod.load_script(episode)
     beats = {b.index: b for b in script.beats}
+    previous = claim_records(read_ledger(episode))
 
     documents: dict[str, str | None] = {}
     records: list[dict] = []
@@ -729,9 +742,9 @@ def verify_episode(episode: Episode) -> dict:
             except corpus_mod.CorpusError:
                 documents[claim.src] = None
         document = documents.get(claim.src) if claim.src else None
-        records.append(
-            _record(claim, check_claim(claim, document, beat=beats.get(claim.beat_index)))
-        )
+        fresh = _record(claim, check_claim(claim, document, beat=beats.get(claim.beat_index)))
+        fresh["adversarial"] = _carry_forward(fresh, previous)
+        records.append(fresh)
 
     read = {key: text for key, text in documents.items() if text is not None}
     return {
@@ -744,6 +757,355 @@ def verify_episode(episode: Episode) -> dict:
         "corpus_sha": corpus_sha(read),
         "claims": records,
     }
+
+
+# --- §8.3's pass 2: a judgement, and everything that makes it stop counting ---------
+#
+# Nothing in this file makes a pass-2 judgement. The CLI contains no LLM calls
+# (CLAUDE.md) and pass 2 is irreducibly a judgement pass, so the skill judges and
+# this module stores, binds, expires and gates. Everything below is about the
+# difference between a MEASUREMENT and a JUDGEMENT, and about making that
+# difference visible to someone who never reads the spec:
+#
+#   * pass 1 says `checked_at`; pass 2 says `judged_at`, and `judged_by`, because
+#     a judgement has an author and a measurement does not;
+#   * every block carries `reproducible: false`, and a block that claims
+#     otherwise is malformed rather than believed;
+#   * every block carries `claim_sha256`, so a verdict about one sentence cannot
+#     be read as a verdict about the sentence that replaced it;
+#   * and a `supported` expires, because nothing on disk can compare the judge.
+
+
+def claim_sha256(record: dict) -> str:
+    """A digest of WHICH CLAIM this is — the tuple `_script_drift` compares.
+
+    id, beat index, text, src and quote: change any of them and the beat asserts
+    something else, or asserts it about other bytes, and a judgement made before
+    the change is a judgement of words nobody wrote. Deliberately the same tuple
+    the ledger-level drift check uses, so the per-claim rule and the whole-ledger
+    rule cannot disagree about what "the same claim" means.
+
+    The mechanical verdict is NOT in it. Pass 1 re-running and reaching the same
+    answer about the same sentence does not invalidate an argument about that
+    sentence — and a digest that changed with every re-check would make the
+    binding fire constantly, which is how a real invalidation stops being read.
+    """
+    identity = [
+        record.get("id"),
+        record.get("beat_index"),
+        record.get("text"),
+        record.get("src"),
+        record.get("quote"),
+    ]
+    return hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _carry_forward(record: dict, previous: list[dict]) -> dict | None:
+    """A previous ledger's verdict for this exact claim, or None.
+
+    **Why carry anything at all.** §8.3 runs one refuter per claim and a real
+    episode has around 24. If a re-check threw every judgement away, an operator
+    who fixes one beat pays for 24 fresh judgements — and a pass that expensive
+    is one people stop running, which costs more than it saves.
+
+    **Why it is safe.** The rule is the same one the gate applies, in one place:
+    a block is carried only when it says it judged this exact claim
+    (`claim_sha256`), and `classify` re-checks that on the file it reads rather
+    than trusting this function to have been right. A malformed block is carried
+    too — it refuses either way, and dropping it would turn "judged badly" into
+    "not judged yet", which is the one distinction R3 asks for.
+    """
+    digest = claim_sha256(record)
+    for old in previous:
+        if old.get("id") != record.get("id"):
+            continue
+        block = old.get("adversarial")
+        if isinstance(block, dict) and block.get("claim_sha256") == digest:
+            return block
+        return None
+    return None
+
+
+def adversarial_state(record: dict) -> tuple[str, str]:
+    """(what pass 2 says about this claim, why it does not clear it).
+
+    States: `unjudged` · `supported` · `unsupported` · `refuted` · `malformed` ·
+    `stale` · `expired`. The second element is empty exactly when the state
+    clears the claim, and it is the sentence the screens print.
+
+    **`unjudged` is not a refusal.** §8.4's list is `fail`, `refuted`,
+    `unsupported`, `no_source` and unattested `manual`; absence of a judgement is
+    not on it, and making it one would leave the project unable to approve
+    anything between this task and the skill that does the judging. Coverage is
+    REPORTED instead — on both screens and in the approval record — so an
+    episode signed with pass 2 never run cannot be mistaken for one pass 2
+    cleared.
+
+    **It fails closed on everything it can read badly** (D-113, D-106): an
+    unknown verdict, a missing or blank `attempted_refutation`, an unparseable
+    timestamp, a block that is not an object at all. A judgement nobody can read
+    is not a judgement.
+
+    **`attempted_refutation` is required and non-empty**, and that is the point
+    of the whole record. A `supported` with no account of what was attacked
+    records that somebody looked, which is worth nothing — and this project has
+    printed a conclusion stronger than its evidence four times (D-106, D-110,
+    D-112, D-118). This field is the evidence.
+
+    **The order of the checks is an argument.** Shape, then binding, then the
+    verdict, then expiry — so that an old `refuted` still reads as `refuted`.
+    Age makes a `supported` less believable; it does not make a refutation less
+    alarming, and "re-judge this" is the wrong remedy to print over "a refuter
+    knocked this claim over".
+    """
+    block = record.get("adversarial")
+    if block is None:
+        return "unjudged", ""
+    if not isinstance(block, dict):
+        return "malformed", "the adversarial block is not an object"
+
+    verdict = block.get("verdict")
+    if verdict not in ADVERSARIAL_VERDICTS:
+        return "malformed", (
+            f"pass 2 recorded {verdict!r}, which is not one of "
+            f"{' · '.join(ADVERSARIAL_VERDICTS)}"
+        )
+    refutation = block.get("attempted_refutation")
+    if not isinstance(refutation, str) or not refutation.strip():
+        return "malformed", (
+            "no `attempted_refutation` — a verdict with no account of what was "
+            "attacked records only that somebody looked"
+        )
+    if not isinstance(block.get("judged_by"), str) or not block["judged_by"].strip():
+        return "malformed", (
+            "no `judged_by` — pass 2 is a judgement, and a judgement with no "
+            "author is not one"
+        )
+    if block.get("reproducible") is not False:
+        return "malformed", (
+            "`reproducible` must be recorded as false: pass 2 is a judgement, "
+            "and a ledger that says otherwise is one nobody may act on"
+        )
+    risk = block.get("residual_risk")
+    if risk is not None and not isinstance(risk, str):
+        return "malformed", "`residual_risk` must be a sentence or absent"
+    judged_at = _judged_at(block)
+    if judged_at is None:
+        return "malformed", (
+            f"`judged_at` is {block.get('judged_at')!r}, which is not a "
+            "timestamp — so nothing can say how old this judgement is"
+        )
+
+    if block.get("claim_sha256") != claim_sha256(record):
+        return "stale", (
+            "this judgement was made about different words: the beat, its "
+            "source or its quote has changed since. Re-judge the claim"
+        )
+    if verdict != "supported":
+        # No "pass 2 found…" prefix: the screens print this under a `pass 2`
+        # label and beside a row that already says the verdict, and a sentence
+        # that repeats both reads as a stutter on the one screen an operator is
+        # meant to read word by word.
+        return verdict, f"{verdict} — {refutation.strip()}"
+    age = (datetime.now().astimezone() - judged_at).days
+    if age > PASS2_HORIZON_DAYS:
+        return "expired", (
+            f"this judgement is {age} days old and pass 2 verdicts expire after "
+            f"{PASS2_HORIZON_DAYS} days. Pass 1 re-runs to the same answer in a "
+            "year; pass 2 does not, and nothing on disk can compare the judge"
+        )
+    return "supported", ""
+
+
+def _judged_at(block: dict) -> datetime | None:
+    """The judgement's timestamp, as an aware datetime, or None if unreadable.
+
+    Naive stamps are read as local time rather than refused: `datetime.now()` is
+    what wrote them, and refusing one would fail closed on a value that is
+    simply less precise, not wrong.
+    """
+    value = block.get("judged_at")
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.astimezone()
+
+
+def adversarial_clears(record: dict) -> bool:
+    """Does pass 2 leave this claim approvable? Derived, never restated."""
+    return adversarial_state(record)[0] in ("unjudged", "supported")
+
+
+def binding_verdict(record: dict) -> str:
+    """The ONE word this pipeline says about a claim: pass 1's, unless pass 2 refuses.
+
+    Every screen that prints a verdict — `review`'s table cell, its counts line
+    and the head line of each open claim, and `check`'s counts — reads it here,
+    so a summary cannot disagree with the table under it. That disagreement has
+    now been shipped five times (D-106, D-110, D-112, D-118, and D-122's
+    finding), and it is not a thing to fix again by keeping two code paths in
+    step: the count and the cell are one function, or they are two facts.
+
+    **Pass 2 wins only where it refuses.** `supported` reads as `pass`, because
+    the measurement is the stronger of the two statements and a screen printing
+    a judgement over a measurement is an overclaim in the other direction. The
+    three non-verdicts — `stale`, `expired`, `malformed` — print as themselves:
+    a judgement nobody can read is an unanswered question, not a restored pass.
+
+    Pass 1's word is not lost. `check`'s rows print it beside `pass 2 <state>`,
+    and `review`'s open-claim lines label it `pass 1 <verdict>` — reported,
+    which is what this function is here to distinguish from claimed.
+    """
+    state, _ = adversarial_state(record)
+    if state in ("unjudged", "supported"):
+        return str((record.get("mechanical") or {}).get("verdict") or "?")
+    return state
+
+
+def pass2_tally(records: list[dict]) -> dict:
+    """What pass 2 covered, for a screen and for the approval record.
+
+    `reproducible` is in it because the approval artifact is read by whoever
+    inherits this episode, and a count of judgements that does not say what kind
+    of thing was counted is the overclaim this project keeps making.
+    """
+    states = [adversarial_state(r)[0] for r in records]
+    return {
+        "total": len(records),
+        "judged": sum(1 for s in states if s != "unjudged"),
+        "unjudged": states.count("unjudged"),
+        "supported": states.count("supported"),
+        "refuted": states.count("refuted"),
+        "unsupported": states.count("unsupported"),
+        "reproducible": False,
+    }
+
+
+def judgement(record: dict) -> dict | None:
+    """What pass 2 recorded here, as a screen may show it, or None.
+
+    **The only reader of the `adversarial` block outside this module.** Every
+    screen goes through this and through `adversarial_state`, so there is no
+    second place the block is interpreted — the D-059 shape, which is exactly a
+    display and a gate reading one field two ways.
+
+    Returns None for `unjudged` and for `malformed`: a block nothing can read
+    must not have its `residual_risk` quoted as though the rest of it were
+    sound. `stale` and `expired` blocks ARE returned, with their state, because
+    an operator has to see the judgement that stopped counting.
+
+    `expires_on` is computed here rather than stored. A stored expiry is a
+    second copy of one rule, and the copy a hand-edit can push to 2099.
+    """
+    state, _ = adversarial_state(record)
+    if state in ("unjudged", "malformed"):
+        return None
+    block = record.get("adversarial") or {}
+    stamp = _judged_at(block)
+    return {
+        "state": state,
+        "verdict": block.get("verdict"),
+        "judged_by": block.get("judged_by"),
+        "judged_at": block.get("judged_at"),
+        "residual_risk": block.get("residual_risk"),
+        "attempted_refutation": block.get("attempted_refutation"),
+        "expires_on": (
+            None
+            if stamp is None
+            else (stamp + timedelta(days=PASS2_HORIZON_DAYS)).date().isoformat()
+        ),
+    }
+
+
+def record_adversarial(
+    episode: Episode,
+    claim_id: str,
+    *,
+    verdict: str,
+    attempted_refutation: str,
+    by: str,
+    residual_risk: str | None = None,
+    now: str | None = None,
+) -> dict:
+    """Write one pass-2 verdict into `claims.json`, or raise. Returns the block.
+
+    Takes IDENTIFIERS and loads the ledger itself (D-072): there is no argument
+    a caller can shape to record a verdict against a claim other than the one on
+    disk under this id.
+
+    It refuses, rather than storing something a later screen has to explain:
+
+      * a ledger that is missing or stale — a judgement of a script that has
+        moved is a judgement of words nobody wrote, and the remedy is `check`;
+      * an unknown claim id — a verdict silently dropped on a typo means the
+        skill reports 24 judgements and the file holds 23;
+      * a claim pass 1 did not clear — §8.3 runs pass 2 on claims that SURVIVE
+        pass 1, and two disagreeing verdicts on one claim is a screen nobody can
+        read;
+      * a verdict outside §8.3's three, or a blank `attempted_refutation`.
+
+    Re-judging replaces the block. It has to: expiry and the binding both make
+    "judge this again" the remedy, and a writer that refused because a verdict
+    was already there would leave no way to take it.
+    """
+    ledger = read_ledger(episode)
+    stale = stale_reason(episode, ledger)
+    if stale:
+        raise VerifyError(
+            f"pass 2 has nothing to judge — {stale}. Run `agsoc video check` "
+            "first: a judgement is recorded against a claim pass 1 has written down"
+        )
+    if verdict not in ADVERSARIAL_VERDICTS:
+        raise VerifyError(
+            f"{verdict!r} is not a pass-2 verdict — §8.3 has three: "
+            f"{' · '.join(ADVERSARIAL_VERDICTS)}"
+        )
+    if not isinstance(attempted_refutation, str) or not attempted_refutation.strip():
+        raise VerifyError(
+            "a verdict needs its `attempted_refutation`: what did you attack, "
+            "and what did the source say? A verdict without it records only "
+            "that somebody looked"
+        )
+    if not (by or "").strip():
+        raise VerifyError(
+            "a judgement needs an author: pass `--by`. It is the only account "
+            "of who — or what — made this call"
+        )
+
+    records = claim_records(ledger)
+    record = next((r for r in records if r.get("id") == claim_id), None)
+    if record is None:
+        raise VerifyError(
+            f"no claim {claim_id!r} in {CLAIMS_NAME} — it holds "
+            f"{', '.join(str(r.get('id')) for r in records) or 'no claims'}"
+        )
+    if (record.get("mechanical") or {}).get("verdict") != "pass":
+        raise VerifyError(
+            f"{claim_id} did not clear pass 1 "
+            f"({(record.get('mechanical') or {}).get('verdict')}), and §8.3 "
+            "judges what survives pass 1. Fix the claim, then judge it"
+        )
+
+    block = {
+        "verdict": verdict,
+        "attempted_refutation": attempted_refutation.strip(),
+        "residual_risk": residual_risk.strip() if (residual_risk or "").strip() else None,
+        "judged_by": by.strip(),
+        # Not `checked_at`. The word is different because the thing is: a
+        # measurement's timestamp says when the bytes were read, and this says
+        # when somebody argued about them.
+        "judged_at": now or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "claim_sha256": claim_sha256(record),
+        "reproducible": False,
+    }
+    record["adversarial"] = block
+    write_ledger(episode, ledger)
+    return block
 
 
 def classify(record: dict) -> str:
@@ -772,6 +1134,18 @@ def classify(record: dict) -> str:
     what survives to the gate. A `manual` claim whose `attest` was lost between
     the check and the file is unattested to everyone who reads the file.
     """
+    if not adversarial_clears(record):
+        # Pass 2 VETOES, and it is checked first, because the claims it catches
+        # are the ones pass 1 says are fine: right number, wrong subject. A
+        # `refuted` claim whose figures are all in the quote would read
+        # `verified` under the measurement-first rule below, which would put a
+        # green word on the line the gate is about to refuse.
+        #
+        # §8.4's override still clears it — "the only way past", for every
+        # refusal on the list, and a pass-2 refusal is on the list. An override
+        # doing that work is not stale, because `stale_override` asks this same
+        # function.
+        return "overridden" if override_state(record)[0] is not None else "open"
     mechanical = record.get("mechanical") or {}
     verdict = mechanical.get("verdict")
     if verdict == "pass":
