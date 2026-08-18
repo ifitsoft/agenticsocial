@@ -1374,3 +1374,445 @@ def test_the_stale_predicate_is_the_one_the_screen_uses(series):
     assert V.stale_override({"mechanical": {"verdict": "pass"}}) is None
     assert "(STALE" in video_cli._applied(passing)
     assert "cleared this claim" in video_cli._applied(cleared)
+
+
+# --- Part C: the frame, not just the script ------------------------------------------
+#
+# `series.toml`'s `[design]` block goes straight into `plan.json`
+# (`plan.build_plan` — `"design": dict(series.design)`) and repaints every frame
+# of every episode in the series. Before this task `approve.py` never mentioned
+# it: approve an episode, change `accent`, render, and you have shipped
+# something the approver never saw, with a valid approval and no drift.
+#
+# Strictly worse than the `scale` case Part B closed. `scale` affects one beat
+# and lives in the file the digest covers; `design` affects every frame and
+# lives in a file the approval did not read at all — and turning that knob is
+# the most routine thing an operator does between approving and rendering,
+# because it feels cosmetic.
+#
+# The covered set is DERIVED from what `plan.py` copies (`plan.series_inputs`),
+# not from a list written by hand here, so a design token added tomorrow is
+# covered without anyone remembering. Where it cannot be derived, it refuses
+# loudly (D-096) rather than leaving a silent gap.
+
+from agenticsocial.video import plan as plan_mod  # noqa: E402
+
+
+def series_toml(series):
+    return series.dir / "series.toml"
+
+
+def edit_series_toml(series, old, new):
+    """Change one line of `series.toml` the way an operator would."""
+    path = series_toml(series)
+    text = path.read_text(encoding="utf-8")
+    assert old in text, f"{old!r} is not in series.toml — the fixture moved"
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def add_to_design(series, line):
+    """Append a key to the `[design]` table — a token nobody has heard of yet."""
+    path = series_toml(series)
+    text = path.read_text(encoding="utf-8")
+    marker = "[structure]"
+    assert marker in text
+    path.write_text(text.replace(marker, f"{line}\n\n{marker}", 1), encoding="utf-8")
+
+
+ACCENT = 'accent      = "#2E6BFF"'
+
+
+def approved_episode(series, beats=None):
+    episode(series, beats or [clean_beat()])
+    assert check().exit_code == 0, "precondition: the claims verify"
+    assert approve().exit_code == 0, "precondition: it approves"
+
+
+# --- R1: a design change that reaches the frame is detected and named -------------
+
+
+def test_changing_an_accent_after_approval_is_drift(series):
+    """M1. The hole this task exists to close: the approval must cover what the
+    frame will look like, and `accent` is painted on every frame of it."""
+    approved_episode(series)
+    assert drift(series) is None, "precondition: the approval binds what it signed"
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    assert drift(series) is not None
+
+
+def test_the_design_drift_names_the_value_that_moved(series):
+    """M1's naming half. "Something in series.toml changed" is true and useless:
+    the operator has to be told WHICH token, what it was when they signed, and
+    what it is now — the same standard `test_the_drift_names_itself` sets for
+    the beats digest."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    message = drift(series)
+    assert "series.toml" in message
+    assert "accent" in message
+    assert "#2E6BFF" in message, "what was signed"
+    assert "#12A150" in message, "what is on disk now"
+    assert BY in message and approval_on_disk(series)["at"] in message
+
+
+def test_changing_the_series_name_after_approval_is_drift(series):
+    """`series.name` is drawn at 150px on the title and signoff cards —
+    `plan.py` copies it into `series_name`. Same file, same hole, same answer."""
+    approved_episode(series)
+    edit_series_toml(series, 'name       = "The Brief"', 'name       = "The Bulletin"')
+    message = drift(series)
+    assert message is not None
+    assert "The Bulletin" in message
+
+
+def test_changing_an_act_label_after_approval_is_drift(series):
+    """Act labels are resolved by `act_labels` and drawn as the chip on every
+    beat. The plan receives the LABELS, not the act tables, so that is what the
+    approval covers."""
+    path = series_toml(series)
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + '\n[[structure.acts]]\nid = "01"\nlabel = "01 — The headline"\nbeats = 6\n',
+        encoding="utf-8",
+    )
+    approved_episode(series)
+    edit_series_toml(series, "01 — The headline", "01 — The lede")
+    message = drift(series)
+    assert message is not None
+    assert "01 — The lede" in message
+
+
+# --- R1 negative: an advisory field never reaches a frame -------------------------
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ('cadence    = "daily"', 'cadence    = "weekly"'),
+        ("target_sec = 120", "target_sec = 90"),
+        ("tolerance_sec = 8", "tolerance_sec = 20"),
+        ('enabled = ["vertical", "wide"]', 'enabled = ["vertical"]'),
+        ("warm_acts = []", 'warm_acts = ["01"]'),
+        ('register   = "reported"', 'register   = "first-person"'),
+    ],
+)
+def test_an_edit_that_reaches_no_frame_is_not_drift(series, old, new):
+    """M2. A drift check that cries on any `series.toml` edit is D-040's own
+    failure mode: an alarm that fires on routine work is one an operator learns
+    to ignore by the time it is true. None of these values is copied into
+    `plan.json`."""
+    approved_episode(series)
+    edit_series_toml(series, old, new)
+    assert drift(series) is None
+
+
+def test_a_comment_or_reordering_in_series_toml_is_not_drift(series):
+    """The covered set is VALUES, not the bytes of series.toml. Hashing the file
+    would make a comment an approval-invalidating event."""
+    approved_episode(series)
+    path = series_toml(series)
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\n# a note to myself\n", encoding="utf-8"
+    )
+    assert drift(series) is None
+
+
+# --- R2: the covered set is derived from what plan.py copies ----------------------
+
+
+def test_a_design_token_nobody_has_heard_of_yet_is_covered(series):
+    """M3, and it is the point of the whole task. `plan.py` copies the `[design]`
+    table WHOLE (`dict(series.design)`), so a token added tomorrow reaches every
+    frame the day it is added. A covered set written by hand here would not know
+    about it; a derived one cannot not know."""
+    add_to_design(series, 'halo        = "#FF0000"')
+    approved_episode(series)
+    assert drift(series) is None, "precondition"
+    edit_series_toml(series, 'halo        = "#FF0000"', 'halo        = "#00FF00"')
+    message = drift(series)
+    assert message is not None, "an unknown token still repaints the frame"
+    assert "halo" in message
+
+
+def test_the_covered_set_is_read_out_of_plan_pys_own_source(series):
+    """M3's mechanical half. `series_inputs` must not name the attributes it
+    covers: it must ask `build_plan` what `build_plan` reads."""
+    reads = plan_mod.series_reads()
+    assert reads == frozenset({"slug", "name", "byline", "design", "acts", "dir"}), (
+        "build_plan's reads of `series` moved — every one of them must be "
+        "classified in SERIES_ATTR_COVERAGE or the approval refuses"
+    )
+    covered = plan_mod.series_inputs(load_series_for(series))
+    assert set(covered) == {"name", "byline", "design", "acts"}
+
+
+def load_series_for(series):
+    from agenticsocial.video.series import load_series
+
+    ws = Workspace.locate()
+    return load_series(ws, series.slug)
+
+
+def test_the_plan_and_the_approval_carry_the_same_design(series):
+    """One source, not two. If `plan.json` and the approval record could
+    disagree about what the design is, the approval would be a signature on a
+    document nobody rendered (D-036)."""
+    approved_episode(series)
+    plan = plan_mod.build_plan(load_series_for(series), load_episode(series, EP))
+    signed = approval_on_disk(series)["series_inputs"]
+    assert plan["design"] == signed["design"]
+    assert plan["series_name"] == signed["name"]
+    assert plan["byline"] == signed["byline"]
+
+
+def test_the_approval_record_carries_what_the_approver_saw(series):
+    """The values, not just a digest: the record in the diff a human commits
+    says what the palette WAS, which is what makes the drift message able to
+    name the change rather than merely assert one."""
+    approved_episode(series)
+    signed = approval_on_disk(series)["series_inputs"]
+    assert signed["design"]["accent"] == "#2E6BFF"
+    assert signed["name"] == "The Brief"
+
+
+# --- R2 negative: what cannot be derived is REFUSED, never skipped ----------------
+
+
+def test_an_unclassified_series_read_refuses_the_approval(series, monkeypatch):
+    """M4, D-096's shape. The day someone adds `series.tagline` to `build_plan`,
+    the approval cannot know whether it reaches a frame. The wrong answer is to
+    skip it; the right one is to refuse loudly and make a person classify it."""
+    monkeypatch.setattr(
+        plan_mod,
+        "SERIES_ATTR_COVERAGE",
+        {k: v for k, v in plan_mod.SERIES_ATTR_COVERAGE.items() if k != "design"},
+    )
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "design" in result.output
+    assert status_on_disk(series) == "in_review", "nothing moved"
+
+
+def test_an_unclassified_series_read_is_a_planerror_not_a_silent_gap(series, monkeypatch):
+    monkeypatch.setattr(
+        plan_mod,
+        "SERIES_ATTR_COVERAGE",
+        {k: v for k, v in plan_mod.SERIES_ATTR_COVERAGE.items() if k != "acts"},
+    )
+    with pytest.raises(plan_mod.PlanError) as e:
+        plan_mod.series_inputs(load_series_for(series))
+    assert "acts" in str(e.value)
+
+
+def test_a_design_value_that_cannot_be_compared_refuses(series):
+    """A TOML date in `[design]` is a value `validate_design` does not police
+    and JSON cannot carry. Fail closed: an approval that silently drops a value
+    it could not hash covers less than it says it does."""
+    add_to_design(series, "since       = 2026-08-17")
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "since" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def _plan_that_aliases_series(series, episode):
+    s = series
+    return {"design": s.design}
+
+
+def _plan_that_hands_series_whole(series, episode):
+    return {"design": _some_helper(series)}
+
+
+def _plan_that_reads_plainly(series, episode):
+    return {"design": series.design, "name": series.name}
+
+
+def test_series_is_never_aliased_or_handed_whole_inside_build_plan():
+    """The derivation reads `series.<attr>` out of the AST. Two things defeat
+    it — binding `series` to another name, and passing it whole to a helper that
+    reads it — so both are refused rather than left as a hole the derivation
+    cannot see. This is what makes "derived from plan.py" a guarantee rather
+    than a habit."""
+    assert plan_mod.series_reads_of(_plan_that_reads_plainly) == frozenset(
+        {"design", "name"}
+    )
+    for evasion in (_plan_that_aliases_series, _plan_that_hands_series_whole):
+        with pytest.raises(plan_mod.PlanError) as e:
+            plan_mod.series_reads_of(evasion)
+        assert "series" in str(e.value)
+
+
+# --- R3: three questions, three answers -------------------------------------------
+
+
+def test_design_drift_is_not_reported_as_script_drift(series):
+    """M5. The beats document is untouched and its digest still matches. A
+    message that says the script changed sends the operator to the wrong file."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    message = drift(series)
+    assert "beats document has changed" not in message
+    from agenticsocial.video.episode import beats_sha256
+
+    assert approval_on_disk(series)["script_sha256"] == beats_sha256(
+        load_episode(series, EP)
+    ), "the script really did not move"
+
+
+def test_both_a_script_and_a_design_change_are_named_together(series):
+    """R3. Two things moved; the operator is told both, not the first one."""
+    approved_episode(series)
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    message = drift(series)
+    assert "beats document has changed" in message
+    assert "accent" in message
+
+
+def test_design_drift_does_not_answer_the_corpus_question(series):
+    """M6. `stale_reason` owns "is this check still about this corpus"; drift
+    owns "is this approval still about these bytes and this design". Folding
+    them together rebuilds the two-paths-to-one-answer shape (D-059)."""
+    approved_episode(series)
+    ep = load_episode(series, EP)
+    assert verify_mod_stale(ep) is None and drift(series) is None, "precondition"
+
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    assert drift(series) is not None, "drift saw the design"
+    assert verify_mod_stale(load_episode(series, EP)) is None, (
+        "and it did not make the ledger stale — a different question"
+    )
+
+
+def test_a_stale_corpus_is_still_its_own_answer_after_a_design_change(series):
+    """M6's other half: the corpus answer must not be swallowed by the design
+    one. Both are true at once and both are said."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    corpus.write_document(
+        load_episode(series, EP),
+        SOURCE + " A sentence nobody checked against.",
+        url="https://local-ai-zone.example/x",
+        key="local-ai-zone",
+        fetched_at="2026-08-18",
+    )
+    ep = load_episode(series, EP)
+    assert verify_mod_stale(ep) is not None, "the ledger is stale, and says so"
+    assert drift(series) is not None, "and the design moved, and says so"
+
+
+# --- R4: an intentional design change can be re-approved ---------------------------
+
+
+def test_re_approving_after_a_design_change_clears_the_drift(series):
+    """M7. Drift is not a trap. Change the palette on purpose, look at it, mark
+    the episode `in_review`, check, approve — and the new approval binds the new
+    palette."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    assert drift(series) is not None, "precondition: it drifted"
+
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["status"] = "in_review"
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+
+    assert check().exit_code == 0
+    assert approve().exit_code == 0
+    assert approval_on_disk(series)["series_inputs"]["design"]["accent"] == "#12A150"
+    assert drift(series) is None
+
+
+# --- Task 1's standing rule: the file, not the object ------------------------------
+
+
+def test_design_drift_is_read_from_disk_not_from_the_object_it_was_handed(series):
+    """M8. A caller holding a `Series`/`Episode` loaded before the edit must not
+    be able to make the answer disappear by handing over a stale snapshot —
+    `approval_drift` takes an episode and loads `series.toml` itself."""
+    approved_episode(series)
+    stale_object = load_episode(series, EP)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    assert approve_mod.approval_drift(stale_object) is not None
+
+
+def test_a_re_approved_design_clears_drift_for_a_stale_object_too(series):
+    """M8's other direction — O4's lesson. An object held across a re-approval
+    must report NO drift, which a check reading `episode.meta` cannot do."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    held = load_episode(series, EP)
+    assert approve_mod.approval_drift(held) is not None, "precondition"
+
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["status"] = "in_review"
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    check()
+    assert approve().exit_code == 0
+    assert approve_mod.approval_drift(held) is None
+
+
+# --- fail closed -------------------------------------------------------------------
+
+
+def test_an_approval_that_records_no_design_is_drift(series):
+    """An approval written before this task covers a script and says nothing
+    about the frame. Reading that as "no drift" is exactly the silent gap the
+    task closes, so it fails closed and asks for a fresh signature."""
+    approved_episode(series)
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    del meta["approval"]["series_inputs"]
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    message = drift(series)
+    assert message is not None
+    assert "series.toml" in message
+
+
+def test_an_unreadable_series_toml_is_drift_not_a_traceback(series):
+    """`render` must get an answer it can refuse on, not an exception it might
+    catch as "no drift"."""
+    approved_episode(series)
+    series_toml(series).write_text("this is not = = toml", encoding="utf-8")
+    assert drift(series) is not None
+
+
+def test_a_missing_series_toml_is_drift_not_a_traceback(series):
+    approved_episode(series)
+    series_toml(series).unlink()
+    assert drift(series) is not None
+
+
+# --- the screens -------------------------------------------------------------------
+
+
+def test_the_approve_screen_says_the_design_is_covered(series):
+    """The approver is signing the palette. A record that covers it silently is
+    a guarantee nobody knows they have — and nobody knows they lost."""
+    episode(series, [clean_beat()])
+    check()
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert "series.toml" in result.output
+    assert "design" in result.output
+
+
+def test_check_names_a_design_change_on_the_banner(series):
+    """`check` and `review` already print drift, from one function. A design
+    change must arrive there without a second banner and without a second
+    verdict path."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    result = check()
+    assert result.exit_code == 0
+    assert "no longer describes it" in result.output
+    assert "accent" in result.output
