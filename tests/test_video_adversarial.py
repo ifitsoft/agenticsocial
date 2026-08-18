@@ -1361,3 +1361,27 @@ def test_the_note_is_silent_on_prose_that_lost_nothing(series):
     )
     assert result.exit_code == 0, result.output
     assert "warning" not in _screen(result)
+
+
+
+# --- the sixth, found by looking (Task 3 §1) -----------------------------------------
+
+
+def test_the_override_line_names_what_was_overridden(series):
+    """The sixth instance of the shape, in `_print_overrides`.
+
+    The line whose entire job is *this claim needed a human's sentence to clear*
+    printed `pass` — pass 1's measurement — on a claim pass 2 had REFUTED. It is
+    on `check`'s screen and on `approve`'s, and `pass` beside an override reads
+    as *it was fine anyway*, which is how the sentences stop being read (§8.4).
+    """
+    episode(series, [clean_beat(claim_override=OVERRIDE)])
+    assert check().exit_code == 0
+    assert judge(verdict="refuted").exit_code == 0
+    for result in (check(), approve()):
+        line = next(
+            line for line in result.output.splitlines()
+            if "Framed as expectation" in line
+        )
+        assert "refuted" in line, line
+        assert "pass —" not in line, line
