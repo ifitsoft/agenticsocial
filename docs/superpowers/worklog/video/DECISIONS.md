@@ -2291,3 +2291,53 @@ example is refused at load.** The mapping is the right shape and it is
 load-bearing: `reason` plus `by` is what makes an override *a written sentence
 with your name on it* rather than a flag. Task 3 fixes the code to match the
 spec, before Phase 7's gate reads it.
+
+## D-104 · phase 5 / task 3 · the sentence is true and an operator can act on it
+
+`agsoc video check` and the extended `review` close Phase 5. 1524 tests, 33/33
+mutants. Leader-run against the real episode, with a figure changed from `1.32`
+to `2.47` to force a refusal:
+
+```
+ !  c-004   beat  3  kpis       fail
+      why      the quote does not contain 2.47 by value
+      beat     New V4-Pro pricing $2.47 per 1M input tokens $3.96 per 1M output tokens
+      quote    “announced new pricing starting August 16 at about $1.32 / $3.96 per 1M tokens”
+      src      sources/_pasted.txt
+      fix      correct the figure, widen `quote:` so it covers it, or write a `claim_override`
+               (reason + by) in script.yaml
+```
+
+**The `fix` line is what makes this a gate rather than a wall.** D-040's failure
+mode is a checker that refuses without teaching, until overriding is the only
+thing an operator has learned to do. This one names three remedies and ranks them
+with the honest one first.
+
+`review` now prints the `quote` under every beat — Phase 3's named gap. An
+operator can finally see *what the source says*, not merely that a citation
+exists. That is the difference between "this beat is cited" and "this beat is
+true", and it is the screen the whole product exists to produce.
+
+Also of note: **six of the implementer's own mutants survived their first run,
+and five were on the screen itself** — the "what do I do" line, the quote in the
+failure block, review's summary, and an overridden claim printing `pass` on the
+table while the gate correctly refused. That last one matters: **the exit code is
+read by a machine, the table by the person who signs.** A display defect is a
+verification defect when the display is the deliverable.
+
+## D-105 · process · a piped exit code is not the command's exit code
+
+`cmd | head` reports `head`'s status. This has now produced a false reading
+**twice in one phase, for two different actors**: a QA sweep piped node output
+through `tail` and had to re-run every apparent survivor, and I read `EXIT=0` off
+a failing `check` and nearly filed a shipped gate as broken. Unpiped, it is 1 on
+failure and 0 on clean — correct.
+
+It belongs with D-031, D-091 and D-094 as the same underlying error: **measuring
+something adjacent to the property and reporting it as the property.** The tell is
+identical every time — the comfortable answer arrives first and nothing about the
+output looks wrong.
+
+Standing rule, now in the briefs: use `$PIPESTATUS` or an unpiped run before
+reporting any exit-code finding, and never pipe the command whose status you are
+about to quote.
