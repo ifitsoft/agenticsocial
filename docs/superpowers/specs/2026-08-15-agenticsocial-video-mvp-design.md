@@ -331,6 +331,17 @@ The existing README states these as prose. They become checks:
   that isn't in a source.
 - `dumbbell` encodes direction only and must carry a `footnote` saying so. It is
   the correct type when a source publishes ratings rather than scores.
+- **`dumbbell` requires `src` and `quote`, like the two strictly verifiable
+  types.** An earlier draft exempted it on the grounds that it renders no
+  numbers. That is true of its `values` and false of the *type*: its `caption`,
+  `footnote`, series names and row labels are prose, they are extracted as claims,
+  and they assert a comparison — "A improved more than B" is exactly the sort of
+  statement a viewer believes. The exemption was also unreachable in practice:
+  `claims.py` extracted the type regardless, so an uncited dumbbell answered
+  `no_source` and `check` refused a beat the schema had blessed. Worse, the
+  conditional version fired on a row label containing `V4-Pro` and *not* on
+  "AMIE against primary care physicians" — backwards, which is the tell that the
+  rule was keyed on digits rather than on assertion.
 - Where two dumbbell values coincide, the engine draws a single two-tone marker
   rather than stacking two dots, which would hide one series entirely.
 
