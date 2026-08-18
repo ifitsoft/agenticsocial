@@ -2484,3 +2484,59 @@ code that caused them:
 
 3 and 4 compound: a passing check on a copied 37-second script is a green light
 that is wrong twice over.
+
+## D-110 · phase 6 / task 2 · the blind run passed, and the twelve things it guessed are the deliverable
+
+A fresh agent with no project context followed `skills/storyboard/SKILL.md`
+against the operator's real brief and produced **24 beats, 22/22 claims passing
+on the first `check`, zero overrides**, `runtime 120.0s · within tolerance`. It
+never opened a source file or the schema.
+
+**The phase's exit criterion, met once.** But the friction log is the artefact
+worth keeping, and two entries matter more than the pass.
+
+### The instruction that was wrong, not missing
+
+Step 3 said: *"If `agsoc video new` says the episode already exists, do not try
+again. You are re-drafting an episode that is already there."*
+
+**False when the day already holds a different episode — and following it edits
+someone else's work.** The runner was saved only by an external instruction not
+to touch `2026-08-17`; it minted `2026-08-17b` and *guessed* that was legal.
+
+A skill is executed, not read. An unconditional sentence that is true in the
+common case and destructive in the uncommon one is the most dangerous shape a
+line of instructions can take, because the author validates it against the case
+they were imagining.
+
+### The gap that would have failed most authors
+
+**The corpus keeps the source's typography and the brief's rendering hides it.**
+`_pasted.txt` carries U+2011 non-breaking hyphens (`V4‑Pro`, `open‑weight`), em
+dashes, curly apostrophes. A quote hand-typed with an ASCII `-` fails `check` as
+"quote is not in sources" — D-071's original discovery, arriving from the
+authoring side.
+
+The runner survived by reading the bytes first and slicing spans
+programmatically. **The skill's own author did not** — their one failing claim
+was a retyped quote (D-109).
+
+So: *"never retype a quote"* is a rule that the person who wrote it broke while
+looking at it, and that the person who followed it only survived by inventing a
+mechanism it never mentioned. **A rule stating the behaviour is weaker than one
+stating the reason plus a way to comply.** "The bytes differ from what you see,
+here is how to extract a span" is followable; "be careful" is not.
+
+### One alleged hole, verified as a display defect instead
+
+The runner suspected a magnitude suffix escapes numeric verification. Measured:
+
+```
+2.4T -> 2.4e12  vs "2.4 trillion"  present? True
+9.4T / 2.4B                        present? False
+```
+
+**The numeric half is correct.** But the token *also* emits an entity atom, so a
+correctly-verified figure appears in `check`'s "names not found" list and reads as
+unchecked. D-102 warned the risk with that list is that it stops being read — this
+is exactly how that starts, and it is now a code fix rather than a footnote.
