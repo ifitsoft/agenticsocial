@@ -36,6 +36,9 @@ Six phases produced findings this phase inherits. Re-deriving them wastes a task
 | **D-083** | A frame reader must sample **past the count**. Mid-count values are unstable, bounded and derived — motion, not assertion. |
 | **D-041** | Pasted text is ground truth; `--corroborate` is opt-in and belongs here, not in Phase 2. |
 | **D-072** | **A gate takes identifiers, not objects.** `check` loads what it verifies. |
+| **D-091** | The fold table is required, and NFKC is not a substitute — but not for the reason §8.2.1 originally gave. Measured: NFKC fixes the space family, leaves en/em dash and minus untouched, and maps U+2011 to U+2010, *another* non-ASCII hyphen. Ask whether the fold reached ASCII, never whether one codepoint disappeared. |
+| **D-092** | The settled claim-number rule makes **years and list ordinals** claim numbers (`2026`, `14` from the real brief). Nobody decided that. **Task 1 decides it explicitly**, both directions costed. |
+| **D-094** | `shown` is now a closed vocabulary, and its residual is Phase 5's: it can still state a figure the bar does not draw. |
 
 ## Global Constraints
 
@@ -88,6 +91,24 @@ override reflexively and the gate becomes theatre. **Track the override rate as 
 health signal from day one**; a high rate means the checker is wrong, not the
 operator.
 
+## The one chart claim still unverified — close it in Task 2
+
+D-085 ranked what a chart shows that nothing can check, and called `shown`
+unclosable by design. **Phase 4 changed that.** `shown` is now a closed
+vocabulary, and — the part that matters — **its digits sit in the same mapping as
+the row's own `before` and `after`.**
+
+So the strongest remaining hole is cheap and local: `shown: "…&rarr; 91.7"` on a
+row whose `after` is `43.6` states a figure the bar does not draw. Check
+`shown`'s claim numbers against the row's own values. This does not need the
+corpus and does not need §8.2's machinery — it is an internal consistency check
+on one mapping, and it retires the last route by which a chart asserts a number
+nothing verifies.
+
+D-081 still holds: `shown` is the one place the frame and the script legitimately
+differ. Verifying it against the row is not a retreat from that — it is the
+narrower guarantee that was always available underneath it.
+
 ## Exit criteria
 
 - [ ] A beat claiming a figure absent from its quote **fails**, naming the claim.
@@ -98,7 +119,9 @@ operator.
       `95`.
 - [ ] `claims.json` records `corpus_sha`; a changed corpus invalidates the check.
 - [ ] `custom` beats land as `manual` with their `attest` recorded.
-- [ ] No network, no LLM, suite stays near 2s.
+- [ ] `shown`'s digits agree with its row's `before`/`after`.
+- [ ] Years/ordinals have a decided, documented answer (D-092) — not a default.
+- [ ] No network, no LLM, suite stays fast.
 
 ## Carried, not blocking
 
