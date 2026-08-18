@@ -119,8 +119,21 @@ def probe(
     plan_path = write_plan(series, episode, fmt)  # raises PlanError before any subprocess
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
+    # Every refusal BEFORE anything is removed. `--at 90` on a six-second
+    # episode used to refuse correctly and take the last probe's frames with
+    # it, which makes typing a number and looking expensive in exactly the way
+    # this command exists to avoid.
+    total = plan["total_sec"]
+    if at is not None and (at < 0 or at > total):
+        # Python resolved the runtime, so this costs nothing — and the frame it
+        # would otherwise shoot is a black rectangle, which reads as a broken
+        # renderer rather than as a number typed past the end.
+        raise RenderError(
+            f"t={at:g}s is outside this episode — it runs {total:.1f}s"
+        )
+
     out = episode.probe_dir
-    # Clear the last probe first, HERE rather than in the renderer. Stale frames
+    # Clear the last probe, HERE rather than in the renderer. Stale frames
     # beside fresh ones are the stale-ledger problem in PNG form: an operator
     # cannot tell which of them describes the script they are reading. render.mjs
     # also clears its --probe directory, but only that one and only in that mode,
@@ -136,14 +149,6 @@ def probe(
         )
         return out
 
-    total = plan["total_sec"]
-    if at < 0 or at > total:
-        # Python resolved the runtime, so this costs nothing — and the frame it
-        # would otherwise shoot is a black rectangle, which reads as a broken
-        # renderer rather than as a number typed past the end.
-        raise RenderError(
-            f"t={at:g}s is outside this episode — it runs {total:.1f}s"
-        )
     # Frames belong to the episode that produced them: --out, never
     # engine/probe, so two episodes probed in a row cannot overwrite each other.
     _run(
