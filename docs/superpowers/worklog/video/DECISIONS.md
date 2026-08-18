@@ -2433,3 +2433,54 @@ not know how to say?"* and *"what happens to input the rule cannot classify?"* �
 and the second one is the general form, because **a classifier with a third
 answer will eventually take it.** Phase 9's review effort should go there, not
 into more mutants.
+
+## D-109 · phase 6 / task 1 · the skill is written, and writing it found four pipeline defects
+
+`skills/storyboard/SKILL.md` lands in `fanout` house style. The author walked it
+against the operator's real brief in a scratch workspace: 24 beats, **21 of 22
+claims passed the first `check`**, one fix, then exit 0 with **zero overrides**
+and `runtime 120.0s · within tolerance (+0.0s)`.
+
+**The single most useful sentence in the report:** the one failing claim was
+*points to* versus *pointing to* — the author retyped a quote **with their own
+"never retype a quote" rule in front of them.** That is the argument for the
+blind acceptance test in one line: knowing the rule and following it are
+different acts, and an author is the worst possible judge of which one they just
+performed.
+
+Decisions made, all three defensible:
+
+- **Pacing is arithmetic, not iteration.** `pace = target_sec / sum(holds)`, so
+  runtime is `sum(holds) × pace` and tolerance is a calculation the author does
+  *before* writing. Checked against both committed episodes (24 scenes/83.6s →
+  `pace 1.435` → 119.97s; 25/92.8s → `1.293` → 119.99s). Rule of thumb: 22–26
+  beats, holds 2.6–5.6s, **≥ 4.0s on any counting chart** (D-087).
+- **Coverage** is stated as a rule with today's spelling in a bracket, so Phase
+  11's `agsoc coverage check` changes the bracket and nothing else. §13's command
+  is not presented as runnable, because it is not.
+- **`custom` is "a last resort — do not reach for it"**, documented completely
+  but never as a convenience (D-088).
+
+### Four defects found by writing the instructions
+
+Writing a skill is a review technique. None of these was visible from inside the
+code that caused them:
+
+1. **`dumbbell`'s citation status disagrees across modules.** Leader-verified:
+   `script.py` has `cited: False`, `claims.py` has it in `EXTRACTED_TYPES`. So an
+   uncited dumbbell gets `no_source` and `check` exits 1 — **the schema's
+   documented exemption is unreachable.**
+2. **D-087's count-fits-hold refusal is unreachable from the author's half of the
+   pipeline.** It lives in `planbuild.js` and fires only at render, which the
+   author may never run. The skill compensates with a generous floor; the real
+   fix is `check`/`review` reporting required-versus-actual hold, which is
+   arithmetic over the plan, not a render.
+3. **The only committed `script.yaml` fails this phase's own runtime criterion** —
+   9 beats, `37.5s`, `OUT OF TOLERANCE (-82.5s)`, while passing `check`.
+   Leader-verified. **The best artefact a blind runner can copy is the one that
+   misleads them.**
+4. **`check` never mentions runtime**; only `review` does. An agent that stops at
+   a green `check` never learns its episode is a third of its target length.
+
+3 and 4 compound: a passing check on a copied 37-second script is a green light
+that is wrong twice over.
