@@ -914,3 +914,19 @@ def test_check_passes_a_cited_dumbbell_and_refuses_an_uncited_one(series):
     refused = run("video", "check", EP, "--series", "the-brief")
     assert refused.exit_code == 1, refused.output
     assert "src" in refused.output and "quote" in refused.output
+
+
+def test_the_holds_line_is_the_unscaled_total(series):
+    """precondition: pace is not 1.0, so `holds × pace = runtime` is three
+    different numbers. A `holds` figure that has already been scaled reads as an
+    authored total the author never wrote, and it is the number they are told to
+    recompute `pace` from."""
+    ep = create_episode(series, EP)
+    corpus.write_document(
+        ep, SOURCE, url="https://x.example/y", key="local-ai-zone",
+        fetched_at="2026-08-17",
+    )
+    write_script_with_pace(ep, [clean_beat(hold=4.0)] * 30, 1.25)
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 0, result.output
+    assert "holds 120.0s × pace 1.25 = runtime 150.0s" in result.output
