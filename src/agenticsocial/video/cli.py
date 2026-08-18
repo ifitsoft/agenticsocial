@@ -13,6 +13,7 @@ from ..workspace import Workspace, WorkspaceError
 from . import approve as approve_mod
 from . import claims as claims_mod
 from . import corpus as corpus_mod
+from . import coverage as coverage_mod
 from . import ingest as ingest_mod
 from . import plan as plan_mod
 from . import render as render_mod
@@ -25,6 +26,10 @@ from .series import load_series, scaffold_series, series_slugs
 
 series_app = typer.Typer(help="Manage video series.", no_args_is_help=True)
 video_app = typer.Typer(help="Create and manage video episodes.", no_args_is_help=True)
+coverage_app = typer.Typer(
+    help="The per-series coverage ledger: has this story been told before?",
+    no_args_is_help=True,
+)
 
 DEFAULT_SERIES = "default"
 
@@ -1771,4 +1776,303 @@ def _echo_rendered(series: str, episode: str, result) -> None:
             f"video: `agsoc video probe {episode} --series {series}` puts one "
             "frame per beat on disk in seconds",
         )
+    )
+
+
+# --- coverage ---------------------------------------------------------------------------
+#
+# `agsoc coverage`, replacing `node engine/coverage.mjs` (D-112, retired in
+# Phase 11). The ledger is per-series now: `engine/coverage.json` was one file
+# shared by every series, and two series sharing one ledger means one series'
+# history suppresses the other's stories.
+
+
+def _coverage_series(ws: Workspace, slug: str):
+    try:
+        return load_series(ws, slug)
+    except SeriesError as e:
+        raise _fail(str(e))
+
+
+def _coverage_ledger(series):
+    try:
+        return coverage_mod.load_ledger(series)
+    except coverage_mod.CoverageError as e:
+        raise _fail(str(e))
+
+
+def _other_ledgers(ws: Workspace, series) -> dict:
+    """Every OTHER series' ledger, for the pointer below a miss.
+
+    Read defensively: this walks files the series being checked does not own,
+    and one unreadable neighbour must not take the check down (D-018).
+    """
+    out = {}
+    for slug in series_slugs(ws):
+        if slug == series.slug:
+            continue
+        try:
+            out[slug] = coverage_mod.load_ledger(load_series(ws, slug))
+        except (SeriesError, coverage_mod.CoverageError, OSError):
+            continue
+    return out
+
+
+def _scope(ledger, series) -> str:
+    stories, episodes = coverage_mod.counts(ledger)
+    return (
+        f"{stories} stories across {episodes} episodes in series "
+        f"`{series.slug}` (id, title, note, entities, sources), separators ignored"
+    )
+
+
+@coverage_app.command("check")
+def coverage_check(
+    terms: list[str] = typer.Argument(..., help="one or more candidate story keywords"),
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+) -> None:
+    """Has this series already told this story?
+
+    Pass two terms per story — the vendor and the thing. Separators are ignored
+    in both directions, so `gemini-3.7` finds `Gemini 3.7 Flash`: the matcher
+    strips every non-alphanumeric character from both sides and asks for
+    containment, which can only ever ADD a match (D-112). Its cost is false
+    positives, and that is the direction to be wrong in for a check whose
+    failure mode is re-telling a story as new.
+
+    A hit is not automatically a veto — it means: drop the story, or cover it as
+    an explicit update and say what changed.
+    """
+    ws = _workspace()
+    series = _text(series, "The series slug")
+    s = _coverage_series(ws, series)
+    ledger = _coverage_ledger(s)
+    results = coverage_mod.check_terms(ledger, [_text(t, "A term") for t in terms],
+                                       _other_ledgers(ws, s))
+    scope = _scope(ledger, s)
+    hits = 0
+    for result in results:
+        if result.found:
+            hits += len(result.found)
+            typer.echo(f'\n  "{result.term}"  — {len(result.found)} prior mention(s):')
+            for story in result.found:
+                label = story.get("angle") or story.get("beat") or ""
+                typer.echo(f"     {story['date']}  [{story.get('id', '?')}]  {label}")
+                typer.echo(f"       {story.get('title', '')}")
+                if story.get("note"):
+                    typer.echo(f"       note: {story['note']}")
+        else:
+            # What a miss is allowed to say. The old line was "NOT COVERED. Safe
+            # to run as new." — a claim about the world a string search cannot
+            # support, and the exact sentence a blind runner acted on to clear a
+            # story this series had run three days earlier.
+            typer.echo(f'\n  "{result.term}"  — no entry matches this string.')
+            typer.echo(f"     searched {scope}.")
+            typer.echo(
+                "     That is all it proves. It does not mean the story is new: the ledger"
+            )
+            typer.echo(
+                "     holds only what was written into it after an episode shipped."
+            )
+            if result.related:
+                pointer = ", ".join(
+                    f'"{w}" appears in {n} story(ies)' for w, n in result.related
+                )
+                typer.echo(
+                    f"     Related, and not a hit: {pointer}. Run those terms and read the titles"
+                )
+                typer.echo("     before you decide this story is a different one.")
+        if result.elsewhere:
+            # R3's other half. Coverage is per-series — another series' history
+            # must never suppress this one's story, so this is never counted —
+            # but an author is told the story exists rather than left to find
+            # out from a viewer.
+            other = ", ".join(
+                f"`{slug}` ({n} story(ies))" for slug, n in result.elsewhere
+            )
+            typer.echo(f"     Told in another series, and not counted here: {other}.")
+            typer.echo(
+                "     Coverage is per-series: this series has not told it. Read those "
+                "entries before you decide how to tell it."
+            )
+    if hits:
+        typer.echo(
+            f"\n  → {hits} hit(s). Cover these as updates (state what is new) "
+            "or drop them.\n"
+        )
+    else:
+        typer.echo(f"\n  → 0 matches in {scope}.")
+        typer.echo("    Nothing in the ledger contains these strings. Whether the stories are")
+        typer.echo("    new is a judgement this check cannot make for you.\n")
+
+
+@coverage_app.command("add")
+def coverage_add(
+    episode: str = typer.Argument(..., help="episode id, e.g. 2026-08-20"),
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    note: str = typer.Option("", "--note", help="what this episode did with the stories"),
+    replace: bool = typer.Option(False, "--replace", help="re-record an episode already in the ledger"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="print the entry; write nothing"),
+) -> None:
+    """Record a rendered episode's stories in the series ledger (§6).
+
+    Deliberately NOT a side effect of `render`. An automatic `add` records what
+    was *rendered*, and a render that is discarded and never posted would then
+    suppress a story the series never told — a silent drop, which is the failure
+    this ledger exists to prevent, pointing the other way. The operator runs
+    this when the episode is out.
+
+    What it records is what the episode put on screen: one entry per beat that
+    asserts something, with the entities `agsoc video check` extracted and the
+    source the beat cited. Chrome beats (`title`, `signoff`) assert nothing and
+    are skipped, exactly as they are exempt from citation.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    note = _text(note, "The note")
+    s = _coverage_series(ws, series)
+    try:
+        ep = load_episode(s, episode)
+        coverage_mod.assert_recordable(ep)
+        script = load_script(ep)
+        ledger = coverage_mod.load_ledger(s)
+        entry = coverage_mod.episode_entry(ep, script, note=note)
+        merged = coverage_mod.add_entry(ledger, entry, replace=replace)
+    except (
+        SeriesError,
+        EpisodeError,
+        ScriptError,
+        claims_mod.ClaimsError,
+        coverage_mod.CoverageError,
+    ) as e:
+        raise _fail(str(e))
+
+    typer.echo(f"\n  {s.slug}/{entry['date']} · {len(entry['stories'])} story(ies) recorded")
+    for story in entry["stories"]:
+        typer.echo(f"     [{story['id']}]  {story['title']}")
+    if dry_run:
+        typer.echo("\n  --dry-run: nothing written.\n")
+        return
+    try:
+        coverage_mod.save_ledger(s, merged)
+    except OSError as e:
+        raise _fail(f"cannot write {coverage_mod.LEDGER_NAME}: {e}")
+    stories, episodes = coverage_mod.counts(merged)
+    typer.echo(f"\n  recorded in {coverage_mod.ledger_path(s)}")
+    typer.echo(f"  the ledger now holds {stories} stories across {episodes} episodes.")
+    typer.echo(
+        "  what it records is what was RENDERED. If this episode is never "
+        "posted, remove\n  the entry — an entry for an episode nobody saw "
+        "suppresses a story you never told.\n"
+    )
+
+
+@coverage_app.command("list")
+def coverage_list(
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    ids: bool = typer.Option(False, "--ids", help="print story ids only"),
+) -> None:
+    """Everything this series has covered, newest first."""
+    ws = _workspace()
+    series = _text(series, "The series slug")
+    s = _coverage_series(ws, series)
+    ledger = _coverage_ledger(s)
+    stories = coverage_mod.all_stories(ledger)
+    if ids:
+        for story in stories:
+            typer.echo(story.get("id", ""))
+        return
+    day = ""
+    for story in stories:
+        if story["date"] != day:
+            day = story["date"]
+            typer.echo(f"\n  {day}")
+        flag = "UPDATE " if story.get("update") else ""
+        typer.echo(f"    {flag}[{story.get('id', '?')}]  {story.get('title', '')}")
+    stories_n, episodes_n = coverage_mod.counts(ledger)
+    typer.echo(f"\n  {stories_n} stories across {episodes_n} episodes in `{s.slug}`.\n")
+
+
+@coverage_app.command("episode")
+def coverage_episode(
+    date: str = typer.Argument(..., help="episode date, e.g. 2026-08-14"),
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+) -> None:
+    """One episode's rundown, as the ledger holds it."""
+    ws = _workspace()
+    date = _text(date, "The episode date")
+    series = _text(series, "The series slug")
+    s = _coverage_series(ws, series)
+    ledger = _coverage_ledger(s)
+    found = [e for e in ledger["episodes"] if e.get("date") == date]
+    if not found:
+        known = ", ".join(e.get("date", "?") for e in ledger["episodes"]) or "none"
+        raise _fail(f"no episode for {date} in `{s.slug}`. Known: {known}")
+    ep = found[0]
+    head = f"\n  {ep.get('date')}"
+    if ep.get("video"):
+        head += f" · {ep['video']}"
+    if ep.get("runtimeSec") is not None:
+        head += f" · {ep['runtimeSec']}s"
+    typer.echo(head)
+    if ep.get("note"):
+        typer.echo(f"  {ep['note']}")
+    for story in ep.get("stories", []):
+        label = story.get("angle") or story.get("beat") or ""
+        typer.echo(f"\n   [{story.get('id', '?')}]  {story.get('act', '')}  ({label})")
+        typer.echo(f"   {story.get('title', '')}")
+        typer.echo(f"   sources: {', '.join(story.get('sources') or [])}")
+    typer.echo("")
+
+
+@coverage_app.command("migrate")
+def coverage_migrate(
+    source: Path = typer.Argument(..., help="a ledger to merge in, e.g. engine/coverage.json"),
+    series: str = typer.Option(..., "--series", help="the series that produced those episodes"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="report; write nothing"),
+) -> None:
+    """Merge a ledger written before Phase 11 into the series that produced it.
+
+    `--series` is required and takes exactly one slug: copying one shared
+    ledger into every series would suppress, in each of them, stories that
+    series never told. Idempotent — an episode already present with identical
+    content is skipped, so an operator unsure whether it ran can just run it.
+    An episode present with DIFFERENT content is refused by name: picking a
+    winner would lose the entry that was not picked.
+    """
+    ws = _workspace()
+    series = _text(series, "The series slug")
+    s = _coverage_series(ws, series)
+    try:
+        legacy = coverage_mod.load_legacy(Path(source))
+        ledger = coverage_mod.load_ledger(s)
+        merged, report = coverage_mod.migrate(ledger, legacy)
+    except coverage_mod.CoverageError as e:
+        raise _fail(str(e))
+
+    typer.echo(f"\n  {source} → {coverage_mod.ledger_path(s)}")
+    typer.echo(
+        f"  source holds {report.stories_source} stories across "
+        f"{len(legacy['episodes'])} episodes"
+    )
+    typer.echo(
+        f"  moved {len(report.episodes_moved)} episode(s): "
+        f"{', '.join(report.episodes_moved) or 'none'}"
+    )
+    if report.episodes_skipped:
+        typer.echo(
+            f"  already present, unchanged: {', '.join(report.episodes_skipped)}"
+        )
+    typer.echo(f"  stories {report.stories_before} → {report.stories_after}")
+    if dry_run:
+        typer.echo("\n  --dry-run: nothing written.\n")
+        return
+    try:
+        coverage_mod.save_ledger(s, merged)
+    except OSError as e:
+        raise _fail(f"cannot write {coverage_mod.LEDGER_NAME}: {e}")
+    typer.echo(
+        f"\n  the source file is not modified — it stays as the record of what "
+        f"was migrated.\n  Check it reads back: `agsoc coverage list --series {s.slug}`\n"
     )
