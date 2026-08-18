@@ -131,8 +131,16 @@ def video_new(
     # `--series` is in the hint because the hint is a command people run. It
     # was absent, and following it from any series other than `default` failed
     # with "no series 'default'" — D-109: an author trusts the tool over the doc.
+    #
+    # Same reason the mode is `--paste`. The hint led with `--research`, which
+    # is the one mode the documented workflow does not use (the author has a
+    # brief already) and the only one that reaches the network. The other two
+    # are named on the second line because `ingest` takes exactly one of the
+    # three, and a hint that shows one mode is read as the only mode.
+    typer.echo(f"next: agsoc video ingest {ep.id} --series {s.slug} --paste <file>")
     typer.echo(
-        f'next: agsoc video ingest {ep.id} --series {s.slug} --research "<query>"'
+        '      exactly one ingest mode: --paste <file>, --research "<query>", '
+        "or --from-source <id>"
     )
 
 
