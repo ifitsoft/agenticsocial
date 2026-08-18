@@ -687,3 +687,22 @@ def test_approve_never_moves_a_status_it_did_not_gate(series):
     assert ledger_path(series).read_bytes() == before
     assert status_on_disk(series) == "in_review"
     assert Status(status_on_disk(series)) is Status.IN_REVIEW
+
+
+def test_the_extra_record_cannot_smuggle_a_status(series):
+    """R5. `set_status` gained a second parameter in this task, and a parameter
+    that reaches the metadata document is a status writer unless the write order
+    forbids it: merge the record FIRST, then set the status from `target`.
+
+    Reversed, `approve` — or anything else with a dict — writes any status it
+    likes through the one function this project trusts. That is D-059 rebuilt
+    inside the fix for D-059.
+    """
+    from agenticsocial.video.episode import set_status
+
+    episode(series, [clean_beat()], status="draft")
+    ep = load_episode(series, EP)
+    set_status(ep, Status.IN_REVIEW, {"status": "published", "note": "kept"})
+    assert status_on_disk(series) == "in_review"
+    meta, _, _ = read_script(ep.script_path)
+    assert meta["note"] == "kept"
