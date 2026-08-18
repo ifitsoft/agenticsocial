@@ -23,9 +23,9 @@ Two consequences of that, both visible here:
 unattested `manual`. Entity misses are recorded, not gated (D-102: they would
 refuse 62% of correct beats and not one measured miss was a real error). An
 attested `manual` passes on a human's signed sentence (D-088). A `claim_override`
-is recorded but not yet applied — Task 2 owns that, and until it lands a gate
-that went quiet because someone wrote a sentence nobody consumed would be worse
-than no gate at all.
+clears **exactly the claim it names** — a fourth state in `classify`, never a
+fourth code path — and the approval record names every claim it carried, so the
+bypass is as visible in the artifact as §8.4 demands it be in `script.yaml`.
 
 **It requires a fresh ledger; it does not re-run `check`.** Argued in the Task 1
 report. In short: the ledger is the artifact of record and the screen a human
@@ -118,12 +118,40 @@ def approve_episode(
         "corpus_sha": (ledger or {}).get("corpus_sha"),
         # Counted through `classify`, the same function that gated — so the
         # record cannot describe an episode the gate did not approve. An
-        # attested claim is NOT verified: D-088, and D-112's overclaim.
-        "claims": {
-            "total": len(records),
-            "verified": sum(1 for r in records if verify_mod.classify(r) == "verified"),
-            "attested": sum(1 for r in records if verify_mod.classify(r) == "attested"),
-        },
+        # attested claim is NOT verified (D-088, and D-112's overclaim), and
+        # neither is one a person cleared by hand.
+        "claims": verify_mod.claim_tally(records),
     }
+    # §8.4's accountability, carried into the diff a human commits. The count
+    # says how many sentences were spent; only this says WHICH claims are
+    # standing on a person rather than on a source, and under whose name.
+    # Absent when there are none: an empty list in every approval is noise, and
+    # noise is what this has to cut through the one time it matters (D-040).
+    cleared = _cleared_by_hand(records)
+    if cleared:
+        record["overrides"] = cleared
     set_status(episode, Status.APPROVED, {"approval": record})
     return record
+
+
+def _cleared_by_hand(records: list[dict]) -> list[dict]:
+    """Every claim §8.4's bypass carried, named with its sentence and its author.
+
+    Read through `classify` and `override_state`, never from the raw field: the
+    list in the approval record must be exactly the set of claims the gate
+    cleared this way, and a second reading of the same field is where the two
+    would disagree.
+    """
+    out = []
+    for record in records:
+        if verify_mod.classify(record) != "overridden":
+            continue
+        written, _ = verify_mod.override_state(record)
+        out.append(
+            {
+                "id": record.get("id"),
+                "by": (written or {}).get("by"),
+                "reason": (written or {}).get("reason"),
+            }
+        )
+    return out

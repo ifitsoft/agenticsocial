@@ -758,14 +758,14 @@ def test_an_override_does_not_clear_the_episode(series):
     """M2. One written sentence buys one claim. The unattested `custom` beat is
     a different KIND of open claim, so an override that clears the episode —
     or that clears "everything after it" — shows up here and nowhere else."""
-    episode(
-        series,
-        [
-            fabricated_beat(claim_override=dict(OVERRIDE)),
-            custom_beat(attest="   "),
-        ],
-    )
-    assert check().exit_code == 1
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE)), custom_beat()])
+    assert check().exit_code == 0, "precondition: both claims clear"
+    # `script.py` refuses a blank `attest` at load, so the unattested manual is
+    # made in the LEDGER — which is the artifact the gate reads anyway, and an
+    # attestation lost between the check and the file is lost to every reader.
+    ledger = read_ledger_file(series)
+    ledger["claims"][1]["mechanical"]["attest"] = "   "
+    write_ledger_file(series, ledger)
     result = approve()
     assert result.exit_code == 1, result.output
     assert "c-002" in result.output
@@ -885,7 +885,7 @@ def test_an_overridden_claim_does_not_block(series):
     episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
     result = check()
     assert result.exit_code == 0, result.output
-    assert "not verified" in result.output
+    assert "not verified" in _screen(result)
     assert "fail" in result.output, "the measurement is still on the screen"
 
 
@@ -920,7 +920,7 @@ def test_an_override_on_a_claim_that_passes_anyway_is_flagged_stale(series):
     episode(series, [clean_beat(claim_override=dict(OVERRIDE))])
     result = check()
     assert result.exit_code == 0, result.output
-    assert "stale" in result.output
+    assert "stale" in _screen(result)
     assert "c-001" in result.output
     approved = approve()
     assert approved.exit_code == 0, approved.output
@@ -939,17 +939,25 @@ def test_a_stale_override_is_not_reported_on_a_claim_it_clears(series):
     episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
     result = check()
     assert result.exit_code == 0, result.output
-    assert "stale" not in result.output
+    assert "stale" not in _screen(result)
 
 
 def test_an_override_clears_an_unattested_manual_claim(series):
     """A `custom` beat with no `attest` but a written override: the override is
     strictly MORE than an attestation — a sentence plus a name — so refusing it
     would mean the weaker artifact clears and the stronger one does not."""
-    episode(series, [custom_beat(attest="  ", claim_override=dict(OVERRIDE))])
+    episode(series, [custom_beat(claim_override=dict(OVERRIDE))])
     assert check().exit_code == 0
+    ledger = read_ledger_file(series)
+    ledger["claims"][0]["mechanical"]["attest"] = "   "
+    write_ledger_file(series, ledger)
     assert approve().exit_code == 0
-    assert approval_on_disk(series)["claims"]["overridden"] == 1
+    assert approval_on_disk(series)["claims"] == {
+        "total": 1,
+        "verified": 0,
+        "attested": 0,
+        "overridden": 1,
+    }
 
 
 @pytest.mark.parametrize(
@@ -1001,10 +1009,25 @@ def test_only_verify_reads_a_claims_override():
     is a second place §8.4's rule is spelled out, and the first time the two
     disagree is the first time a checkbox clears a claim.
 
-    Enumerated over the AST rather than by grep so a string in a docstring or a
-    comment does not count, and so the test keeps running after this task.
+    Enumerated over the AST rather than by grep, so that a docstring, a comment
+    or the display LABEL `override` does not count — only an actual read of the
+    field: `record["override"]`, `record.get("override")` and friends.
     """
     import agenticsocial.video as pkg
+
+    def reads_the_field(node) -> bool:
+        if isinstance(node, ast.Subscript):
+            index = node.slice
+            return isinstance(index, ast.Constant) and index.value == "override"
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"get", "pop", "setdefault"}
+            and node.args
+        ):
+            first = node.args[0]
+            return isinstance(first, ast.Constant) and first.value == "override"
+        return False
 
     root = Path(pkg.__file__).parent
     offenders = {}
@@ -1012,11 +1035,7 @@ def test_only_verify_reads_a_claims_override():
         if path.name == "verify.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        found = [
-            node.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and node.value == "override"
-        ]
+        found = [node for node in ast.walk(tree) if reads_the_field(node)]
         if found:
             offenders[path.name] = len(found)
     assert offenders == {}, offenders

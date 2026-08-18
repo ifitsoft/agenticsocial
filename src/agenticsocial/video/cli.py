@@ -306,9 +306,48 @@ def _reason(record: dict) -> str:
     return str((record.get("mechanical") or {}).get("reason") or "")
 
 
-def _override(record: dict) -> dict | None:
-    value = record.get("override")
-    return value if isinstance(value, dict) else None
+# §8.4's override, read through `verify` and never from the field. The display
+# and the gate disagreeing about whether a sentence counts is the same defect as
+# the summary and the gate disagreeing about a verdict (D-059), one door along —
+# so this is the SAME object, not a wrapper, exactly like `is_blocking` above.
+override_state = verify_mod.override_state
+stale_override = verify_mod.stale_override
+
+
+def _written(record: dict) -> bool:
+    """Was an override written here at all — honoured or not? The table's `*`."""
+    return override_state(record) != (None, None)
+
+
+def _sentence(written: dict) -> str:
+    """§8.4's override as one line: the sentence, then the name on it."""
+    return f"“{written.get('reason')}” — {written.get('by')}"
+
+
+def _applied(record: dict) -> str:
+    """Did this written sentence actually clear its claim? Say so on the line.
+
+    An override printed without this reads the same whether it did the work or
+    nothing at all, and the second case is the one an operator has to see.
+    """
+    if classify(record) == "overridden":
+        return "(cleared this claim — §8.4, NOT verified)"
+    return "(STALE — this claim clears without it)"
+
+
+def _override_rate(overridden: int, total: int) -> str:
+    """D-040's health signal, built once and printed on both screens.
+
+    "A high rate means the checker is wrong, not the operator." Nobody can
+    notice a rate that is never printed — and it is omitted entirely at zero,
+    because `override rate 0%` on every clean run is the noise this line has to
+    cut through the one time it matters.
+    """
+    percent = round(100 * overridden / total) if total else 0
+    return (
+        f"rate {overridden} of {_plural(total, 'claim')} ({percent}%) — D-040: a "
+        "high rate means the checker is wrong, not the operator"
+    )
 
 
 def _kpi(item: dict) -> str:
@@ -494,7 +533,7 @@ def _ledger_state(episode):
     for record in ledger.get("claims") or []:
         if isinstance(record, dict) and isinstance(record.get("beat_index"), int):
             verdicts[record["beat_index"]] = _verdict(record) + (
-                "*" if _override(record) else ""
+                "*" if _written(record) else ""
             )
     return ledger, None, False, verdicts
 
@@ -512,8 +551,8 @@ def _print_claim_summary(ledger: dict) -> None:
     checked = _one_line(ledger.get("checked_at", "?"))
     typer.echo(f"claims  {_counts(records)}   (checked {checked})")
     for record in records:
-        override = _override(record)
-        if not is_blocking(record) and not override:
+        written, fault = override_state(record)
+        if not is_blocking(record) and not written and not fault:
             continue
         head = (
             f"{'!' if is_blocking(record) else '*'} {record.get('id')} · "
@@ -527,14 +566,10 @@ def _print_claim_summary(ledger: dict) -> None:
             "  " + _clip(_one_line(head + why), ROW_WIDTH - 2),
             fg=typer.colors.RED if is_blocking(record) else None,
         )
-        if override:
-            typer.echo(
-                _detail(
-                    "override",
-                    f"“{override.get('reason')}” — {override.get('by')} "
-                    "(recorded; `approve` is what reads it)",
-                )
-            )
+        if written:
+            typer.echo(_detail("override", f"{_sentence(written)} {_applied(record)}"))
+        elif fault:
+            typer.echo(_detail("override", f"clears nothing — it {fault}"))
     typer.echo("")
 
 
@@ -717,7 +752,7 @@ def _near_miss(document: str | None, record: dict) -> str:
 
 def _claim_row(record: dict) -> str:
     mark = "!" if is_blocking(record) else " "
-    star = "*" if _override(record) else " "
+    star = "*" if _written(record) else " "
     return (
         f" {mark}{star} {record.get('id', '?'):<7} beat {record.get('beat_index'):>2}  "
         f"{_clip(str(record.get('beat_type', '?')), TYPE_WIDTH):<{TYPE_WIDTH}}  "
@@ -738,15 +773,16 @@ def _cleared_summary(records: list[dict]) -> str:
     of the three buckets, which is what stops a summary rounding toward
     reassurance by quietly dropping one.
     """
-    kinds = [classify(record) for record in records]
-    verified = kinds.count("verified")
-    attested = kinds.count("attested")
-    if not attested:
-        return f"{_plural(verified, 'claim')} verified, none open"
-    return (
-        f"{verified} verified · {attested} attested by hand, NOT verified "
-        f"(D-088) · {_plural(len(records), 'claim')}, none open"
-    )
+    tally = verify_mod.claim_tally(records)
+    parts = [f"{tally['verified']} verified"]
+    if tally["attested"]:
+        parts.append(f"{tally['attested']} attested by hand, NOT verified (D-088)")
+    if tally["overridden"]:
+        parts.append(f"{tally['overridden']} cleared by override, NOT verified (§8.4)")
+    if len(parts) == 1:
+        return f"{_plural(tally['verified'], 'claim')} verified, none open"
+    parts.append(f"{_plural(tally['total'], 'claim')}, none open")
+    return " · ".join(parts)
 
 
 def _counts(records: list[dict]) -> str:
@@ -777,18 +813,14 @@ def _print_detail(ep, record: dict, documents: dict) -> None:
     attest = (record.get("mechanical") or {}).get("attest")
     if attest:
         typer.echo(_detail("attest", attest))
-    override = _override(record)
-    if override:
-        typer.echo(
-            _detail("override", f"“{override.get('reason')}” — {override.get('by')}")
-        )
-        typer.echo(
-            _detail(
-                "",
-                "recorded, not applied: `check` reports the measurement. "
-                "`approve` is what reads an override",
-            )
-        )
+    written, fault = override_state(record)
+    if fault:
+        # The one override screen that has to shout. A malformed override is a
+        # sentence its author believes cleared a claim, and the claim is still
+        # open — so it is printed WITH the refusal, never in the quiet block.
+        typer.echo(_detail("override", f"clears nothing — it {fault}"))
+    elif written:
+        typer.echo(_detail("override", _sentence(written)))
     typer.echo(_detail("fix", _next_step(record)))
     typer.echo("")
 
@@ -816,6 +848,70 @@ def _print_attestations(records: list[dict]) -> None:
                 indent=4,
             )
         )
+    typer.echo("")
+
+
+def _print_overrides(records: list[dict]) -> None:
+    """§8.4's overrides, in three groups, because they mean three things.
+
+    An override that CLEARED a claim is the sentence the approver is signing,
+    and it belongs on the same screen as the attestations for the same reason
+    (D-088): the one screen before approval must show what the approval rests
+    on. An override on a claim that passes anyway is STALE — a written sentence
+    about a problem that no longer exists, and leaving it silent is how the
+    sentences stop being read. An override that clears NOTHING is a claim its
+    author believes is handled and the gate still refuses; that one is printed
+    with the refusal itself, and only counted here.
+
+    The rate closes the block (D-040): the number that says the checker is
+    wrong rather than the operator.
+    """
+    applied, stale = [], []
+    for record in records:
+        written, _ = override_state(record)
+        if written is None:
+            continue
+        (applied if classify(record) == "overridden" else stale).append(
+            (record, written)
+        )
+    if not applied and not stale:
+        return
+    if applied:
+        typer.echo(
+            textwrap.fill(
+                "cleared by override — §8.4, NOT verified by anything. You are "
+                "approving the sentence and the name on it:",
+                width=ROW_WIDTH,
+                initial_indent="  ",
+                subsequent_indent="  ",
+            )
+        )
+        for record, written in applied:
+            typer.echo(
+                _detail(
+                    str(record.get("id", "?")),
+                    f"{_verdict(record)} — {_sentence(written)}",
+                    indent=4,
+                )
+            )
+        typer.echo("")
+    if stale:
+        typer.echo(
+            textwrap.fill(
+                "STALE overrides — these claims clear without them. Delete "
+                "them: a sentence that bypasses nothing is how the next real "
+                "one stops being read:",
+                width=ROW_WIDTH,
+                initial_indent="  ",
+                subsequent_indent="  ",
+            )
+        )
+        for record, written in stale:
+            typer.echo(
+                _detail(str(record.get("id", "?")), _sentence(written), indent=4)
+            )
+        typer.echo("")
+    typer.echo(_detail("override", _override_rate(len(applied), len(records)), indent=2))
     typer.echo("")
 
 
@@ -922,6 +1018,7 @@ def video_check(
     for record in blocked:
         _print_detail(ep, record, documents)
     _print_attestations(records)
+    _print_overrides(records)
     _print_entities(records)
 
     typer.echo(f"wrote {path}")
@@ -1019,10 +1116,13 @@ def video_approve(
     typer.echo(_detail("script", f"sha256 {record['script_sha256']} (the beats document)"))
     counted = record["claims"]
     if counted["total"]:
-        attested = counted["attested"]
-        tail = (
-            f" · {attested} attested by hand, not verified (D-088)" if attested else ""
-        )
+        tail = ""
+        if counted["attested"]:
+            tail += f" · {counted['attested']} attested by hand, not verified (D-088)"
+        if counted["overridden"]:
+            tail += (
+                f" · {counted['overridden']} cleared by override, not verified (§8.4)"
+            )
         typer.echo(
             _detail(
                 "claims",
@@ -1030,6 +1130,21 @@ def video_approve(
                 f"checked {record['claims_checked_at']}",
             )
         )
+        # Every claim that is standing on a person rather than on a source, on
+        # the screen of the person it is standing on, at the moment they sign —
+        # and the rate beside it (D-040). Reading these off the RECORD, not off
+        # the ledger a second time: the screen and the file must be one answer.
+        for entry in record.get("overrides", []):
+            typer.echo(
+                _detail("override", f"{entry['id']}  “{entry['reason']}” — {entry['by']}")
+            )
+        if counted["overridden"]:
+            typer.echo(
+                _detail(
+                    "override",
+                    _override_rate(counted["overridden"], counted["total"]),
+                )
+            )
     else:
         typer.echo(
             _detail("claims", "none — this script asserts nothing about the world")
