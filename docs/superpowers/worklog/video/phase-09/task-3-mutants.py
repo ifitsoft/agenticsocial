@@ -56,6 +56,10 @@ MUTANTS = [
      '    if state in ("unjudged", "supported"):',
      '    if state in ("unjudged", "supported", "stale", "expired", "malformed"):'),
 
+    ("T15", "the sixth: the override line prints the measurement", C,
+     '                    f"{binding_verdict(record)} — {_sentence(written)}",',
+     '                    f"{_verdict(record)} — {_sentence(written)}",'),
+
     # --- R3: a refutation reaches the ledger byte-exact ---
     ("T8", "M4 — the CLI sanitises the prose it was handed", C,
      '        return _text(text, label)',

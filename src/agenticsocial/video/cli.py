@@ -1012,10 +1012,15 @@ def _print_overrides(records: list[dict]) -> None:
             )
         )
         for record, written in applied:
+            # The verdict that BINDS, not the measurement. A claim pass 2
+            # refuted and a human cleared printed `pass` here — beside the very
+            # sentence that was needed to get past the refusal — which reads as
+            # *it was fine anyway*. Sixth instance of the shape, found by
+            # looking for it after the fifth (D-106, D-110, D-112, D-118, D-122).
             typer.echo(
                 _detail(
                     str(record.get("id", "?")),
-                    f"{_verdict(record)} — {_sentence(written)}",
+                    f"{binding_verdict(record)} — {_sentence(written)}",
                     indent=4,
                 )
             )

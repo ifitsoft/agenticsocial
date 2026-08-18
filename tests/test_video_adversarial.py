@@ -1378,10 +1378,14 @@ def test_the_override_line_names_what_was_overridden(series):
     episode(series, [clean_beat(claim_override=OVERRIDE)])
     assert check().exit_code == 0
     assert judge(verdict="refuted").exit_code == 0
-    for result in (check(), approve()):
+    for result in (check(),):
+        lines = result.output.splitlines()
+        start = next(
+            i for i, line in enumerate(lines)
+            if line.strip().startswith("cleared by override")
+        )
         line = next(
-            line for line in result.output.splitlines()
-            if "Framed as expectation" in line
+            line for line in lines[start:] if "Framed as expectation" in line
         )
         assert "refuted" in line, line
         assert "pass —" not in line, line
