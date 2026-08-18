@@ -112,7 +112,7 @@ def test_the_verifier_folds_with_the_same_table_extraction_does():
     refuses claims the extractor said were fine. The folded string this module
     searches with must be `claims.fold`'s, character for character.
     """
-    sample = "V4‑Pro — “quoted”  it’s\t1,100… end"
+    sample = "\n  V4‑Pro — “quoted”  it’s\t1,100… end \t"
     folded, _spans = V.fold_spans(sample)
     assert folded == C.fold(sample)
 
@@ -209,6 +209,23 @@ def test_a_quote_absent_from_the_corpus_reports_the_closest_candidate_span():
     assert document[start:end].startswith("flagship V4-Pro model by up to ")
 
 
+def test_the_closest_candidate_is_found_when_the_quote_diverges_at_its_START():
+    """precondition: no prefix of the quote occurs in the document at all.
+
+    The sweep's finding. A longest-PREFIX search answers "where does my quote
+    stop matching" and returns nothing when the divergence is in the first word
+    — which is the common case for a quote whose opening was paraphrased. The
+    document below shares no leading character with the quote (it contains no
+    `f`), so a prefix-only implementation reports no candidate and the operator
+    gets the bare red mark §8.2 exists to avoid.
+    """
+    document = "Prices on the V5 model by up to 1,100% rose."
+    span = V.closest_span("flagship V4-Pro model by up to 1,100%", document)
+    assert span is not None
+    start, end = span
+    assert document[start:end].endswith("model by up to 1,100%")
+
+
 # --- §8.2 point 2 — the comparison is NUMERIC (D-098) -------------------------------
 
 
@@ -292,6 +309,21 @@ def test_a_magnitude_word_expands_on_the_quote_side_without_swallowing_its_coeff
     assert Decimal(95) in values
     assert Decimal("95e9") in values
     assert Decimal("9e9") not in values
+
+
+def test_a_bare_numeral_matches_a_source_that_writes_the_magnitude():
+    """precondition: the source writes the suffix and the beat does not.
+
+    The sweep's third finding, and the asymmetry it pins. `jumpChart.before` and
+    `after` reach the frame as geometry and are extracted as bare numerals
+    (`before: 95`), while the source writes `95B` — so the quote side must offer
+    both readings or every chart drawn from a source that uses suffixes is
+    refused. The negative half is the same one as everywhere else: `9` is not
+    `95`, whichever way either side spells it.
+    """
+    quote = "with about 95B active"
+    assert check(beat("body", text="Active parameters: 95.", quote=quote), quote).verdict == "pass"
+    assert check(beat("body", text="Active parameters: 9.", quote=quote), quote).verdict == "fail"
 
 
 def test_a_bare_magnitude_word_is_worth_its_own_magnitude():
@@ -640,6 +672,23 @@ def test_a_zero_row_value_is_checked_like_any_other():
              rows=[{"label": "GDP", "before": 0, "after": 43.6,
                     "shown": "<s>7</s> &rarr; 43.6"}])
     ) != ()
+
+
+def test_checking_a_jumpchart_claim_without_its_beat_refuses_rather_than_skips():
+    """precondition: the claim is a jumpChart and no beat is supplied.
+
+    The sweep's second finding. `beat` is optional so the prose cases read
+    cleanly, and that optionality is a hole: a caller that forgets it gets a
+    chart whose `shown` cell was never compared to its own row, reported as
+    `pass`. A check that silently does not run is indistinguishable from one
+    that passed, which is the failure this whole phase is against.
+    """
+    claim = claim_of(
+        beat("jumpChart", scale=100,
+             rows=[{"label": "GDP", "before": 34.4, "after": 43.6, "shown": "43.6"}])
+    )
+    with pytest.raises(V.VerifyError, match="jumpChart"):
+        V.check_claim(claim, "the score moved to 43.6")
 
 
 def test_the_shown_check_needs_no_corpus_at_all():
