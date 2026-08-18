@@ -165,7 +165,7 @@ MUTANTS = [
     )""",
      "    return verify_mod.is_blocking(record)"),
     ("S6", "the override diff loses its diff", K,
-     '        "<ins>+   claim_override:</ins>\\n"',
+     '        "<ins>+   claim_override:\\n</ins>"',
      '        "    claim_override:\\n"'),
     ("S7", "the override is presented as a small formality", K,
      '        \'<div class="diff-wrap"><p class="diff-head">To override this claim you \'',

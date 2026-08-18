@@ -227,8 +227,15 @@ def _pass2_block(record: dict) -> str:
         parts.append(
             _row("residual risk", esc(judged["residual_risk"]), cls="risk")
         )
-    if why:
-        parts.append(_row("why it does not clear", esc(why)))
+    # Only when it says something the rows above do not. For a plain pass-2
+    # refusal `why` IS the verdict and the refutation, both already printed —
+    # and a sentence that repeats the two lines above it reads as a stutter on
+    # the one screen an operator is meant to read word by word (the same
+    # argument `adversarial_state` makes about its own prefix). It earns its
+    # place when the STATE differs from the verdict: stale and expired are the
+    # cases where a judgement stopped counting and nothing else says why.
+    if why and judged["state"] != judged["verdict"]:
+        parts.append(_row("why it no longer counts", esc(why)))
     parts.append("</div>")
     return "".join(parts)
 
@@ -369,10 +376,10 @@ def _override_diff(episode: Episode, record: dict) -> str:
         f'<pre class="diff"><code>  # script.yaml · beat {esc(index)} '
         f'({esc(record.get("beat_type"))})\n'
         "    type: " + esc(record.get("beat_type")) + "\n"
-        "<ins>+   claim_override:</ins>\n"
+        "<ins>+   claim_override:\n</ins>"
         "<ins>+     reason: &quot;why this claim stands anyway, in your own "
-        "words&quot;</ins>\n"
-        "<ins>+     by: &quot;your name&quot;</ins>\n"
+        "words&quot;\n</ins>"
+        "<ins>+     by: &quot;your name&quot;\n</ins>"
         "</code></pre>"
         '<p class="diff-note">An overridden claim is <strong>NOT verified</strong>'
         " — it is cleared by §8.4 on your sentence. Re-run "
@@ -693,6 +700,7 @@ li.beat { display: grid; grid-template-columns: 22px 68px 42px auto;
           gap: 4px 8px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 li.beat:target { background: var(--hit); }
 .bi { color: var(--dim); font-family: var(--mono); }
+li.beat .verdict { justify-self: start; text-decoration: none; color: inherit; }
 .btype { color: var(--dim); font-size: 12px; }
 .hold { color: var(--dim); font-family: var(--mono); font-size: 12px; }
 .btext { grid-column: 1 / -1; }

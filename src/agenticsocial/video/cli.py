@@ -1870,7 +1870,9 @@ def video_console(
 
     typer.secho(f"{s.slug}/{ep.id} · review console", fg=typer.colors.GREEN)
     typer.echo(f"      {'wrote':<{LABEL_WIDTH}}{resolved}")
-    typer.echo(_detail("open", f"open it in a browser: file://{resolved}"))
+    # NOT wrapped: `_detail` folds at ROW_WIDTH, and a URL folded across two
+    # lines is one an operator cannot copy — the single thing this line is for.
+    typer.echo(f"      {'open':<{LABEL_WIDTH}}file://{resolved}")
     typer.echo(
         _detail(
             "note",
