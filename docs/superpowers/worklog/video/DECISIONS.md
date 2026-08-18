@@ -2126,3 +2126,82 @@ Also closed en route: ANSI escapes in `shown` cannot spoof the review screen —
 terminal.
 
 **Verdict: Phase 4 merges.**
+
+## D-096 · phase 5 / task 1 · extraction is tied to the catalogue, not to a list
+
+`claims.py`'s `COLLECTORS` is keyed by the **checker function object** from
+`script.BEAT_TYPES`, read at call time. Consequences: a new field declared
+`"tagline": text` is extracted the day it is added; a field with an unfamiliar
+checker raises `ClaimsError`; a new type is refused until someone classifies it.
+**The failure mode is a loud refusal, not a silent gap** — which is the right
+direction for a component whose job is to notice.
+
+A test also reads `engine/planbuild.js`, collects all 27 `b.`/`r.`/`it.` property
+reads, and asserts each is either claimed or listed in `IGNORED_FIELDS` **with a
+written reason**. That closes the divergence the brief flagged as this task's
+highest risk: Python and `planbuild.js` independently answering "what does a beat
+render", with figures shipping unchecked while `check` reports green.
+
+Stated honestly in the report, and worth carrying: it does **not** catch a field
+both files know about that Python classifies *wrongly*, nor text the builders
+render from non-property sources (dumbbell axis words, `META`).
+
+**Two of the implementer's own mutants survived the first run and were real
+gaps** — both falsy: a kpi `value: 0` at `decimals: 2`, and a `jumpChart
+before: 0`. The brief's standing "include falsy values" rule caught them because
+the sweep was run, not because the rule was read.
+
+## D-097 · phase 5 / task 1 · D-092 decided: years and ordinals stay claim numbers
+
+No exemption. The reasoning, which I accept: a stale date presented as current is
+a §8.3 failure mode, and **the year is the only part of it a mechanical pass can
+see**. Any "is this a year?" test is a range check that would also exempt
+`2026 GPUs`. Measured cost on the real brief: near zero.
+
+The extractor produces 18 claim numbers from the operator's brief, matching the
+leader's independent count, with every product name and URL on the identifier
+side — `V4‑Pro`, `Qwen3.8‑Max`, `GPT‑5.6` all exempt, `3.7` in `Gemini 3.7 Flash`
+still checked. **D-071's rules survive contact with real prose.**
+
+## D-098 · phase 5 / task 2 · string containment is the wrong comparison, proven on the spec's own example
+
+The implementer reported that **the spec's §7 example `kpis` beat fails this
+extractor.** Leader-verified against the spec's own quote:
+
+```
+quote: "priced at $0.75 per million input tokens and $3.75 per million output"
+  1M    -> claim '1'      literally in quote? False
+  2.00  -> claim '2.00'   literally in quote? False
+  0.75  -> claim '0.75'   literally in quote? True
+```
+
+Three distinct false-refusal generators, on the canonical example, all following
+correctly from settled rules:
+
+1. **`1M` versus "per million".** The beat writes a magnitude in digits; the
+   source spells it. No digit to match.
+2. **`2.00` versus `2`.** kpi atoms are the **formatted glyphs**, because §7.2's
+   whole point is that what the frame displays is what gets verified. Display
+   formatting therefore reaches the comparison.
+3. And the rule's original purpose inverts: **`95B` against a source writing
+   "95 billion" fails**, which is precisely the case the unit-suffix rule was
+   added to protect.
+
+§8.2 says comparison is "on normalised digit sequences". **That is the defect.**
+A digit-sequence comparison cannot see that `1M`, `1 million` and `1,000,000` are
+one number, and this is not a corner case — it is the spec's own worked example
+and the operator's real brief.
+
+**Task 2 compares values, not strings.** Parse candidates out of the folded quote
+with the same claim-number rule, expand magnitude suffixes and spelled magnitude
+words (`K M B T` / thousand, million, billion, trillion) on **both** sides, and
+compare numerically. `95B` = 95e9 ≠ 9e9 = `9B`, so the guarantee the rule exists
+for is strengthened, not weakened — a value comparison distinguishes magnitudes a
+string comparison cannot.
+
+**Why this is the phase's most important decision.** D-040's failure mode is a
+checker so strict that operators override reflexively until the gate is theatre.
+Here the strictness is not judgement — it is a comparison operator that cannot
+represent the thing being compared. **Track the override rate from day one; a
+high rate means the checker is wrong, not the operator**, and this is what that
+looks like before anyone has overridden anything.
