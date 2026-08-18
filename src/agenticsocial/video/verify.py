@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -130,15 +131,36 @@ def _span_of(spans: list[tuple[int, int]], at: int, length: int) -> tuple[int, i
     return spans[at][0], spans[at + length - 1][1]
 
 
+# An elision marker at the START or END of a quote is editorial punctuation, not
+# words the source wrote. §8.2.1 folds U+2026 to `...`, and a literal search then
+# demands three full stops nobody typed — measured against the spec's own §7
+# example, whose `list` beat quotes `"…available today in the Gemini API …"` and
+# is refused for a quote that is verbatim present.
+#
+# Two or more dots, never one: a trailing full stop is a sentence ending and the
+# source has it too, so stripping it would loosen `verbatim` for no gain. And
+# the EDGES only — an internal `…` would mean "these two fragments, in order,
+# with anything at all between them", and a beat could then quote "prices … fell"
+# against a source saying prices rose before they fell. Same argument as
+# §8.2.1's: no digit is touched, so this can turn a false refusal into a pass
+# and never a false claim into a verified one.
+_EDGE_ELISION = re.compile(r"^(?:\s*\.{2,}\s*)+|(?:\s*\.{2,}\s*)+$")
+
+
+def _needle(quote: str) -> str:
+    folded, _ = fold_spans(quote)
+    return _EDGE_ELISION.sub("", folded).strip()
+
+
 def quote_span(quote: str, document: str) -> tuple[int, int] | None:
     """Where `quote` sits in `document`, in the document's OWN coordinates.
 
-    An empty quote is not found. `"" in document` is True for every document,
-    and a checker that reported it as present would then have nothing to test
-    the beat's figures against while reporting `pass` — the vacuous pass D-035
-    is about.
+    An empty quote is not found — including one that was nothing but an elision
+    marker. `"" in document` is True for every document, and a checker that
+    reported it as present would then have nothing to test the beat's figures
+    against while reporting `pass`: the vacuous pass D-035 is about.
     """
-    needle, _ = fold_spans(quote)
+    needle = _needle(quote)
     if not needle:
         return None
     haystack, spans = fold_spans(document)
@@ -177,7 +199,7 @@ def closest_span(quote: str, document: str) -> tuple[int, int] | None:
     the human sees *why* rather than a bare red mark." A bare red mark is what
     teaches people to override without looking.
     """
-    needle, _ = fold_spans(quote)
+    needle = _needle(quote)
     haystack, spans = fold_spans(document)
     if not needle or not haystack:
         return None

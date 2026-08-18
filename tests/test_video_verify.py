@@ -226,8 +226,16 @@ def test_an_elision_in_the_MIDDLE_of_a_quote_is_still_matched_literally():
     quote `"prices … fell"` against a source saying prices rose before they
     fell. Refused, and the operator quotes one clause or cites twice.
     """
-    document = "Prices rose in July. Six weeks later prices fell."
-    assert V.quote_span("prices rose … prices fell", document) is None
+    document = "Prices rose sharply this week."
+    # The discriminating case: an implementation treating `…` as "anything at
+    # all" — or even as "a space" — matches this, and only this shape shows it.
+    # The source's words are adjacent, so a wildcard reading finds them.
+    assert V.quote_span("prices rose … sharply", document) is None
+    assert V.quote_span("prices rose sharply", document) is not None
+    # And the illustration of why that matters, where the fragments are far apart
+    # and the meaning between them is the opposite of the quote's.
+    torn = "Prices rose in July. Six weeks later prices fell."
+    assert V.quote_span("prices rose … prices fell", torn) is None
 
 
 def test_a_quote_that_is_nothing_but_an_elision_is_not_found():
