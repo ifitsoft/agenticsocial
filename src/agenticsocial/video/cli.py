@@ -14,6 +14,7 @@ from . import approve as approve_mod
 from . import claims as claims_mod
 from . import corpus as corpus_mod
 from . import ingest as ingest_mod
+from . import plan as plan_mod
 from . import render as render_mod
 from . import verify as verify_mod
 from .episode import create_episode, episode_ids, load_episode
@@ -1609,6 +1610,7 @@ def video_probe(
     frames = sorted(out.glob("*.png")) if out.is_dir() else [out]
     typer.secho(f"{series}/{episode} · {len(frames)} frame(s)", fg=typer.colors.GREEN)
     typer.echo(f"      {'at' if at is not None else 'in':<{LABEL_WIDTH}}{out}")
+    typer.echo(_detail("format", _format_line(fmt)))
     typer.echo(
         _detail(
             "note",
@@ -1699,6 +1701,24 @@ def _refusal(head: str, e: render_mod.RenderRefused, episode: str, series: str) 
     )
 
 
+def _format_line(fmt: str) -> str:
+    """R5, said where an operator reads it rather than in a docstring.
+
+    `approve` binds what the operator authored — the beats, `pace`, and the
+    series.toml values that reach the frame. The FORMAT is typed on a command
+    line minutes or days later, and one approval can render both. A screen that
+    listed it beside the things that were signed would be claiming a human
+    looked at this shape of the card, and nobody has: a 9:16 headline set across
+    16:9 is the same words in a layout no approver saw.
+    """
+    geometry = plan_mod.FORMATS.get(fmt)
+    size = f"{geometry['w']}x{geometry['h']} · " if geometry else ""
+    return (
+        f"{fmt} · {size}chosen at render time and NOT part of the approval — "
+        "one approval renders every format, and the approver saw none of them"
+    )
+
+
 def _size(n: int) -> str:
     return f"{n / 1_000_000:.1f} MB" if n >= 100_000 else f"{n / 1000:.0f} kB"
 
@@ -1731,6 +1751,7 @@ def _echo_rendered(series: str, episode: str, result) -> None:
             f"@ {record['fps']}fps",
         )
     )
+    typer.echo(_detail("format", _format_line(record["format"])))
     approval = record.get("approval") or {}
     typer.echo(
         _detail(

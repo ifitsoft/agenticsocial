@@ -627,20 +627,17 @@ def test_the_scaffolded_palette_still_loads(ws):
 
 
 @pytest.mark.parametrize("token", ["type_family", "type_scale"])
-@pytest.mark.parametrize(
-    "value",
-    [
-        '"SF Pro Display, Helvetica Neue, system-ui"',
-        '"default"',
-        '"compact"',
-        '"blue"',
-        '""',
-    ],
-)
+@pytest.mark.parametrize("value", ['"default"', '"compact"', '"large"'])
 def test_typography_tokens_are_not_colour_checked(ws, token, value):
-    """R1 NEGATIVE (M5). `type_family` and `type_scale` are not colours. A
-    colour check applied to the whole [design] table rejects the scaffold's own
-    font stack — the rule would be strictly worse than no rule."""
+    """R1 NEGATIVE (M5). Typography is not colour. A colour check applied to the
+    whole [design] table rejects the scaffold's own font stack — the rule would
+    be strictly worse than no rule.
+
+    Phase 10 narrowed the values, not the rule: `type_scale` is now enumerated
+    (it is drawn, so a typo must not read as set — see
+    test_video_format.py), and `type_family` is retired but still LOADS, because
+    it is a line in a file the operator owns. Neither is colour-checked, which is
+    what this test is about."""
     _write_series(ws, "ok", f'[series]\nname = "O"\n\n[design]\n{token} = {value}\n')
     assert load_series(ws, "ok").design[token] == value.strip('"')
 
