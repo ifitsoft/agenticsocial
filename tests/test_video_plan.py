@@ -4,6 +4,7 @@ import shutil
 
 import pytest
 
+from agenticsocial.video import plan as plan_mod
 from agenticsocial.video.episode import create_episode, load_episode
 from agenticsocial.video.plan import (
     FPS,
@@ -12,6 +13,7 @@ from agenticsocial.video.plan import (
     build_plan,
     write_plan,
 )
+from agenticsocial.video.script import BEAT_TYPES
 from agenticsocial.video.series import scaffold_series
 from agenticsocial.workspace import Workspace
 
@@ -122,14 +124,18 @@ def test_design_tokens_come_from_the_series(series):
     assert plan["design"]["surface"] == "#F2F5F8"
 
 
-def test_unsupported_beat_type_is_refused_by_name(series):
+def test_unsupported_beat_type_is_refused_by_name(series, monkeypatch):
     """Phase 3 split the schema (script.py) from resolution (plan.py), so a
-    valid-but-unrenderable type reaches plan.py and is refused THERE. `custom`
-    is used rather than `jumpChart` because jumpChart now fails the schema
-    first — that would test the wrong gate — and rather than `title`, which
-    Phase 4 can now draw."""
+    valid-but-unrenderable type reaches plan.py and is refused THERE.
+
+    Phase 4 Task 3 drew the last two types, so no catalogue type is
+    unrenderable today and the narrower gate has to be injected. The gate is
+    kept, and kept tested, because the next type spec §7.1 grows will be valid
+    before its builder exists — and a beat that validates, resolves, reaches the
+    stage and silently draws nothing is the failure this refusal exists for."""
     ep = create_episode(series, "2026-08-14")
-    _script(ep, "beats:\n  - type: custom\n    js: x\n")
+    _script(ep, "beats:\n  - type: custom\n    js: x\n    attest: draws x. — A.\n")
+    monkeypatch.setattr(plan_mod, "RENDERABLE", frozenset({"statement"}))
     with pytest.raises(PlanError) as e:
         build_plan(series, load_episode(series, "2026-08-14"))
     assert "custom" in str(e.value)
@@ -218,21 +224,10 @@ def test_building_a_plan_never_rewrites_the_script(series):
 
 
 def test_supported_beats_is_exactly_this_phases_types():
-    """Phase 4 widens the gate from one type to nine. Pinned so that widening
-    it again is a deliberate edit and not a side effect of adding a builder."""
-    assert SUPPORTED_BEATS == frozenset(
-        {
-            "statement",
-            "body",
-            "list",
-            "quote",
-            "title",
-            "signoff",
-            "kpis",
-            "jumpChart",
-            "dumbbell",
-        }
-    )
+    """Phase 4 widens the gate from one type to the whole catalogue — its exit
+    criterion. Pinned against BEAT_TYPES rather than a literal list so that the
+    day a new type is added, this line says whether plan.py may emit it."""
+    assert SUPPORTED_BEATS == set(BEAT_TYPES)
 
 
 # --- added by the implementer: vacuity fixes, see report section 5 -----------

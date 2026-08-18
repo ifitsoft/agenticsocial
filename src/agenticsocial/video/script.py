@@ -12,8 +12,9 @@ Two gates, deliberately separate:
   * **validity** — the type is in `BEAT_TYPES` and its fields check out. Every
     catalogue type is valid today, including the ones no renderer exists for.
   * **renderability** — `RENDERABLE` is the subset `plan.py` can currently
-    emit. A `dumbbell` is a real beat that this phase cannot draw, and an
-    operator must be able to tell that from a typo.
+    emit. Phase 4 Task 3 closed the gap, so the two coincide today; they are
+    still separate questions, and the next type §7.1 grows will be valid before
+    anything can draw it. An operator must be able to tell that from a typo.
 
 READ ONLY. Nothing here writes: `script.yaml`'s bytes are load-bearing for
 `script_sha256` (spec §10, DECISIONS D-026), so not even normalisation is
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import decimal
 import hashlib
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -40,9 +42,15 @@ DEFAULT_HOLD = 3.0
 # Phase 4 Task 1 added a builder in engine/planbuild.js for each of the five
 # text types alongside `statement`; Task 2 added the two chart types spec §7.2
 # calls strictly verifiable; Task 3 adds `dumbbell`, whose two-tone merged
-# marker the engine had CSS for and no function. `custom` is the one that
-# remains — it runs arbitrary JS. A name added here without a builder renders a
-# blank card, so
+# marker the engine had CSS for and no function, and `custom`, which runs the
+# author's own JS. That closes the catalogue: RENDERABLE == set(BEAT_TYPES).
+#
+# It stays a separate name rather than becoming `set(BEAT_TYPES)`. The two gates
+# answer different questions — "is this a well-formed beat?" and "can plan.py
+# emit it?" — and the next type added to §7.1 is valid before anyone has written
+# its builder. Collapsing them would make that type render a blank card on the
+# day it is described. A name added here without a builder renders a blank card,
+# so
 # tests/test_video_planbuild.py::test_every_renderable_type_has_a_builder holds
 # this set and `BUILDERS` to each other.
 RENDERABLE = frozenset(
@@ -56,6 +64,7 @@ RENDERABLE = frozenset(
         "kpis",
         "jumpChart",
         "dumbbell",
+        "custom",
     }
 )
 
@@ -402,6 +411,81 @@ def kpi_items(v: Any) -> str | None:
     return None
 
 
+# --- `custom`: executed, and therefore attested ---------------------------------
+
+# The three spellings a custom beat is most likely to reach for, written as
+# calls rather than as bare words: `Math.round` and an identifier called
+# `randomised` are not non-determinism, and a guard that refuses them teaches
+# authors that the check is noise. `\s*` around the dot because `Math . random`
+# is the same call.
+NONDETERMINISTIC = (
+    (re.compile(r"\bDate\s*\.\s*now\s*\("), "Date.now"),
+    (re.compile(r"\bMath\s*\.\s*random\s*\("), "Math.random"),
+    (re.compile(r"\bperformance\s*\.\s*now\s*\("), "performance.now"),
+)
+
+
+def custom_js(v: Any) -> str | None:
+    """The one authored field that is EXECUTED, in the page, as written.
+
+    `__seek(t)` positioning every element from `t` alone is the invariant that
+    makes a render reproducible and any single frame re-creatable months later.
+    Nothing else an operator writes can break it; this can, because everything
+    else is data and this is code.
+
+    **This is a lint, not a sandbox.** It is a regex over three spellings. It
+    catches the accident — an author who reaches for `Math.random()` out of
+    habit — and it does not catch anyone who does not want to be caught:
+    `window['Ma'+'th'].random()` walks straight past it, and so does any value
+    fetched, computed or read off the DOM. Same framing as D-062: the guard
+    raises the floor, it is not a boundary. What the beat renders is covered by
+    `attest`, which is a person's signature rather than a check.
+    """
+    reason = text(v)
+    if reason:
+        return reason
+    for pattern, name in NONDETERMINISTIC:
+        if pattern.search(v):
+            return (
+                f"calls {name}() — a custom beat is executed in the page, and "
+                "`__seek(t)` must position every element from `t` alone or the "
+                "render stops being reproducible. Derive the value from the "
+                "animation's own progress instead. (This is a LINT, not a "
+                "sandbox: it greps for three spellings and catches the "
+                "accident, not the adversary — a computed call goes straight "
+                "past it, so determinism here is still yours to keep.)"
+            )
+    return None
+
+
+def attestation(v: Any) -> str | None:
+    """R5 — spec §7.1 says `custom` needs "manual attestation" and names no field.
+
+    This is that field. No mechanical check can verify what arbitrary rendering
+    code puts on a screen; that is what "arbitrary" means. The honest substitute
+    is not a weaker check dressed as a strong one — it is a sentence in which a
+    person states what the beat displays and takes responsibility for it, shown
+    to the operator in `agsoc video review` before they approve.
+
+    Empty is refused for the same reason a blank `src` is not a citation: it
+    satisfies every "is the key there" check and states nothing, which is the
+    approval theatre the field exists to avoid.
+    """
+    if not _is_str(v):
+        return (
+            f"must be a string, got {_type_name(v)} — a `custom` beat renders "
+            "whatever its `js` draws, and nothing can check that mechanically; "
+            "`attest` is where a person says what it shows and signs for it"
+        )
+    if not v.strip():
+        return (
+            "must not be empty — an attestation nobody wrote is worse than "
+            "none: it puts a record of a judgement in front of the approver "
+            "that was never made"
+        )
+    return None
+
+
 # --- the catalogue --------------------------------------------------------------
 # Data, not branches: adding a type in Phase 4 is a row here, never a new `if`.
 #
@@ -453,7 +537,14 @@ BEAT_TYPES: dict[str, dict] = {
     },
     "title": {"required": {}, "optional": {"sub": free_text}, "cited": False},
     "signoff": {"required": {}, "optional": {"text": free_text}, "cited": False},
-    "custom": {"required": {"js": text}, "optional": {}, "cited": False},
+    # Executed, and therefore attested. `js` is linted for the three obvious
+    # non-determinism sources (a lint, not a sandbox — see `custom_js`), and
+    # `attest` is the manual attestation spec §7.1 requires and does not name.
+    "custom": {
+        "required": {"js": custom_js, "attest": attestation},
+        "optional": {},
+        "cited": False,
+    },
 }
 
 # Present on every type (spec §7.1, "shared optional fields on every type").

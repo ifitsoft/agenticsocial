@@ -360,6 +360,12 @@ DUMBBELL = {
     "footnote": "Direction only — the source reports evaluator ratings, not scores.",
 }
 
+CUSTOM = {
+    "js": "const h = E('h2', null, P('x'));\nrise(h, .15);\n",
+    "attest": "Draws the headline 'x' and nothing else. — A. B.",
+}
+
+
 RENDERABLE_BEATS = {
     "statement": {"text": "a statement"},
     "body": {"text": "a body line"},
@@ -370,6 +376,7 @@ RENDERABLE_BEATS = {
     "kpis": KPIS,
     "jumpChart": JUMP,
     "dumbbell": DUMBBELL,
+    "custom": CUSTOM,
 }
 
 
@@ -773,6 +780,82 @@ def test_the_scale_reaches_the_engine_as_the_track_maximum():
     assert dots and dots[0]["css"].get("left") == "50%"
 
 
+# --- Task 3: `custom`, the beat that executes ------------------------------------
+#
+# Every other builder turns fields into DOM. This one hands the page a string
+# the operator wrote and runs it. The tests below are about what that means:
+# it must actually run (an escape hatch that silently draws nothing is worse
+# than no escape hatch), it must run EAGERLY enough that a broken one is a build
+# failure rather than a blank card thirty seconds into a render, and it must
+# reach the same primitives every committed episode uses — `js` is written by
+# someone reading content/2026-08-14.js, not a new dialect.
+
+@needs_node
+def test_a_custom_beat_runs_its_javascript():
+    """R4. The whole type. A builder that stores `js` and never calls it leaves
+    a legal beat rendering an empty card, and nothing errors."""
+    tree = build([beat("custom", **CUSTOM)])[0]["tree"]
+    assert [n["tag"] for n in flatten(tree) if n["tag"] == "h2"] == ["h2"]
+
+
+@needs_node
+def test_the_custom_javascript_sees_the_engine_primitives():
+    """R4. `js` is authored by someone reading the committed episodes, which
+    call E, P, rise, fade, draw, an, EZ, clamp and lerp as bare globals. A beat
+    evaluated in a scope without them is a different language that happens to
+    look the same."""
+    js = (
+        "const b = E('div', 'body', P('hi'));\n"
+        "fade(b, .1);\n"
+        "an(0, 1, EZ.out, p => { b.style.opacity = clamp(lerp(0, 1, p)); });\n"
+    )
+    scene = build([beat("custom", **{**CUSTOM, "js": js})])[0]
+    assert find(scene["tree"], "body")
+    assert scene["anims"]
+
+
+@needs_node
+def test_the_custom_javascript_is_handed_the_scene_root():
+    """R4. Both episodes write `scene(act, dur, tag, s => { … })` and the `s`
+    parameter is the card. An escape hatch that does not pass it forces every
+    custom beat to reach for a global the engine does not promise."""
+    js = "E('div', 'kicker', {p: s, text: 'from s'});\n"
+    tree = build([beat("custom", **{**CUSTOM, "js": js})])[0]["tree"]
+    assert find(tree, "kicker")[0]["text"] == "from s"
+
+
+@needs_node
+def test_a_custom_beat_with_a_syntax_error_is_refused_while_the_plan_is_walked():
+    """R4's timing, and the same argument as requireCitation's. A throw from
+    inside a build closure fires at the frame that scene first appears on:
+    beat 14 of an 88-second video is thirty seconds into a render that has
+    already written nine hundred frames, and render.mjs only inspects page
+    errors after goto (which is seek(0)) and again at the end."""
+    msg = refuses([beat("custom", **{**CUSTOM, "js": "const h = ;\n"})])
+    assert "custom" in msg and "0" in msg
+
+
+@needs_node
+def test_the_attestation_is_not_drawn_on_the_card():
+    """R5's scope. The attestation is a claim made to the APPROVER, in `agsoc
+    video review`. Rendering it would put an internal note in the video, and —
+    worse — would make a beat that displays its own sign-off look verified."""
+    tree = build([beat("custom", **{**CUSTOM, "attest": "SIGNED-BY-THE-AUTHOR"})])[0][
+        "tree"
+    ]
+    assert "SIGNED-BY-THE-AUTHOR" not in rendered_text(tree)
+
+
+@needs_node
+def test_a_custom_beat_needs_no_citation():
+    """R1 NEGATIVE from Task 2. `custom` is not one of the two cited types: what
+    it renders is unknown to the schema, so a `src` on it would be a citation
+    for nothing in particular. That is exactly why it carries an attestation
+    instead."""
+    scene = build([beat("custom", **CUSTOM)])[0]
+    assert scene["tree"]["kids"]
+
+
 # --- Task 3: the dumbbell --------------------------------------------------------
 #
 # Extracted from engine/content/2026-08-12.js, which is the only dumbbell that
@@ -1133,14 +1216,16 @@ def test_meta_pace_stays_one_however_the_plan_is_paced():
 
 
 @needs_node
-def test_an_unrenderable_type_still_fails_loudly():
+def test_a_type_with_no_builder_still_fails_loudly():
     """R3's guard. Widening the builder table must not turn the gate into a
-    silent skip: a `dumbbell` beat that reaches Node is a plan.py bug, and a
-    beat quietly missing from the video is the hardest kind to notice.
+    silent skip: a beat that reaches Node with no builder is a plan.py bug, and
+    a beat quietly missing from the video is the hardest kind to notice.
 
-    `custom`, not `dumbbell`: Task 3 draws the dumbbell. The exemplar moves with
-    the gate, the way test_video_review's does — the guard has to keep working
-    while ANY catalogue type is still unbuilt."""
+    Task 3 fills the table, so the exemplar can no longer be a catalogue type —
+    every one of them draws now. It moves outside the catalogue instead, which
+    narrows what this proves without making it dead: `render.mjs --plan` reads
+    any JSON file and determinism.test.mjs writes its own, so a handwritten
+    plan with a mistyped type is exactly where this fires."""
     proc = subprocess.run(
         ["node", "-e", HARNESS],
         capture_output=True,
@@ -1153,10 +1238,10 @@ def test_an_unrenderable_type_still_fails_loudly():
                     "episode": "e",
                     "series": "s",
                     "byline": "",
-                    "beats": [beat("custom")],
+                    "beats": [beat("sparkline")],
                 }
             ),
         },
     )
     assert proc.returncode != 0
-    assert "custom" in proc.stderr
+    assert "sparkline" in proc.stderr

@@ -559,6 +559,42 @@ function buildDumbbell(b, index) {
   };
 }
 
+/* ============================ custom ============================
+ *
+ * The escape hatch, and the only builder that runs code the operator wrote.
+ * Spec §5 keeps it because "existing episodes genuinely use bespoke an()
+ * animations" — content/2026-08-12.js's AMIE chart was one until this task.
+ *
+ * `new Function('s', js)` rather than `eval`: it compiles NOW, while the plan is
+ * being walked, so a syntax error is a build failure with the beat's index on
+ * it rather than a page error at the frame that scene first appears on. The
+ * body still runs in the global scope, which is the point — `js` is written by
+ * someone reading content/2026-08-14.js and calls E, P, rise, fade, draw, an,
+ * EZ, clamp and lerp as bare globals, exactly as the episodes do. `s` is the
+ * scene root, the same parameter `scene(act, dur, tag, s => …)` hands them.
+ *
+ * What this does NOT do is contain it. The function has the page's globals:
+ * `fetch`, `document`, `window`, and the DOM of every element on the stage. The
+ * determinism check in script.py is a lint over three spellings, not a
+ * boundary, and `attest` is a person's signature rather than a check. See the
+ * Task 3 report, section 6.
+ */
+function buildCustom(b, index) {
+  var run;
+  try {
+    run = new Function('s', b.js);
+  } catch (e) {
+    throw new Error(
+      'beat ' + index + ' (custom) does not parse as JavaScript: ' + e.message +
+        ' — refused here, while the plan is being walked, rather than at the ' +
+        'frame this scene first appears on',
+    );
+  }
+  return function (s) {
+    run(s);
+  };
+}
+
 /* Data, not branches — and the set of keys here is the same set as
  * script.py's RENDERABLE. A name in one and not the other is a beat that
  * validates, resolves, reaches the stage and draws nothing. */
@@ -572,6 +608,7 @@ var BUILDERS = {
   kpis: buildKpis,
   jumpChart: buildJumpChart,
   dumbbell: buildDumbbell,
+  custom: buildCustom,
 };
 
 function buildFromPlan(plan) {

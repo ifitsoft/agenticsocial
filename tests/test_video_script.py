@@ -20,6 +20,7 @@ import yaml
 
 from agenticsocial.video import script as S
 from agenticsocial.video.episode import create_episode, load_episode
+from agenticsocial.video import plan as plan_mod
 from agenticsocial.video.plan import PlanError, build_plan
 from agenticsocial.video.series import scaffold_series
 from agenticsocial.workspace import Workspace
@@ -122,6 +123,9 @@ VALID = {
     "custom": {
         "type": "custom",
         "js": "const h = E('h2', null, P('x'));\nrise(h, .15);\n",
+        # §7.1's "manual attestation required", given a field — see the
+        # attestation section below.
+        "attest": "Draws the headline 'x' and nothing else. — A. B.",
     },
 }
 
@@ -184,23 +188,15 @@ def test_renderable_is_a_subset_of_the_catalogue():
     assert S.RENDERABLE <= set(S.BEAT_TYPES)
 
 
-def test_renderable_is_exactly_this_phases_types():
-    """precondition: Phase 4 Task 3 draws the dumbbell, so nine of the ten
-    catalogue types render. This pins the gate so that widening it is a
-    deliberate edit — `custom` still has no builder in planbuild.js."""
-    assert S.RENDERABLE == frozenset(
-        {
-            "statement",
-            "body",
-            "list",
-            "quote",
-            "title",
-            "signoff",
-            "kpis",
-            "jumpChart",
-            "dumbbell",
-        }
-    )
+def test_renderable_is_exactly_the_whole_catalogue():
+    """precondition: Phase 4's exit criterion. Every catalogue type now has a
+    builder in planbuild.js, so validity and renderability finally coincide.
+
+    Pinned as an EQUALITY rather than deleted: the two gates mean different
+    things and the next type added to §7.1 is valid before it is drawable. This
+    is the line that will fail on the day someone adds one, which is the day
+    somebody has to decide whether plan.py may emit it."""
+    assert S.RENDERABLE == set(S.BEAT_TYPES)
 
 
 # --- D-068: jumpChart is a list of bars, not one bar ----------------------------
@@ -659,6 +655,124 @@ def test_the_footnote_is_required_on_a_dumbbell(series):
     assert "footnote" in str(e.value)
 
 
+# --- Phase 4 Task 3: `custom` is executed, and therefore attested ---------------
+#
+# `js` is arbitrary JavaScript that will RUN in the page. Two consequences, and
+# the second is the one the spec left unnamed.
+
+
+NONDETERMINISM = ["Date.now()", "Math.random()", "performance.now()"]
+
+
+@pytest.mark.parametrize("call", NONDETERMINISM)
+def test_a_custom_beat_that_reads_the_clock_or_the_dice_is_refused(series, call):
+    """precondition: R4 + M8. `__seek(t)` positioning every element from `t`
+    alone is the one invariant this project has never had to re-fix, and it is
+    what makes a render reproducible and any single frame re-creatable months
+    later. A custom beat is the only authored field that can break it, because
+    it is the only one that executes."""
+    beat = dict(VALID["custom"], js="const x = " + call + ";\nE('div', 'body');\n")
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    assert call.rstrip("()") in str(e.value)
+
+
+def test_the_refusal_says_it_is_a_lint_rather_than_a_sandbox(series):
+    """precondition: D-062's framing — the guard raises the floor, it is not a
+    boundary. An operator who reads "rejected: non-determinism" concludes the
+    renderer checks their JS for determinism. It does not: it greps for three
+    spellings. Saying so in the error is the difference between a floor an
+    author knows the height of and a wall they think is there."""
+    beat = dict(VALID["custom"], js="Math.random()\n")
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    msg = str(e.value).lower()
+    assert "lint" in msg or "not a sandbox" in msg
+
+
+def test_the_lint_does_not_pretend_to_catch_a_computed_call(series):
+    """precondition: R4's honest half, pinned as a TEST rather than left as a
+    sentence in a docstring. `window['Ma'+'th'].random()` walks straight past a
+    textual check, and this file is where that fact should be discoverable.
+
+    It is not a hole to be closed here: closing it needs a sandbox or a parser,
+    and a check that half-catches an adversary while claiming to catch them is
+    worse than one that catches the accident and says so. This assertion exists
+    so that anyone who later reads the guard as a security boundary finds the
+    counter-example already written down."""
+    beat = dict(VALID["custom"], js="const r = window['Ma'+'th'].random();\n")
+    script = _load(series, [beat])  # accepted, and that is the documented truth
+    assert script.beats[0].type == "custom"
+
+
+@pytest.mark.parametrize(
+    "js",
+    [
+        "const randomised = pickOne(items);\n",
+        "const seed = randomSeed;\n",
+        "const v = Math.round(x * 100);\n",
+        "const d = updateDateNow(x);\n",
+        "// a note about Math.random elsewhere is not a call\n",
+    ],
+)
+def test_a_harmless_identifier_is_not_refused(series, js):
+    """precondition: R4 NEGATIVE + M9. A substring check on "random" refuses
+    `randomised`, `Math.round` and a word in a comment. An author whose legal
+    beat is rejected for containing five letters learns that the check is noise,
+    and the next thing they learn is how to word around it — at which point the
+    guard is worse than nothing, because it is still reported as passing.
+
+    (The comment case is the honest edge: this is a lint, so a `Math.random()`
+    inside a comment WOULD be refused. `Math.random` without the call is not.)
+    """
+    _load(series, [dict(VALID["custom"], js=js)])
+
+
+def test_custom_requires_an_attestation(series):
+    """precondition: R5 + M10. §7.1 marks `custom` "manual attestation
+    required" and names no field, so this defines one.
+
+    No mechanical check can verify what arbitrary rendering code puts on a
+    screen — that is what "arbitrary" means. The honest substitute is not a
+    weaker check pretending to be a strong one: it is a sentence in which a
+    person states what the beat displays and takes responsibility for it, on
+    the record, in front of the operator who approves the episode."""
+    beat = {k: v for k, v in VALID["custom"].items() if k != "attest"}
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    assert "attest" in str(e.value)
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n"])
+def test_an_empty_attestation_is_not_an_attestation(series, blank):
+    """precondition: R5 + the falsy rule. `attest: ""` satisfies every "is the
+    key there" check and states nothing. A signature nobody wrote is the
+    approval theatre the field exists to avoid."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [dict(VALID["custom"], attest=blank)])
+    assert "attest" in str(e.value)
+
+
+@pytest.mark.parametrize("kind", sorted(set(VALID) - {"custom"}))
+def test_no_other_type_requires_an_attestation(series, kind):
+    """precondition: R5 NEGATIVE + M11. Every other type is declarative: what it
+    renders is derivable from its fields, and the schema, the renderer and
+    Phase 5 all check it. Demanding a signature there would turn attestation
+    into a field operators paste a word into, which is how a real one stops
+    being read."""
+    assert "attest" not in S.BEAT_TYPES[kind]["required"]
+    _load(series, [VALID[kind]])
+
+
+def test_the_attestation_reaches_the_beat_for_review_to_display(series):
+    """precondition: R5's point. An attestation nobody reads is worse than
+    none — it manufactures a record of a judgement that was never made. It has
+    to survive into `Beat.fields`, because `agsoc video review` is where the
+    approver meets it."""
+    script = _load(series, [VALID["custom"]])
+    assert script.beats[0].fields["attest"] == VALID["custom"]["attest"]
+
+
 @pytest.mark.parametrize("kind", sorted(VALID))
 def test_each_catalogue_type_validates_with_its_documented_fields(series, kind):
     """precondition: spec §7.1 lists the content fields per type. A beat carrying
@@ -723,20 +837,24 @@ def test_a_known_but_unrenderable_type_still_loads(series, kind):
     assert script.beats[0].type == kind
 
 
-def test_plan_refuses_an_unrenderable_type_with_a_different_message(series):
-    """precondition: R1 negative + M2. `custom` is a valid beat and an
-    unrenderable one. The two failures must not read the same, or an operator
-    cannot tell a typo from a not-yet-built feature.
+def test_plan_refuses_an_unrenderable_type_with_a_different_message(series, monkeypatch):
+    """precondition: R1 negative + M2. A valid-but-unrenderable type and a typo
+    must not read the same, or an operator cannot tell a not-yet-built feature
+    from a mistake they made.
 
-    Phase 4 draws `title`, which this test used to use. The exemplar moved to
-    `custom` rather than the assertion being deleted: the gate has to keep
-    saying two different things while ANY catalogue type is still unbuilt."""
+    Phase 4 Task 3 closed the gap: `RENDERABLE == set(BEAT_TYPES)`, so there is
+    no catalogue type left to use as the exemplar. The gate is NOT dead — it is
+    what the next type added to §7.1 will hit before anyone writes its builder —
+    so the narrower gate is injected rather than the test deleted. A gate whose
+    test was deleted the day it stopped firing is a gate that comes back broken.
+    """
     ep = create_episode(series, "2026-08-14")
     _write(ep, [VALID["custom"]])
     e = load_episode(series, "2026-08-14")
 
     S.load_script(e)  # the schema accepts it
 
+    monkeypatch.setattr(plan_mod, "RENDERABLE", frozenset({"statement"}))
     with pytest.raises(PlanError) as err:
         build_plan(series, e)
     msg = str(err.value)
@@ -775,6 +893,7 @@ REQUIRED = [
     ("quote", "text"),
     ("quote", "attribution"),
     ("custom", "js"),
+    ("custom", "attest"),
 ]
 
 
@@ -897,6 +1016,11 @@ WRONG_TYPE = [
     ("custom", "js", ""),
     ("custom", "js", 0),
     ("custom", "js", False),
+    ("custom", "attest", ""),
+    ("custom", "attest", "   "),
+    ("custom", "attest", 0),
+    ("custom", "attest", False),
+    ("custom", "attest", []),
 ]
 
 

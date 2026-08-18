@@ -297,7 +297,12 @@ SUMMARISERS = {
     # reachable and therefore testable — two would leave the outer one dead.
     "title": lambda b: _one_line(b.fields.get("sub", "")),
     "signoff": lambda b: _one_line(b.fields.get("text", "")),
-    "custom": lambda b: _one_line(b.fields.get("js", "")),
+    # The attestation, not the code. `custom` renders whatever its `js` draws
+    # and no check can say what that is, so the only thing worth putting in
+    # front of an approver is the sentence in which the author says what it
+    # shows and signs for it. A clipped first line of JavaScript in a 40-column
+    # column tells them less than nothing; the code is in script.yaml.
+    "custom": lambda b: _one_line(b.fields.get("attest", "")),
 }
 
 
