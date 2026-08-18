@@ -2907,3 +2907,53 @@ that reach no pixel, while **the type that is actually drawn lives in
 Two knobs an operator would reasonably believe control the typography, that
 control nothing. Recorded for Phase 10 (wide format), which is the next phase to
 touch layout — and it is a spec-versus-implementation gap, not a drift bug.
+
+## D-117 · phase 8 / task 1 · the pipeline produces a watchable file, and says exactly what that is worth
+
+`agsoc video render` works end to end. **Leader-verified in a throwaway
+workspace**, because the implementer's machine slept before it could report:
+
+```
+render while in_review -> exit 1   cannot move in_review -> rendering; allowed next: draft, approved
+design accent changed  -> exit 1   drift named; "put the change back, or approve again"
+corpus touched         -> exit 1   the corpus has changed since this check was written
+approved + clean       -> exit 0   36.9s wall clock for a 3.5s video
+
+ffprobe: h264 · 1080x1920 · 30/1 fps · nb_frames=105 · duration=3.500000 · status: rendered
+```
+
+**Three checks, three distinguishable refusals, each naming its own remedy.** An
+operator is told *which* thing moved — status, the thing they authored, or the
+corpus — which is what D-115 asked for and what folding them into one predicate
+would have destroyed.
+
+### The success message, which is the point of the phase
+
+```
+approved  Ali Abdukarim at 2026-08-18T03:41:11-05:00 — and nothing you authored has changed
+          since: the beats, `pace` and series.toml's design are the ones that were signed
+scope     the approval does NOT cover what drew these frames — engine.js, planbuild.js,
+          scene.html's CSS, the font this machine resolved, Chromium and ffmpeg are all
+          outside the approval, and the font is the one that differs between machines.
+          Nobody has looked at this video: `agsoc video preview ... --probe` puts one frame
+          per beat on disk
+```
+
+This project caught itself overclaiming four times (D-106, D-110, D-112, D-113),
+**every time on a summary line**, because that line is written last by someone who
+already knows the answer. This one was written deliberately against that record,
+and it does the two things the others did not: it **names what the guarantee
+excludes**, and it says plainly *"nobody has looked at this video"* — then hands
+over the cheap way to look.
+
+A success message that tells you what it does **not** know is the only kind worth
+printing at the end of a fourteen-minute job.
+
+### On the interruption
+
+The implementer's machine slept mid-report. The work survived intact — six
+commits, clean tree, 1779 tests — because the discipline is *tests first, small
+commits, never squash*. **The report was the only casualty, and a report is the
+one artefact that can be reconstructed from the commits.** Worth noting as
+evidence the process is robust to the machine dying, which is not something that
+had been tested until it happened.
