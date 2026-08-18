@@ -138,5 +138,9 @@ def test_claude_md_lists_the_engine_test_files():
     missing from it — including the determinism test that the same paragraph
     calls load-bearing."""
     claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    for name in ("determinism.test.mjs", "network.test.mjs", "coverage.test.mjs"):
+    # `coverage.test.mjs` left this list in Phase 11 with the command it drove.
+    # Its assertions live in `tests/test_video_coverage.py`; the ledger data it
+    # ran against stays in `engine/coverage.json`.
+    for name in ("determinism.test.mjs", "network.test.mjs"):
         assert name in claude, name
+    assert "coverage.test.mjs" not in claude

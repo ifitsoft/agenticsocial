@@ -22,12 +22,10 @@ scene.html            the stage — styles + markup only, never changes per day
 engine.js             the render engine — seek(t), animation primitives, charts
 planbuild.js          builds a scene from a plan.json beat
 content/YYYY-MM-DD.js the two hand-written fixture episodes
-coverage.json         the ledger of what has been covered
-coverage.mjs          query the ledger
+coverage.json         the ledger as it stood before Phase 11 — migration source, kept
 render.mjs            Playwright frame renderer — takes a plan.json
 determinism.test.mjs  __seek(t) is pure, and every builder draws its text
 network.test.mjs      the render page cannot reach the network
-coverage.test.mjs     the ledger check cannot be talked past
 ```
 
 `window.__seek(t)` positions **every** element purely as a function of `t` — no CSS
@@ -78,16 +76,24 @@ while working on layout. They are fixtures now, not a way to publish.
 
 ## Coverage
 
-The series must never re-tell a story as if it were new. `coverage.json` is the
-ledger, and it is checked before an episode is written, not after:
+The series must never re-tell a story as if it were new. The ledger is checked
+before an episode is written, not after — and since Phase 11 it lives with the
+series it belongs to, not here:
 
 ```sh
-node coverage.mjs check gemini "supply chain" copilot
+uv run agsoc coverage check gemini "supply chain" copilot --series the-brief
+uv run agsoc coverage add <episode-id> --series the-brief   # after the render
 ```
 
 A hit means: drop the story, or cover it as an explicit **update** that says what
-changed — same `id`, plus `"update": true` and `"updateOf": "<earlier date>"`.
-Record one entry per story after a render.
+changed.
+
+`coverage.json` in this directory is the ledger as it stood before Phase 11 —
+one file shared by every series, which is the scoping defect the move fixed. It
+is not read by anything at render time. It stays as the migration source
+(`agsoc coverage migrate engine/coverage.json --series <slug>`) and as the real
+ledger `tests/test_video_coverage.py` runs its matching assertions against. The
+command retired; the data did not.
 
 ## Working on the engine
 
@@ -95,13 +101,16 @@ Open `scene.html?day=2026-08-14` in a browser and drag the slider: no render, no
 Playwright, instant feedback on layout and copy. `scene.html?plan=1` does the same
 for the plan written by the last `agsoc video render` or `probe`.
 
-Three tests, all offline, all run by hand:
+Two tests, both offline, both run by hand:
 
 ```sh
 node determinism.test.mjs   # __seek(t) is pure — the load-bearing invariant
 node network.test.mjs       # the page cannot reach the network
-node coverage.test.mjs      # the ledger check cannot be talked past
 ```
+
+`coverage.test.mjs` retired with the command it drove. Every assertion in it has
+a counterpart in `tests/test_video_coverage.py`, which is where the ledger's
+guarantee lives now.
 
 `determinism.test.mjs` ships green in the same commit as any engine change. That
 is not a style rule: a frame that depends on anything but `t` cannot be

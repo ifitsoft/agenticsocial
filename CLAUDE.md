@@ -62,11 +62,11 @@ The video render engine — a Node subproject, and the target of the video MVP (
 
 `content/2026-08-12.js` and `content/2026-08-14.js` stay as the engine's regression fixtures — two complete episodes, every builder — loaded through `scene.html?day=…` by `determinism.test.mjs` and by anyone scrubbing the slider. Fixtures, not a workflow.
 
-Tracked: `scene.html`, `engine.js`, `planbuild.js`, `render.mjs`, `coverage.mjs`, `content/*.js`, `coverage.json`, `package*.json`, and the three tests — `determinism.test.mjs`, `network.test.mjs`, `coverage.test.mjs`. Ignored: `node_modules/`, `frames/`, `probe/`, `*.mp4`, `*.png`.
+Tracked: `scene.html`, `engine.js`, `planbuild.js`, `render.mjs`, `content/*.js`, `coverage.json`, `package*.json`, and the two tests — `determinism.test.mjs`, `network.test.mjs`. Ignored: `node_modules/`, `frames/`, `probe/`, `*.mp4`, `*.png`.
 
-The tests are run by hand (`node determinism.test.mjs`, and the same for the other two) — they are not in `uv run pytest`.
+The tests are run by hand (`node determinism.test.mjs`, and the same for the other one) — they are not in `uv run pytest`.
 
-Check `coverage.json` via `node coverage.mjs check <terms>` before writing a new episode — the series must never re-tell a story as if it were new.
+Check coverage via `uv run agsoc coverage check <terms> --series <slug>` before writing a new episode — the series must never re-tell a story as if it were new — and record it with `uv run agsoc coverage add <ep> --series <slug>` after the render. The ledger is per-series (`workspace/series/<slug>/coverage.json`); `engine/coverage.json` is the pre-Phase-11 shared ledger, kept as the migration source and as the real-ledger fixture for `tests/test_video_coverage.py`.
 
 ## workspace/ is gitignored
 

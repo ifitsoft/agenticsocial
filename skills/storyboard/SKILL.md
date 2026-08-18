@@ -89,7 +89,7 @@ below takes `--series <slug>`; without it the CLI looks for a series called
 ### 2. Check coverage
 
 ```
-node engine/coverage.mjs check <keyword> [keyword...]
+uv run agsoc coverage check <keyword> [keyword...] --series <slug>
 ```
 
 It prints either the prior episodes that told the story, or that no entry
@@ -108,8 +108,8 @@ and angle** — a prior *DeepSeek* story about a benchmark is not a prior story
 about DeepSeek's prices.
 
 **A miss is weaker than it sounds, and the tool now says so.** "No entry
-matches this string" means the string is absent from a ledger a person writes
-by hand after each episode ships. It does not mean the story is new. Until
+matches this string" means the string is absent from a ledger that is written
+only after an episode ships. It does not mean the story is new. Until
 2026-08-18 that line read *NOT COVERED. Safe to run as new.*, and `gemini-3.7`
 printed it over three prior stories — an author cleared this series' own
 three-day-old headline on that sentence. **Run the vendor term too, and read
@@ -117,17 +117,19 @@ the titles**, every time. Where a word of your term is already in the ledger
 the check now points at it; that pointer is not a hit, and it does not replace
 reading the titles.
 
-**A hit is not a veto, and "cover it as an update" is not free.** There is no
-`coverage.mjs add`: the ledger is written by hand after an episode ships, so
-you cannot record that you treated a hit as an update. Today's supported branch
-is therefore: **drop the story.** If the user tells you to run it as an update
+**A hit is not a veto, and "cover it as an update" is not free.** The supported
+branch is still **drop the story.** If the user tells you to run it as an update
 anyway, the beat itself must say what has changed since — a date, a number, a
-reversal — and your handoff must name the prior episode id you are updating, so
-the human can put it in the ledger.
+reversal — and your handoff must name the prior episode id you are updating.
+`agsoc coverage add` is the operator's command, run after the episode renders —
+**never yours**, like `approve` and `render`. Pass them the note to record:
+`--note "update of <prior episode id>: <what is new>"`.
 
-(This ledger lives in `engine/coverage.json` today and moves behind an
-`agsoc coverage check` command later. The rule does not move: check before you
-write.)
+**The check is per-series, and `--series` is not optional.** Without it the CLI
+looks in a series called `default`, which is not the one you are writing for: a
+clean answer from the wrong ledger is the worst outcome this check has. A story
+another series told is printed too, and it is **not** counted as a hit — that
+series' history is not this one's.
 
 ### 3. Make the corpus
 
@@ -679,7 +681,7 @@ the step.
 
 ```
 uv run agsoc series list
-node engine/coverage.mjs check <term> [term...]
+uv run agsoc coverage check <term> [term...] --series <slug>
 uv run agsoc video new <episode-id> --series <slug>
 uv run agsoc video ingest <episode-id> --series <slug> --paste <file>
 uv run agsoc video list --series <slug>
