@@ -88,17 +88,30 @@ below takes `--series <slug>`; without it the CLI looks for a series called
 node engine/coverage.mjs check <keyword> [keyword...]
 ```
 
-It prints either `NOT COVERED. Safe to run as new.` or the prior episodes that
-told the story.
+It prints either the prior episodes that told the story, or that no entry
+matches the string.
 
 **Granularity: pass two terms per story — the vendor and the thing.**
 `deepseek v4-pro`, `alibaba qwen3.8-max`. A term is matched as a
 case-insensitive **substring** of each prior story's id, title, note, entities
-and sources, so a short term over-hits (`gemini` finds every Google story ever
-run) and a long one under-hits (`qwen3.8-max pricing` finds nothing, always).
-The vendor term is the safety net; the product term is the answer. Then **read
-the printed title and angle** — a prior *DeepSeek* story about a benchmark is
-not a prior story about DeepSeek's prices.
+and sources, with **separators ignored on both sides** — `gemini-3.7`,
+`Gemini 3.7` and `gemini3.7` are one query, and all three find a ledger entry
+written `Gemini 3.7 Flash` and an id written `gemini-3-7-flash`. So a short
+term over-hits (`gemini` finds every Google story ever run) and a long one
+under-hits (`qwen3.8-max pricing` finds nothing, always). The vendor term is
+the safety net; the product term is the answer. Then **read the printed title
+and angle** — a prior *DeepSeek* story about a benchmark is not a prior story
+about DeepSeek's prices.
+
+**A miss is weaker than it sounds, and the tool now says so.** "No entry
+matches this string" means the string is absent from a ledger a person writes
+by hand after each episode ships. It does not mean the story is new. Until
+2026-08-18 that line read *NOT COVERED. Safe to run as new.*, and `gemini-3.7`
+printed it over three prior stories — an author cleared this series' own
+three-day-old headline on that sentence. **Run the vendor term too, and read
+the titles**, every time. Where a word of your term is already in the ledger
+the check now points at it; that pointer is not a hit, and it does not replace
+reading the titles.
 
 **A hit is not a veto, and "cover it as an update" is not free.** There is no
 `coverage.mjs add`: the ledger is written by hand after an episode ships, so
@@ -128,7 +141,11 @@ fetch and format search results instead, or `--from-source <id>` to pull in an
 existing `agsoc` source. Pass exactly one.
 
 Episode ids are lowercase letters, digits, dots and hyphens — use the date,
-`2026-08-17`.
+`2026-08-17`. **The date is the brief's, not the clock's.** Nothing derives
+meaning from the id, so its only job is to let a person find the episode by the
+news it covers — and a long run that crosses midnight must not switch to
+tomorrow halfway through. If the brief carries no date, use today's and say in
+your handoff which you used.
 
 **If `agsoc video new` says the episode already exists, it is somebody else's
 episode until you are told otherwise.** That directory holds a script a person
@@ -176,6 +193,36 @@ print(repr(t[i - 40:i + 240]))
 PY
 ```
 
+**Do this once for all of them, not once per quote.** An episode has 20-plus
+quotes; 20 round trips through that snippet is 20 chances to paste the wrong
+span back, and it is slow enough that the honest prediction is that nobody
+does it. Write the anchors down as a list and print every span in one pass:
+
+```
+uv run python - <<'PY'
+from pathlib import Path
+SRC = Path('workspace/series/<slug>/episodes/<episode-id>/sources')
+text = {f.stem: f.read_text(encoding='utf-8') for f in SRC.glob('*.txt')}
+anchors = [                       # (src key, an anchor of plain words)
+    ('_pasted', 'raised prices'),
+    ('_pasted', 'largest open'),
+    ('_pasted', 'per 1M input'),
+]
+for key, anchor in anchors:
+    t = text[key]
+    i = t.find(anchor)            # find, not index: one miss must not stop the run
+    print(f'=== {key}  {anchor!r}')
+    print('  NOT FOUND — the anchor is retyped, or the span is in another file'
+          if i < 0 else repr(t[max(0, i - 60):i + 300]))
+PY
+```
+
+`find` rather than `index` on purpose: one bad anchor out of twenty has to
+report itself and let the other nineteen print, or you are back to one round
+trip per quote. Paste each span into its beat and widen it there. What you copy
+from is this output — never the brief you were handed, and never the terminal's
+rendering of the source.
+
 `repr()` is the point: it shows you `\u2011` where the file holds a
 non-breaking hyphen and `\u2019` where it holds a curly apostrophe, so you can
 see for yourself that the bytes are not what the terminal draws. **Pick your
@@ -215,10 +262,12 @@ two beats. Decide this while you are outlining, not after `check` refuses it.
 
 **The arithmetic, which you can do before writing a word:**
 
-- Aim for **22–26 beats**, laid out as **two cold-open beats + four acts of 4–6
-  beats + one signoff**. The cold open and the signoff sit *outside* the acts —
-  that is what makes the arithmetic work, and it is why the per-act count is 4–6
-  rather than 5–7.
+- Aim for **23–27 beats**, laid out as **two cold-open beats + four acts of 5–6
+  beats + one signoff**: `2 + 4×5 + 1 = 23` at the bottom, `2 + 4×6 + 1 = 27` at
+  the top. The cold open and the signoff sit *outside* the acts — they are the
+  two loose beats in that sum. Both committed episodes land inside the range (24
+  and 25 beats), and so does the hold budget below: 23 beats at a typical 3.5s
+  hold is 80s, 27 of them 95s.
 - **If `series.toml` declares no acts** (they ship commented out), use four:
   `"01"`, `"02"`, `"03"`, `"04"`. The act string is free text, the chip prints
   whatever you write, and four is the shape both committed episodes use. One
@@ -394,7 +443,11 @@ Shared optional fields on **every** type: `act`, `hold`, `kicker`, `src`,
 Notes that are each one refusal you will otherwise hit:
 
 - **`title` and `signoff` are the only types that may omit `src` and `quote`.**
-  They assert nothing about the world. Use them for the cold open and the last
+  Nothing checks what they say: a `title`'s `sub` and a `signoff`'s `text` reach
+  the screen unverified. That is an exemption from the checker, **not** from the
+  rule — *Five stories from the last 24 hours* is a sentence a viewer reads, so
+  count your own beats and check the corpus's own dates before you write it.
+  Nobody downstream will. Use these two types for the cold open and the last
   card, and nowhere else.
 - **`kpis`** — `value` is a number (or a string, printed verbatim, if you
   genuinely have no number). `unit` is the **suffix** (`"%"`) and `prefix` the
@@ -479,6 +532,12 @@ where the quote stopped matching, and a `fix` line. Work them one at a time:
   covers `N`, or change the beat to a figure the source states.
 - `manual` — a `custom` beat. It passes on your attestation alone.
 
+**A gap in the claim ids is not a lost claim.** A claim's id is its beat
+number, one-based, so an episode whose beat 2 is the `title` reports `c-001`
+then `c-003`. `title` and `signoff` produce no claim and still consume their
+number, by design, so `c-008` is always the eighth beat of `review`. Count
+beats, not claims.
+
 **Fix the script, never the source.** Editing a corpus file to make a quote
 match is fabrication with extra steps.
 
@@ -506,9 +565,13 @@ uv run agsoc video check <episode-id> --series <slug>
 uv run agsoc video review <episode-id> --series <slug>
 ```
 
-`agsoc video new` prints its own `next:` hint and the hint is correct — it
-carries `--series`. **`approve`, `render`, `preview` and `post` are not on this
-list and are not yours to run.**
+`agsoc video new` prints its own `next:` hint. It carries `--series`, it leads
+with `--paste <file>` — the mode this workflow uses — and it names the other two
+ingest modes on the line below. Run it with your brief's path substituted for
+`<file>`. (Before 2026-08-18 that hint said `--research "<query>"`, which
+fetches from the network: if you are reading a hint that still says so, the file
+you were handed is the input, not a search.) **`approve`, `render`, `preview`
+and `post` are not on this list and are not yours to run.**
 
 ### 9. Hand it over
 
