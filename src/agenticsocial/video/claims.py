@@ -220,9 +220,11 @@ def figure(token: str) -> Figure | None:
     folded = fold(token)
     start, end = _edges(folded)
     body = folded[start:end]
-    sign = ""
+    sign = _MINUS if start and folded[start - 1] == _MINUS else ""
     if body[:1] and unicodedata.category(body[0]) == "Sc":
         body = body[1:]
+    if body[:1] == _MINUS:
+        sign, body = _MINUS, body[1:]
     if not body or unicodedata.category(body[0]) != "Nd":
         return None
 
