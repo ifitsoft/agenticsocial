@@ -98,9 +98,15 @@ VALID = {
     },
     "dumbbell": {
         "type": "dumbbell",
+        # `values` is a pair, positionally aligned with `series` — see
+        # test_the_dumbbell_exemplar_is_the_chart_that_actually_rendered.
         "rows": [
-            ["History-taking", 0.72, 0.72, "on par"],
-            ["Eliciting physical signs", 0.82, 0.58, "rated higher"],
+            {"label": "History-taking", "values": [0.72, 0.72], "note": "on par"},
+            {
+                "label": "Eliciting physical signs",
+                "values": [0.82, 0.58],
+                "note": "rated higher",
+            },
         ],
         "series": ["AMIE (video)", "Primary care physician"],
         "caption": "Evaluator ratings, AMIE against primary care physicians",
@@ -179,11 +185,21 @@ def test_renderable_is_a_subset_of_the_catalogue():
 
 
 def test_renderable_is_exactly_this_phases_types():
-    """precondition: Phase 4 renders eight of the ten catalogue types. This pins
-    the gate so that widening it is a deliberate edit — `dumbbell` and `custom`
-    still have no builder in planbuild.js."""
+    """precondition: Phase 4 Task 3 draws the dumbbell, so nine of the ten
+    catalogue types render. This pins the gate so that widening it is a
+    deliberate edit — `custom` still has no builder in planbuild.js."""
     assert S.RENDERABLE == frozenset(
-        {"statement", "body", "list", "quote", "title", "signoff", "kpis", "jumpChart"}
+        {
+            "statement",
+            "body",
+            "list",
+            "quote",
+            "title",
+            "signoff",
+            "kpis",
+            "jumpChart",
+            "dumbbell",
+        }
     )
 
 
@@ -510,6 +526,139 @@ def test_the_scale_is_read_from_the_beat_not_from_the_rows(series):
     assert script.beats[0].fields["scale"] == 70
 
 
+# --- Phase 4 Task 3: dumbbell rows ----------------------------------------------
+#
+# Spec §7.1 gives `dumbbell` an unconstrained `rows[]`, and Phase 3 left it that
+# way on purpose: the only chart that has ever been drawn builds its rows inline
+# in engine/content/2026-08-12.js and the spec does not name their columns. The
+# builder arrives in this task, so the columns have to be named now — and they
+# are named after that episode, because it is the only evidence there is.
+#
+# `values` is a PAIR aligned with `series[2]`, not two keys. The two numbers are
+# the same measurement of two entities; naming them `a` and `b` would leave the
+# reader to remember which entity is which, and `series` already says.
+
+
+def _engine_dumbbell_rows():
+    """The literal rows from engine/content/2026-08-12.js, read from the file.
+
+    Same rule as `_engine_jump_rows`: retyped evidence stops being evidence the
+    moment the episode changes, which is exactly when it should complain. The
+    episode's fifth column is a boolean `up` flag, and it is deliberately NOT a
+    field here — see test_the_gap_is_derived_from_the_values_not_declared.
+    """
+    src = Path("engine/content/2026-08-12.js").read_text(encoding="utf-8")
+    rows = re.findall(
+        r"\[\s*'([^']*)'\s*,\s*(\.[\d]+)\s*,\s*(\.[\d]+)\s*,\s*'([^']*)'\s*,"
+        r"\s*(true|false)\s*\]",
+        src,
+    )
+    assert rows, "the AMIE dumbbell rows moved out of 2026-08-12.js"
+    return [
+        {"label": lab, "values": [float(a), float(b)], "note": note}
+        for lab, a, b, note, _up in rows
+    ]
+
+
+def test_the_dumbbell_exemplar_is_the_chart_that_actually_rendered():
+    """precondition: the AMIE chart is the only dumbbell that exists. If the
+    exemplar drifts from it, every test below describes a shape nothing draws."""
+    rows = _engine_dumbbell_rows()
+    assert len(rows) == 5, rows
+    assert VALID["dumbbell"]["rows"][0] == rows[0]
+    assert VALID["dumbbell"]["rows"][1] == rows[-1]
+
+
+def test_the_real_amie_dumbbell_validates(series):
+    """precondition: the schema's job is to describe the chart the engine draws,
+    all five rows of it — the four that coincide and the one that separates."""
+    beat = dict(VALID["dumbbell"], rows=_engine_dumbbell_rows())
+    script = _load(series, [beat])
+    assert [r["label"] for r in script.beats[0].fields["rows"]][0] == "History-taking"
+    assert len(script.beats[0].fields["rows"]) == 5
+
+
+def test_the_gap_is_derived_from_the_values_not_declared(series):
+    """precondition: R3. The episode's row spec carries an `up` boolean saying
+    whether the two markers separate, and it is exactly `a !== b` — a second
+    source of truth for something the numbers already state. Declared, it can
+    disagree with them: `up: false` on a row whose values differ would draw one
+    merged marker over two different ratings, which is the hidden-series failure
+    R3 exists to prevent, with the schema's blessing."""
+    assert "up" not in str(S.BEAT_TYPES["dumbbell"]["required"])
+    assert "up" not in S.BEAT_TYPES["dumbbell"]["optional"]
+    script = _load(series, [VALID["dumbbell"]])
+    assert set(script.beats[0].fields["rows"][0]) == {"label", "values", "note"}
+
+
+def _dumb(*rows, **over):
+    return dict(VALID["dumbbell"], rows=list(rows), **over)
+
+
+def test_a_dumbbell_row_may_omit_its_note(series):
+    """precondition: the note is the row's finding in words ("on par"). Not
+    every row has one, and an absent note is an empty cell, not a crash."""
+    script = _load(series, [_dumb({"label": "x", "values": [0.4, 0.6]})])
+    assert "note" not in script.beats[0].fields["rows"][0]
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_a_row_value_above_the_track_is_refused(series, index):
+    """precondition: R2's geometry half. A dumbbell has no `scale` field —
+    spec §7.1 gives it none — because it has no numeric axis at all: a value IS
+    a fraction of the track, and the engine positions each marker at
+    `v * 100 + '%'`. 1.4 is drawn 40% past the right edge, off the card. Both
+    ends are drawn on the same track, so both have to be checked."""
+    values = [0.72, 0.72]
+    values[index] = 1.4
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [_dumb({"label": "off the track", "values": values})])
+    assert "1.4" in str(e.value)
+
+
+@pytest.mark.parametrize("value", [0, 1])
+def test_the_ends_of_the_track_are_legitimate_positions(series, value):
+    """precondition: R2 NEGATIVE, and the falsy rule. The interval is [0, 1]
+    inclusive: a marker at 0 is drawn at the left end of the track, which is on
+    the card, and `if not v` would refuse it."""
+    script = _load(series, [_dumb({"label": "at an end", "values": [value, 0.5]})])
+    assert script.beats[0].fields["rows"][0]["values"][0] == value
+
+
+def test_a_negative_position_is_refused(series):
+    """precondition: the other end. `-0.2 * 100` is `-20%`, off the left."""
+    with pytest.raises(S.ScriptError):
+        _load(series, [_dumb({"label": "below zero", "values": [-0.2, 0.5]})])
+
+
+def test_the_off_track_refusal_names_the_row(series):
+    """precondition: same as the jumpChart case — five rows, one bad."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(
+            series,
+            [
+                _dumb(
+                    {"label": "ok", "values": [0.2, 0.2]},
+                    {"label": "ok too", "values": [0.3, 0.3]},
+                    {"label": "off", "values": [0.3, 9.0]},
+                )
+            ],
+        )
+    assert "[2]" in str(e.value)
+
+
+def test_the_footnote_is_required_on_a_dumbbell(series):
+    """precondition: R2 NEGATIVE (M5). Spec §7.2: a dumbbell "encodes direction
+    only and must carry a `footnote` saying so". The type renders no numbers, so
+    the footnote is the only place the reader is told what the dots mean — an
+    optional one makes the chart claim a precision it does not have."""
+    assert "footnote" in S.BEAT_TYPES["dumbbell"]["required"]
+    beat = {k: v for k, v in VALID["dumbbell"].items() if k != "footnote"}
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    assert "footnote" in str(e.value)
+
+
 @pytest.mark.parametrize("kind", sorted(VALID))
 def test_each_catalogue_type_validates_with_its_documented_fields(series, kind):
     """precondition: spec §7.1 lists the content fields per type. A beat carrying
@@ -716,6 +865,20 @@ WRONG_TYPE = [
     ("dumbbell", "rows", []),
     ("dumbbell", "rows", 0),
     ("dumbbell", "rows", ""),
+    # the engine's own positional tuple: readable to the renderer, unreadable to
+    # the operator who has to notice a swapped pair
+    ("dumbbell", "rows", [["History-taking", 0.72, 0.72, "on par"]]),
+    ("dumbbell", "rows", [{"values": [0.72, 0.72]}]),               # no label
+    ("dumbbell", "rows", [{"label": "", "values": [0.72, 0.72]}]),
+    ("dumbbell", "rows", [{"label": 0, "values": [0.72, 0.72]}]),
+    ("dumbbell", "rows", [{"label": "x"}]),                         # no values
+    ("dumbbell", "rows", [{"label": "x", "values": [0.72]}]),       # only one
+    ("dumbbell", "rows", [{"label": "x", "values": [0.7, 0.7, 0.7]}]),
+    ("dumbbell", "rows", [{"label": "x", "values": "0.7"}]),
+    ("dumbbell", "rows", [{"label": "x", "values": [0.7, "0.7"]}]),
+    ("dumbbell", "rows", [{"label": "x", "values": [0.7, True]}]),
+    ("dumbbell", "rows", [{"label": "x", "values": [False, 0.7]}]),
+    ("dumbbell", "rows", [{"label": "x", "values": [0.7, 0.7], "note": 0}]),
     ("dumbbell", "series", []),
     ("dumbbell", "series", ["only one"]),
     ("dumbbell", "series", ["a", "b", "c"]),

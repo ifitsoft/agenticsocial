@@ -39,14 +39,24 @@ DEFAULT_HOLD = 3.0
 #
 # Phase 4 Task 1 added a builder in engine/planbuild.js for each of the five
 # text types alongside `statement`; Task 2 added the two chart types spec §7.2
-# calls strictly verifiable. The two that remain (`dumbbell`, `custom`) are
-# valid beats with no builder — one needs a two-tone merged marker the engine
-# has CSS for and no function, the other runs arbitrary JS. A name added here
-# without a builder renders a blank card, so
+# calls strictly verifiable; Task 3 adds `dumbbell`, whose two-tone merged
+# marker the engine had CSS for and no function. `custom` is the one that
+# remains — it runs arbitrary JS. A name added here without a builder renders a
+# blank card, so
 # tests/test_video_planbuild.py::test_every_renderable_type_has_a_builder holds
 # this set and `BUILDERS` to each other.
 RENDERABLE = frozenset(
-    {"statement", "body", "list", "quote", "title", "signoff", "kpis", "jumpChart"}
+    {
+        "statement",
+        "body",
+        "list",
+        "quote",
+        "title",
+        "signoff",
+        "kpis",
+        "jumpChart",
+        "dumbbell",
+    }
 )
 
 
@@ -122,14 +132,97 @@ def text_list(v: Any) -> str | None:
     return None
 
 
-def rows(v: Any) -> str | None:
-    """A non-empty list. The per-row shape is deliberately unconstrained — see
-    the module note on `dumbbell` in the Phase 3 report; the committed episode
-    builds its rows inline and the spec does not name their columns."""
+def dumbbell_rows(v: Any) -> str | None:
+    """`rows[{label, values[2], shown?}]` — the AMIE chart, named.
+
+    Phase 3 left this shape unconstrained on purpose: spec §7.1 writes only
+    `rows[]`, and the one chart that had ever been drawn built its rows inline
+    in `engine/content/2026-08-12.js`. Phase 4 Task 3 draws it, so the columns
+    have to be named, and they are named after that episode — the only evidence
+    there is.
+
+    `values` is a PAIR aligned with `series[2]`, not two keys. The two numbers
+    are the same measurement of two entities and `series` already says which is
+    which; `a`/`b` would leave the operator holding that mapping in their head.
+
+    They are FRACTIONS OF THE TRACK, in `[0, 1]`, checked by
+    `dumbbell_within_track`. There is no `scale` field because there is no
+    numeric axis: this type exists for sources that publish ratings rather than
+    scores (spec §7.2), and it renders no numbers at all.
+
+    The episode's row spec has a fifth column, a boolean `up` saying whether the
+    two markers separate. It is deliberately NOT a field: it is exactly
+    `a != b`, and a declared copy of something the numbers already state can
+    disagree with them. `up: false` on a row whose values differ would draw one
+    merged marker over two different ratings — the hidden-series failure spec
+    §7.2 names, with the schema's blessing.
+
+    `note` is the row's finding in words ("on par"). Optional, and free text:
+    a row without one has an empty cell, which is not the same as a crash.
+    """
     if not isinstance(v, list):
         return f"must be a list, got {_type_name(v)}"
     if not v:
         return "must not be empty"
+    for i, item in enumerate(v):
+        if not isinstance(item, dict):
+            return (
+                f"[{i}] must be a mapping with `label` and `values`, got "
+                f"{_type_name(item)}"
+            )
+        if "label" not in item:
+            return f"[{i}] needs a `label`"
+        if not _is_filled(item["label"]):
+            return (
+                f"[{i}] `label` must be a non-empty string, got "
+                f"{_type_name(item['label'])}"
+            )
+        if "values" not in item:
+            return f"[{i}] needs `values`"
+        values = item["values"]
+        if not isinstance(values, list):
+            return f"[{i}] `values` must be a list, got {_type_name(values)}"
+        if len(values) != 2:
+            return (
+                f"[{i}] `values` must be one number per series, so exactly two, "
+                f"got {len(values)}"
+            )
+        for k, value in enumerate(values):
+            if not _is_number(value):
+                return (
+                    f"[{i}] `values[{k}]` must be a number, got {_type_name(value)}"
+                )
+        if "note" in item and not _is_str(item["note"]):
+            return f"[{i}] `note` must be a string, got {_type_name(item['note'])}"
+    return None
+
+
+def dumbbell_within_track(payload: dict) -> str | None:
+    """Every position is a fraction of the track, so `[0, 1]` inclusive.
+
+    The same geometry rule as `jump_rows_within_scale`, and it needs no `scale`
+    to state it: the engine positions each marker at `value * 100 + '%'`, so
+    `1.4` is drawn 40% past the right edge and `-0.2` off the left. Inclusive at
+    both ends — a marker at 0 or at 1 is at an end of the track, which is on the
+    card — and `0` is a real position, so this may not be written `if not v`.
+    """
+    for i, row in enumerate(payload.get("rows", [])):
+        if not isinstance(row, dict):
+            continue  # dumbbell_rows has already refused it
+        values = row.get("values")
+        if not isinstance(values, list):
+            continue
+        for k, value in enumerate(values):
+            if not _is_number(value):
+                continue
+            if not 0 <= value <= 1:
+                return (
+                    f"`rows[{i}]` `values[{k}]` is {value!r}, outside the track "
+                    "— a dumbbell has no `scale` because it has no numeric "
+                    "axis: a value is a fraction of the track, from 0 at the "
+                    "left end to 1 at the right, and the engine draws each "
+                    "marker at `value * 100%`"
+                )
     return None
 
 
@@ -341,13 +434,17 @@ BEAT_TYPES: dict[str, dict] = {
     },
     "dumbbell": {
         "required": {
-            "rows": rows,
+            "rows": dumbbell_rows,
             "series": series_pair,
             "caption": text,
+            # Spec §7.2: a dumbbell "encodes direction only and must carry a
+            # footnote saying so". It renders no numbers, so the footnote is the
+            # only place the reader is told what the markers mean.
             "footnote": text,
         },
         "optional": {},
         "cited": False,
+        "cross": dumbbell_within_track,
     },
     "quote": {
         "required": {"text": text, "attribution": text},

@@ -313,6 +313,19 @@ function requiredHold(b) {
     if (!rows.length) return 0;
     return round3(JUMP_D0 + (rows.length - 1) * JUMP_STAGGER + JUMP_GROW_D0 + JUMP_GROW_DUR);
   }
+  if (b.type === 'dumbbell') {
+    /* Only the rows that SEPARATE. A merged marker is placed at its position
+     * and revealed — scale and opacity, no travel — so there is nothing it can
+     * fail to finish. A separating row animates one marker out of the other,
+     * and cut off early it draws a gap narrower than the one authored: on a
+     * chart that encodes direction only, the width of that gap is the whole
+     * claim, and a half-drawn one reads as "on par" on a row that is not. */
+    var gaps = dumbbellGaps(planDumbbellRows(b));
+    if (!gaps.length) return 0;
+    return round3(
+      DUMB_D0 + gaps[gaps.length - 1] * DUMB_STAGGER + DUMB_MOVE_D0 + DUMB_MOVE_DUR,
+    );
+  }
   return 0;
 }
 
@@ -458,6 +471,94 @@ function buildJumpChart(b, index) {
   };
 }
 
+/* ============================ dumbbell ============================
+ *
+ * The type that renders NO numbers, and the one whose missing property is the
+ * point. Spec §7.2: it "encodes direction only and must carry a footnote saying
+ * so. It is the correct type when a source publishes ratings rather than
+ * scores." engine.js:121's comment calling jumpChart "a before→after dumbbell"
+ * is misleading — they are different types, and the difference is a
+ * VERIFICATION difference (a jumpChart's figures must be in a source; a
+ * dumbbell has no figures) rather than a visual one.
+ *
+ * A row is refused off the track by script.py, and no citation is required:
+ * there is no number on this card for a source to contain.
+ */
+var DUMB_D0 = 0.55;
+
+function planDumbbellRows(b) {
+  var out = [];
+  var rows = b.rows || [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var v = r.values || [];
+    /* the engine's positional tuple, built here — same split as jumpChart:
+     * mappings are what an operator writes, tuples are what the engine reads. */
+    out.push([r.label, v[0], v[1], typeof r.note === 'string' ? r.note : '']);
+  }
+  return out;
+}
+
+/* One legend entry: the swatch, then the name as TEXT. Not innerHTML — the
+ * series names are authored strings and 2026-08-12's own legend is the one
+ * place the committed episode writes markup around them. */
+function planLegendEntry(leg, swatchCss, swatchCls, label) {
+  var s = E('span', null, { p: leg });
+  E('i', swatchCls, { p: s, css: swatchCss });
+  E('span', null, { p: s, text: label });
+}
+
+/* Whether any row's markers separate. Also what decides the requiredHold: a
+ * merged marker is placed and revealed, it does not travel. */
+function dumbbellGaps(rows) {
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i][1] !== rows[i][2]) out.push(i);
+  }
+  return out;
+}
+
+function buildDumbbell(b, index) {
+  requireCountFitsHold(b, index);
+  var rows = planDumbbellRows(b);
+  var series = b.series || [];
+  var merged = dumbbellGaps(rows).length < rows.length;
+  return function () {
+    planKicker(b, 0.02);
+    /* The caption is the sentence the chart illustrates — "Evaluators rated it
+     * on par with primary care physicians" in the episode — so it is `.body`,
+     * the class that paragraph uses, and prose like every other authored
+     * field. */
+    fade(E('div', 'body', prose(b.caption)), 0.05, { dur: 0.7 });
+    E('div', 'sp-s');
+    /* `series[2]` is the only thing that says which colour is which entity. On
+     * a chart with no axis and a two-tone marker, an unlabelled colour is not a
+     * series, it is a dot. The third swatch appears only when some row actually
+     * merges: a key to a marker that is not on the card is noise. */
+    var leg = E('div', 'legend');
+    planLegendEntry(leg, { background: 'var(--blue)' }, null, series[0]);
+    planLegendEntry(leg, { background: 'var(--cyan)' }, null, series[1]);
+    if (merged) planLegendEntry(leg, null, 'split', 'both');
+    fade(leg, 0.3, { dur: 0.6, dy: 12 });
+
+    var chart = E('div', 'chart');
+    dumbbell(rows, DUMB_D0, chart);
+
+    /* The axis names the DIRECTION and nothing else — no ticks, no numbers,
+     * which is the whole type. The words are the renderer's, not the plan's:
+     * they state no magnitude, and without them a reader has no way to know
+     * which end of an unlabelled track is the good one. Set as text, so the
+     * arrow is a character rather than an entity. */
+    var ax = E('div', 'axis', { p: chart });
+    E('span', null, { p: ax, text: 'lower' });
+    E('span', null, { p: ax, text: 'higher →' });
+    var after = DUMB_D0 + rows.length * DUMB_STAGGER;
+    fade(ax, after + 0.6, { dur: 0.5, dy: 0, blur: 0 });
+    var ft = E('div', 'foot', { p: chart, text: b.footnote });
+    fade(ft, after + 0.8, { dur: 0.5, dy: 10, blur: 0 });
+  };
+}
+
 /* Data, not branches — and the set of keys here is the same set as
  * script.py's RENDERABLE. A name in one and not the other is a beat that
  * validates, resolves, reaches the stage and draws nothing. */
@@ -470,6 +571,7 @@ var BUILDERS = {
   signoff: buildSignoff,
   kpis: buildKpis,
   jumpChart: buildJumpChart,
+  dumbbell: buildDumbbell,
 };
 
 function buildFromPlan(plan) {

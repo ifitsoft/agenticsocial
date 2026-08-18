@@ -406,7 +406,9 @@ def test_review_exits_zero_with_unrenderable_beats(ws, series):
         {
             "type": "dumbbell",
             "hold": 4.0,
-            "rows": [["History-taking", 0.72, 0.72, "on par"]],
+            "rows": [
+                {"label": "History-taking", "values": [0.72, 0.72], "note": "on par"}
+            ],
             "series": ["AMIE (video)", "Primary care physician"],
             "caption": "Evaluator ratings, AMIE against primary care physicians",
             "footnote": "Direction only.",
@@ -426,20 +428,11 @@ def test_review_counts_the_unrenderable_beats_by_type(ws, series):
     beats = statements([3.0, 3.0]) + [
         {"type": "custom", "hold": 3.0, "js": "x\n"},
         {"type": "custom", "hold": 3.0, "js": "y\n"},
-        {
-            "type": "dumbbell",
-            "hold": 3.0,
-            "rows": [["History-taking", 0.72, 0.72, "on par"]],
-            "series": ["AMIE (video)", "Primary care physician"],
-            "caption": "Evaluator ratings",
-            "footnote": "Direction only.",
-        },
     ]
     episode(series, beats)
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
-    assert "3 beats" in out and "cannot" in out.lower()
+    assert "2 beats" in out and "cannot" in out.lower()
     assert "custom (2)" in out
-    assert "dumbbell (1)" in out
 
 
 def test_review_says_nothing_about_rendering_when_everything_renders(ws, series):
@@ -493,7 +486,9 @@ EXEMPLARS = {
         "quote": "FrontierCode 1.1 rises from 34.4 to 43.6",
     },
     "dumbbell": {
-        "rows": [["History-taking", 0.72, 0.72, "on par"]],
+        "rows": [
+            {"label": "History-taking", "values": [0.72, 0.72], "note": "on par"}
+        ],
         "series": ["AMIE (video)", "Primary care physician"],
         "caption": "Evaluator ratings, AMIE against primary care physicians",
         "footnote": "Direction only.",
@@ -534,9 +529,8 @@ def test_a_full_catalogue_script_still_exits_zero(ws, series):
     episode(series, one_of_each())
     result = run("video", "review", "2026-08-17", "--series", "the-brief")
     assert result.exit_code == 0
-    # two of the ten catalogue types are still unbuilt after Phase 4:
-    # dumbbell and custom.
-    assert "2 beats" in result.output and "cannot" in result.output.lower()
+    # one of the ten catalogue types is still unbuilt after Task 3: custom.
+    assert "1 beat" in result.output and "cannot" in result.output.lower()
 
 
 # --- R5: review never writes ----------------------------------------------------

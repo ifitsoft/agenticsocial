@@ -158,6 +158,62 @@ function jumpChart(rows,max,d0,parent){
   });
 }
 
+/* Dumbbell — two entities on one UNLABELLED track.
+   rows: [label, a, b, note] · positions are fractions of the track (0..1).
+
+   Extracted from content/2026-08-12.js, which built the AMIE chart inline and
+   is the only dumbbell that has ever rendered. Two things about it are the
+   reason the type exists, and neither is decoration:
+
+   1. There is no numeric axis and no scale argument. Spec §7.2: this is the
+      correct type when a source publishes RATINGS rather than scores, so a
+      value is a position, not a figure, and nothing here prints one. The
+      footnote is where "direction only" gets said out loud.
+   2. Where the two values coincide, ONE two-tone marker — the episode's own
+      comment: "no gap: one two-tone marker rather than two dots stacked
+      invisibly". Two dots at the same left stack, the second hides the first,
+      and the chart shows one series while claiming to compare two. The absent
+      gap IS the finding, so it has to be drawn as something.
+
+   `gap` is derived from the values, never declared: a flag can disagree with
+   the numbers it describes, and the disagreement is invisible on screen. */
+const DUMB_STAGGER=.22, DUMB_MOVE_D0=.28, DUMB_MOVE_DUR=.9;
+function dumbbell(rows,d0,parent){
+  rows.forEach((r,i)=>{
+    const [lab,a,b,note]=r;
+    const gap=a!==b;
+    const row=E('div','crow',{p:parent});
+    const L=E('div','lab',{p:row,text:lab});
+    /* `.note.up` is the accent colour — it marks the row that separated, which
+       is the row the chart is about. */
+    const N=E('div','note'+(gap?' up':''),{p:row,text:note||''});
+    const tr=E('div','track',{p:row});
+    const t0=d0+i*DUMB_STAGGER;
+    fade(L,t0,{dur:.5,dy:10,blur:5});
+    draw(tr,t0+.05,.6);
+    if(gap){
+      // a real gap: the first series separates out from the second's marker
+      const dB=E('div','dot b',{p:row});
+      const dA=E('div','dot a',{p:row});
+      dB.style.left=b*100+'%';
+      an(t0+DUMB_MOVE_D0,DUMB_MOVE_DUR,EZ.quint,p=>{
+        dB.style.opacity=clamp(p*3);dB.style.transform=`scale(${lerp(.4,1,p)})`;
+        dA.style.left=lerp(b*100,a*100,p)+'%';
+        dA.style.opacity=clamp(p*3);dA.style.transform=`scale(${lerp(.4,1,p)})`;
+      });
+    }else{
+      // no gap: one two-tone marker rather than two dots stacked invisibly
+      const d=E('div','dot merged',{p:row});
+      d.style.left=a*100+'%';
+      an(t0+DUMB_MOVE_D0,.7,EZ.back,p=>{
+        d.style.opacity=clamp(p*3);
+        d.style.transform=`scale(${lerp(.25,1,p)})`;
+      });
+    }
+    an(t0+1,.4,EZ.out,p=>{N.style.opacity=p});
+  });
+}
+
 /* ============================ seek ============================ */
 function seek(t){
   t=clamp(t,0,TOTAL-.0001);

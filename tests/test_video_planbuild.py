@@ -349,6 +349,17 @@ JUMP = {
     "quote": "FrontierCode 1.1 rises from 34.4 to 43.6",
 }
 
+DUMBBELL = {
+    "rows": [
+        {"label": "History-taking", "values": [0.72, 0.72], "note": "on par"},
+        {"label": "Eliciting physical signs", "values": [0.82, 0.58],
+         "note": "rated higher"},
+    ],
+    "series": ["AMIE (video)", "Primary care physician"],
+    "caption": "Evaluator ratings, AMIE against primary care physicians",
+    "footnote": "Direction only — the source reports evaluator ratings, not scores.",
+}
+
 RENDERABLE_BEATS = {
     "statement": {"text": "a statement"},
     "body": {"text": "a body line"},
@@ -358,6 +369,7 @@ RENDERABLE_BEATS = {
     "signoff": {},
     "kpis": KPIS,
     "jumpChart": JUMP,
+    "dumbbell": DUMBBELL,
 }
 
 
@@ -761,6 +773,178 @@ def test_the_scale_reaches_the_engine_as_the_track_maximum():
     assert dots and dots[0]["css"].get("left") == "50%"
 
 
+# --- Task 3: the dumbbell --------------------------------------------------------
+#
+# Extracted from engine/content/2026-08-12.js, which is the only dumbbell that
+# has ever rendered. Two properties are the reason the type exists at all, and
+# both are load-bearing:
+#
+#   1. direction only, no numeric axis — spec §7.2 says this is the correct type
+#      when a source publishes RATINGS rather than scores;
+#   2. where two values coincide, ONE two-tone marker. The episode's own comment
+#      says why: "no gap: one two-tone marker rather than two dots stacked
+#      invisibly". A stacked pair hides a series, and a chart that silently omits
+#      a series is worse than one that refuses to draw.
+
+
+def rendered_text(tree: dict) -> str:
+    return " ".join(shown(n) for n in flatten(tree))
+
+
+@needs_node
+def test_a_dumbbell_renders_no_numbers():
+    """R2 (M4). The type exists BECAUSE the source published ratings rather than
+    scores: 0.72 is a position on an unlabelled track, not a figure anyone
+    measured. Printing it beside the label would manufacture the precision the
+    footnote exists to deny — the same failure as display rounding, arrived at
+    by putting a number on screen that no source ever stated."""
+    tree = build([beat("dumbbell", **DUMBBELL)])[0]["tree"]
+    text = rendered_text(tree)
+    for glyph in ["0.72", "0.82", "0.58", "72", "82", "58"]:
+        assert glyph not in text, f"{glyph!r} reached the screen: {text}"
+
+
+@needs_node
+def test_the_positions_reach_the_markers_as_geometry_not_as_text():
+    """R2's positive half. The numbers do their whole job through `left`, which
+    is the difference between a chart and a table."""
+    tree = build([beat("dumbbell", **DUMBBELL)])[0]["tree"]
+    lefts = [n["css"].get("left") for n in flatten(tree) if n["cls"].startswith("dot")]
+    assert "72%" in lefts
+
+
+@needs_node
+def test_coincident_values_draw_one_two_tone_marker():
+    """R3 (M6), and the reason this type has its own CSS. Two dots at the same
+    position stack, the second hides the first, and the chart shows one series
+    while claiming to compare two. `.dot.merged` is the two-tone marker
+    scene.html already styles for exactly this."""
+    tree = build([beat("dumbbell", **{**DUMBBELL, "rows": [
+        {"label": "History-taking", "values": [0.72, 0.72], "note": "on par"},
+    ]})])[0]["tree"]
+    assert len(find(tree, "dot merged")) == 1
+    assert not find(tree, "dot a") and not find(tree, "dot b")
+
+
+@needs_node
+def test_distinct_values_draw_two_separate_dots():
+    """R3 NEGATIVE (M7). Merging unconditionally is the same defect pointed the
+    other way: one marker where the two series disagree hides the gap, which on
+    this chart IS the finding."""
+    tree = build([beat("dumbbell", **{**DUMBBELL, "rows": [
+        {"label": "Eliciting physical signs", "values": [0.82, 0.58]},
+    ]})])[0]["tree"]
+    assert not find(tree, "dot merged")
+    assert len(find(tree, "dot a")) == 1 and len(find(tree, "dot b")) == 1
+
+
+@needs_node
+def test_the_merged_marker_is_decided_per_row_not_per_chart():
+    """R3 + R3 NEGATIVE in one chart, which is the real AMIE shape: four rows
+    that coincide and one that separates. A decision taken once for the whole
+    beat draws the wrong marker on one half of it either way."""
+    tree = build([beat("dumbbell", **DUMBBELL)])[0]["tree"]
+    assert len(find(tree, "dot merged")) == 1
+    assert len(find(tree, "dot a")) == 1 and len(find(tree, "dot b")) == 1
+
+
+@needs_node
+def test_two_markers_at_zero_still_merge():
+    """The falsy rule inside R3. `0` is a legitimate position — "neither series
+    was rated on this at all" — and a merge test written `if (a && a === b)`
+    stacks two invisible dots at the left edge instead."""
+    tree = build([beat("dumbbell", **{**DUMBBELL, "rows": [
+        {"label": "at zero", "values": [0, 0]},
+    ]})])[0]["tree"]
+    merged = find(tree, "dot merged")
+    assert len(merged) == 1
+    assert merged[0]["css"].get("left") == "0%"
+
+
+@needs_node
+def test_the_footnote_reaches_the_stage_as_text_and_is_animated():
+    """R2 NEGATIVE (M5). "Renders no numbers" must not become "renders nothing
+    that explains itself". Spec §7.2 requires the footnote precisely because the
+    chart has no axis: it is where "direction only" is said out loud, and the
+    reader has nothing else to go on."""
+    scene = build([beat("dumbbell", **DUMBBELL)])[0]
+    foot = find(scene["tree"], "foot")
+    assert foot, "the footnote never reached the stage"
+    assert foot[0]["html"] is None
+    assert foot[0]["text"] == DUMBBELL["footnote"]
+    assert any(a["cls"] == "foot" for a in scene["anims"] if a.get("cls"))
+
+
+@needs_node
+def test_both_series_are_named_on_the_card():
+    """`series[2]` is the only thing that says which colour is which entity. On
+    a chart with no numeric axis and a two-tone marker, an unlabelled colour is
+    not a series — it is a dot."""
+    tree = build([beat("dumbbell", **DUMBBELL)])[0]["tree"]
+    text = rendered_text(tree)
+    assert "AMIE (video)" in text and "Primary care physician" in text
+
+
+@needs_node
+def test_the_caption_is_rendered_as_prose():
+    """The caption is the sentence the chart illustrates, and it is authored
+    text like every other prose field — the innerHTML defect Task 1 closed
+    applies to it in full."""
+    tree = build([beat("dumbbell", **{**DUMBBELL,
+                                      "caption": "R&D on **video** <consults>"})])[0]["tree"]
+    assert "R&amp;D on <b>video</b> &lt;consults&gt;" in rendered_text(tree)
+
+
+@needs_node
+def test_a_dumbbell_row_label_is_set_as_text_not_html():
+    """R3's sibling from Task 2, on the new type. A `<tag>` in a row label set
+    through innerHTML vanishes from the frame while script.yaml still says it."""
+    tree = build([beat("dumbbell", **{**DUMBBELL, "rows": [
+        {"label": "AT&T <legacy>", "values": [0.4, 0.4]},
+    ]})])[0]["tree"]
+    lab = find(tree, "lab")[0]
+    assert lab["html"] is None and lab["text"] == "AT&T <legacy>"
+
+
+@needs_node
+def test_the_rows_keep_the_order_they_were_authored_in():
+    """Same rule as jumpChart: the rows are a reading order, and a chart that
+    reorders them tells a different story with the same dots."""
+    rows = [{"label": n, "values": [0.5, 0.5]} for n in ["first", "second", "third"]]
+    tree = build([beat("dumbbell", **{**DUMBBELL, "rows": rows})])[0]["tree"]
+    assert [n["text"] for n in find(tree, "lab")] == ["first", "second", "third"]
+
+
+@needs_node
+def test_a_dumbbell_whose_markers_cannot_finish_separating_is_refused():
+    """R1 on the new type. A row whose values differ animates one marker OUT of
+    the other; cut off early it is drawn part-way, and a gap drawn at half its
+    authored width is the "on par" finding on a row that is not on par. The
+    figure this beat can get wrong is its direction."""
+    rows = [{"label": f"row {i}", "values": [0.8, 0.4]} for i in range(4)]
+    msg = refuses([beat("dumbbell", hold=1.0, **{**DUMBBELL, "rows": rows})])
+    assert "dumbbell" in msg
+
+
+@needs_node
+def test_a_dumbbell_whose_rows_all_coincide_is_unaffected_by_the_hold():
+    """R1 NEGATIVE on the new type. A merged marker does not travel: it is
+    placed at its position and revealed. There is nothing to finish, so there is
+    no hold it can fail to fit."""
+    rows = [{"label": f"row {i}", "values": [0.5, 0.5]} for i in range(4)]
+    scene = build([beat("dumbbell", hold=0.2, **{**DUMBBELL, "rows": rows})])[0]
+    assert scene["tree"]["kids"]
+
+
+@needs_node
+def test_a_dumbbell_needs_no_citation():
+    """R1 NEGATIVE from Task 2. `dumbbell` is not in the spec's cited pair, and
+    for a reason that is the whole design of the type: it renders no numbers, so
+    there is no number that has to be in a source."""
+    scene = build([beat("dumbbell", **DUMBBELL)])[0]
+    assert scene["tree"]["kids"]
+
+
 # --- Task 3 Step 0: a beat that runs out of time --------------------------------
 #
 # Leader-verified against the real renderer, sampling the LAST frame render.mjs
@@ -954,10 +1138,9 @@ def test_an_unrenderable_type_still_fails_loudly():
     silent skip: a `dumbbell` beat that reaches Node is a plan.py bug, and a
     beat quietly missing from the video is the hardest kind to notice.
 
-    `dumbbell`, not `kpis`: Phase 4 Task 2 draws kpis, and a `kpis` beat with no
-    items now fails the CITATION check instead — same exit code, different gate,
-    so the assertion would have gone vacuous. The exemplar moves with the gate,
-    the way test_video_review's does."""
+    `custom`, not `dumbbell`: Task 3 draws the dumbbell. The exemplar moves with
+    the gate, the way test_video_review's does — the guard has to keep working
+    while ANY catalogue type is still unbuilt."""
     proc = subprocess.run(
         ["node", "-e", HARNESS],
         capture_output=True,
@@ -970,10 +1153,10 @@ def test_an_unrenderable_type_still_fails_loudly():
                     "episode": "e",
                     "series": "s",
                     "byline": "",
-                    "beats": [beat("dumbbell")],
+                    "beats": [beat("custom")],
                 }
             ),
         },
     )
     assert proc.returncode != 0
-    assert "dumbbell" in proc.stderr
+    assert "custom" in proc.stderr

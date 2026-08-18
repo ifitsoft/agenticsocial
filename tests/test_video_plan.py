@@ -218,10 +218,20 @@ def test_building_a_plan_never_rewrites_the_script(series):
 
 
 def test_supported_beats_is_exactly_this_phases_types():
-    """Phase 4 widens the gate from one type to eight. Pinned so that widening
+    """Phase 4 widens the gate from one type to nine. Pinned so that widening
     it again is a deliberate edit and not a side effect of adding a builder."""
     assert SUPPORTED_BEATS == frozenset(
-        {"statement", "body", "list", "quote", "title", "signoff", "kpis", "jumpChart"}
+        {
+            "statement",
+            "body",
+            "list",
+            "quote",
+            "title",
+            "signoff",
+            "kpis",
+            "jumpChart",
+            "dumbbell",
+        }
     )
 
 
