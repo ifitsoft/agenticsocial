@@ -638,3 +638,40 @@ def test_ingest_with_an_undecodable_episode_id_fails_cleanly(prepared):
     )
     assert result.exit_code == 1
     assert "UTF-8" in result.output
+
+
+# --- phase 6 task 2: the hint a command prints must be a command that runs ----------
+#
+# D-109: an author trusts the tool over the doc. `video new`'s "next" line
+# omitted `--series`, so following it inside any series other than `default`
+# fails — and the skill telling you to pass `--series` loses the argument
+# against the CLI's own suggestion.
+
+
+def test_video_new_hints_the_next_command_with_its_series(ws):
+    run("series", "new", "the-brief")
+    result = run("video", "new", "2026-08-14", "--series", "the-brief")
+    assert result.exit_code == 0
+    hint = [ln for ln in result.output.splitlines() if ln.startswith("next:")]
+    assert hint, result.output
+    assert "--series the-brief" in hint[0]
+
+
+def test_the_next_command_video_new_prints_actually_runs(ws, tmp_path):
+    """precondition: the hint is executed, not pattern-matched. `--research`
+    would need the network, so only that one flag is swapped for the offline
+    `--paste`; the command name, the episode id and the series all come from
+    the hint's own bytes."""
+    run("series", "new", "the-brief")
+    result = run("video", "new", "2026-08-14", "--series", "the-brief")
+    hint = next(ln for ln in result.output.splitlines() if ln.startswith("next:"))
+    brief = tmp_path / "brief.md"
+    brief.write_text("DeepSeek raised prices.", encoding="utf-8")
+    argv = hint[len("next:"):].split()
+    assert argv[0] == "agsoc"
+    argv = argv[1:argv.index("--research")] + ["--paste", str(brief)]
+    ingested = run(*argv)
+    assert ingested.exit_code == 0, ingested.output
+    assert (
+        ws.series_dir / "the-brief" / "episodes" / "2026-08-14" / "sources" / "_pasted.txt"
+    ).exists()

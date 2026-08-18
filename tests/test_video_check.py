@@ -770,3 +770,147 @@ def test_check_reports_a_missing_episode_rather_than_a_traceback(series):
     assert result.exit_code == 1
     assert "2026-01-01" in result.output
     assert "Traceback" not in result.output
+
+
+# --- phase 6 task 2: `check` reports the runtime (D-109 #3, #4) -----------------------
+#
+# `review` was the only command that mentioned runtime, and an agent that runs
+# `check`, sees exit 0 and stops never learns its episode is a third of its
+# target — which is exactly the state the one committed script.yaml is in. The
+# runtime line is a REPORT here, as it is in `review`: it never changes the exit
+# code, in either direction.
+
+
+def write_script_with_pace(ep, beats, pace):
+    body = yaml.safe_dump({"beats": list(beats)}, sort_keys=False, allow_unicode=True)
+    ep.script_path.write_text(
+        f"---\nepisode: '{ep.id}'\nseries: the-brief\nstatus: draft\n"
+        f"pace: {pace}\n---\n{body}",
+        encoding="utf-8",
+    )
+
+
+def test_check_reports_the_runtime_and_the_tolerance(series):
+    """precondition: a single 4.0s beat at pace 1.0 against a 120s ± 8s series —
+    every claim passes and the episode is 116 seconds short. The claim gate and
+    the length report are independent, and `check` must say both."""
+    episode(series, [clean_beat(hold=4.0)])
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 0, result.output
+    assert "holds 4.0s × pace 1.0 = runtime 4.0s" in result.output
+    assert "target 120s ± 8s · OUT OF TOLERANCE (-116.0s)" in result.output
+
+
+def test_check_does_not_refuse_an_out_of_tolerance_episode(series):
+    """precondition NEGATIVE (M6, R4's negative half). Spec §11 puts the gate at
+    `approve`; a `check` that exits non-zero on length would refuse an episode
+    for something that is not a claim, and it is the claim ledger the exit code
+    speaks for."""
+    episode(series, [clean_beat(hold=4.0)])
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 0, result.output
+    assert "verified, none open" in result.output
+
+
+def test_check_reports_a_runtime_that_is_within_tolerance(series):
+    """precondition NEGATIVE: the line is not a fixed string of doom. 30 beats
+    of 4.0s at pace 1.0 is 120.0s dead on target."""
+    ep = create_episode(series, EP)
+    corpus.write_document(
+        ep, SOURCE, url="https://x.example/y", key="local-ai-zone",
+        fetched_at="2026-08-17",
+    )
+    write_script_with_pace(ep, [clean_beat(hold=4.0)] * 30, 1.0)
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 0, result.output
+    assert "holds 120.0s × pace 1.0 = runtime 120.0s" in result.output
+    assert "within tolerance (+0.0s)" in result.output
+
+
+def test_check_reports_the_runtime_even_when_a_claim_fails(series):
+    """precondition: the fabricated figure makes this exit 1. An author whose
+    check refuses must still see the length, or they fix the claim, re-run, see
+    green and ship 4 seconds of video."""
+    episode(series, [fabricated_beat(hold=4.0)])
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 1, result.output
+    assert "runtime 4.0s" in result.output
+
+
+def test_check_and_review_report_the_same_runtime_lines(series):
+    """precondition: two commands printing one fact from two code paths is two
+    facts as soon as one changes. Both read `plan.check_runtime`."""
+    episode(series, [clean_beat(hold=4.0), clean_beat(hold=2.6)])
+    checked = run("video", "check", EP, "--series", "the-brief")
+    reviewed = run("video", "review", EP, "--series", "the-brief")
+    lines = [ln for ln in checked.output.splitlines() if "runtime" in ln or "target" in ln]
+    assert lines, checked.output
+    for line in lines:
+        assert line in reviewed.output, f"{line!r} is not in review's output"
+
+
+# --- phase 6 task 2: the two modules agree about citation (D-109 #1) -----------------
+
+
+UNCITED_TYPES = {
+    "statement": {"type": "statement", "text": "The flagship moved to GA."},
+    "body": {"type": "body", "text": "The flagship moved to GA."},
+    "list": {"type": "list", "items": ["The flagship moved to GA."]},
+    "quote": {"type": "quote", "text": "we moved to GA", "attribution": "DeepSeek"},
+}
+
+
+@pytest.mark.parametrize("kind", sorted(UNCITED_TYPES))
+def test_check_refuses_a_beat_of_any_extracted_type_that_cites_nothing(series, kind):
+    """precondition: R2. `claims.EXTRACTED_TYPES` is the list of types `check`
+    demands a source from, and it is the list the skill's "every beat except
+    title and signoff carries src and quote" is written against. Pinned
+    behaviourally so that a change to citation in `script.py` cannot silently
+    take one of these off the list."""
+    episode(series, [UNCITED_TYPES[kind]])
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 1, result.output
+    assert "no_source" in result.output
+
+
+@pytest.mark.parametrize(
+    "beat",
+    [
+        {"type": "title", "sub": "Five stories from the last 24 hours."},
+        {"type": "signoff", "text": "Same time tomorrow."},
+    ],
+)
+def test_an_exempt_type_is_asked_for_no_citation(series, beat):
+    """precondition NEGATIVE (R2's negative half): the two exempt types stay
+    exempt. Filing a claim on a title card would refuse every episode on its
+    first beat.
+
+    Asserted against the ledger, not the screen: `check` prints the path it
+    wrote, and a tmp_path carrying this test's own name would satisfy a
+    substring assertion on the output all by itself."""
+    episode(series, [beat, clean_beat()])
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 0, result.output
+    verdicts = [c["mechanical"]["verdict"] for c in ledger_of(series)["claims"]]
+    assert verdicts == ["pass"]
+
+
+def test_check_passes_a_cited_dumbbell_and_refuses_an_uncited_one(series):
+    """precondition: the end-to-end half of the dumbbell decision. The uncited
+    one no longer reaches `check` at all — the loader refuses it — and the
+    message an author gets names the two fields to add."""
+    dumb = {
+        "type": "dumbbell",
+        "rows": [{"label": "History-taking", "values": [0.72, 0.72]}],
+        "series": ["AMIE", "Primary care physician"],
+        "caption": "Evaluator ratings, AMIE against primary care physicians",
+        "footnote": "Direction only.",
+    }
+    episode(series, [dict(dumb, src="local-ai-zone", quote="DeepSeek's 1.6T MoE flagship")])
+    passed = run("video", "check", EP, "--series", "the-brief")
+    assert "dumbbell" in passed.output
+
+    write_script(load_episode(series, EP), [dumb])
+    refused = run("video", "check", EP, "--series", "the-brief")
+    assert refused.exit_code == 1, refused.output
+    assert "src" in refused.output and "quote" in refused.output
