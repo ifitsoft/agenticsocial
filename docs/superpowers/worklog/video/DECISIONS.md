@@ -3271,3 +3271,73 @@ the orchestrator**, which reads 24 replies by hand.
   the counts. **Fifth instance of the shape, and the second inside one phase.**
 - **`--refutation "$1.32"` records `.32`.** The shell eats it and the verdict
   looks entirely normal — a claim record that misquotes its own evidence.
+
+## D-123 · phase 9 / task 3 · the sixth instance, and the rule that predicts the seventh
+
+Task 3 fixed the fifth overclaim and **found a sixth by enumerating instead of
+grepping**: `_print_overrides` printed
+
+```
+c-001    pass — "reason" — Ali Abdukarim
+```
+
+on a claim pass 2 had **refuted**.
+
+**That is worse than the fifth.** It is the line an operator reads *while
+signing*, and `pass` beside an override reads as *"it was fine anyway"* — which
+is exactly how §8.4's written sentences stop being read. §8.4's whole design is
+that bypassing verification costs you a sentence with your name on it; a screen
+that quietly says the bypass was unnecessary destroys that.
+
+`verify.binding_verdict()` is now the single source for every verdict word on
+screen. Pass 1's word is **kept but labelled** —
+`! c-005 · beat 4 · unsupported · pass 1 pass` — which is better than replacing
+it: an operator can see that the mechanical check passed *and* that a judgement
+overrode it. **An AST test forbids `_counts` and `_claim_cell` from reading the
+measurement at all**, so the two cannot drift back into being "kept in sync by
+care".
+
+### The recurrence rule
+
+Six instances (D-106, D-110, D-112, D-118, D-121's review table, and this) share
+one cause, stated by the implementer better than I had:
+
+> **A second checker was added, and the screens summarising the first were not
+> moved.**
+
+So the rule is procedural, not stylistic: **after adding any new verdict-producing
+pass, audit every line that prints or counts a verdict word** — and enumerate the
+readers from the code rather than grepping for symptoms, because the fifth
+instance was found by grep and the sixth was not.
+
+A partially-converted call site is **worse than an unconverted one**: the screen
+looks updated, so nobody checks it twice.
+
+### The money bug, fixed by removing the shell rather than parsing it
+
+`--refutation-file` / `--risk-file` read bytes off disk; `$1.32` survives.
+The inline path prints a **note, not a refusal**, because it can only see the
+residue (`.32`) and must state its inference conditionally. The implementer says
+plainly that this is **incomplete by construction** — `$1M` leaves no residue at
+all — which is why the file flags are the fix and the note is only a hint.
+
+Correct instinct, and the general form: **you cannot reliably detect damage the
+shell already did; you can only stop routing data through it.**
+
+## D-124 · phase 9 · what did NOT get done, recorded rather than omitted
+
+Phase 6 established that a skill's acceptance test is **a blind run by a fresh
+agent**, and D-111 showed the second such run found the defect the first could
+not. **`skills/verify/SKILL.md` has not had one.** Its author walked it and it
+was exercised against six real claims, but no agent has followed it cold.
+
+That is a real reduction in rigour against the standard this project set for
+`storyboard`, taken deliberately to finish the remaining phases in the time
+available, and it is **the first thing to do if Phase 9 is revisited.** Task 2's
+predictions are on file to score it against: the runner widens the prompt when
+the wall of `unsupported` appears; it adds a helpful sentence to a dispatch; it
+types `judge` inline for at least one claim.
+
+Also carried: the self-contained-beat rewrite has worked examples that have
+**never themselves been run through `check`** — the implementer flagged it as
+their sharpest concern, and they are right to.
