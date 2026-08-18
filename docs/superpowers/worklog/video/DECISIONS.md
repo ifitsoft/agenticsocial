@@ -2509,23 +2509,47 @@ common case and destructive in the uncommon one is the most dangerous shape a
 line of instructions can take, because the author validates it against the case
 they were imagining.
 
-### The gap that would have failed most authors
+### The gap that would have failed most authors — RETRACTED, and the retraction is the finding
 
-**The corpus keeps the source's typography and the brief's rendering hides it.**
-`_pasted.txt` carries U+2011 non-breaking hyphens (`V4‑Pro`, `open‑weight`), em
-dashes, curly apostrophes. A quote hand-typed with an ASCII `-` fails `check` as
-"quote is not in sources" — D-071's original discovery, arriving from the
-authoring side.
+**What I wrote here was false.** I recorded that the corpus keeps U+2011
+non-breaking hyphens and that "a quote hand-typed with an ASCII `-` fails
+`check`". Leader-measured against the real source:
 
-The runner survived by reading the bytes first and slicing spans
-programmatically. **The skill's own author did not** — their one failing claim
-was a retyped quote (D-109).
+```
+typed 'V4-Pro generally available'  (ASCII hyphen)  -> quote found? True
+typed 'V4‑Pro generally available'  (exact bytes)   -> quote found? True
+typed 'V4-Pro generaly available'   (changed word)  -> quote found? False
+typed 'V4-Pro is generally available' (added word)  -> quote found? False
+```
 
-So: *"never retype a quote"* is a rule that the person who wrote it broke while
-looking at it, and that the person who followed it only survived by inventing a
-mechanism it never mentioned. **A rule stating the behaviour is weaker than one
-stating the reason plus a way to comply.** "The bytes differ from what you see,
-here is how to extract a span" is followable; "be careful" is not.
+**The ASCII hyphen passes. That is exactly what §8.2.1's fold is for** — and I
+verified it myself in D-091, in this same session, before writing the opposite
+here. What refuses a quote is a changed, dropped or added *word*, which is
+precisely what happened to the skill's author: *points to* versus *pointing to*.
+
+**How the error was manufactured, because the mechanism is worth more than the
+correction.** The blind runner noticed exotic codepoints in the corpus, took a
+precaution (extract spans programmatically rather than type them), and passed.
+Their precaution was never tested, so nothing contradicted the explanation they
+attached to it. They reported it as a finding; I read a compelling causal story
+that fit D-071's shape and promoted it to established fact — then wrote it into a
+brief as the headline defect.
+
+**A precaution that is never tested looks like a cause.** Success under a
+precaution is not evidence the precaution was necessary, and an unfalsified
+belief travels further than a tested one because nobody has to defend it. The
+implementer caught it by doing the one thing neither of us did: typing the ASCII
+hyphen and running `check`.
+
+This is the same failure as D-031, D-091, D-094 and D-105 — measuring something
+adjacent to the property — with one difference that makes it worse: **the
+adjacent measurement was made by someone else, and I relayed it without
+re-deriving it.** Findings arriving from a subagent are inputs to verification,
+not conclusions of it.
+
+The real rule the skill now teaches: **the fold forgives punctuation and case;
+nothing forgives a word.** That is both narrower and more useful than "never
+retype", and it is true.
 
 ### One alleged hole, verified as a display defect instead
 
