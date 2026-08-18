@@ -401,6 +401,16 @@ def migrate(ledger: dict, legacy: dict) -> tuple[dict, MigrationReport]:
     asserted before the result is handed back.
     """
     before_stories, _ = counts(ledger)
+    seen: set = set()
+    for ep in legacy["episodes"]:
+        date = ep.get("date")
+        if date in seen:
+            raise CoverageError(
+                f"the source holds {date} twice. Nothing was written — merging "
+                "it would put one date in the ledger twice, and `coverage "
+                "episode` would then show one of the two and hide the other."
+            )
+        seen.add(date)
     by_date = {e.get("date"): e for e in ledger["episodes"]}
     moved, skipped = [], []
     episodes = list(ledger["episodes"])

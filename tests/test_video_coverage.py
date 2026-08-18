@@ -183,8 +183,13 @@ def test_a_miss_says_what_was_searched(brief):
 
 
 def test_a_miss_states_the_limit_of_what_absence_proves(brief):
+    """Stated on the MISS, beside the term it is about — not only in the
+    summary at the bottom. A mutation sweep killed the weaker version of this
+    assertion: dropping the per-term bound left the closing paragraph behind
+    and an `or` was happy with it."""
     out = check("deepseek").output.lower()
-    assert "does not mean" in out or "cannot" in out
+    assert "that is all it proves" in out
+    assert "does not mean the story is new" in out
 
 
 def test_a_miss_points_at_related_entries_without_counting_them(brief):
@@ -254,6 +259,34 @@ def test_the_series_ledger_is_what_was_read(fixture_series):
     r = check("gemini", series="fixture")
     assert r.exit_code == 0 and "no entry matches" in r.output
     assert hit_count(r.output) == 0
+
+
+def test_a_term_that_appears_only_in_an_entity_is_found(fixture_series):
+    """The ledger's own fields are not decoration. `Acme` is in `entities` and
+    nowhere else in that row — and an author searching a vendor name is the
+    commonest search this tool gets."""
+    assert hit_count(check("acme", series="fixture").output) == 1
+
+
+def test_a_term_that_appears_only_in_a_source_is_found(fixture_series):
+    assert hit_count(check("acme.example", series="fixture").output) == 1
+
+
+def test_a_term_that_appears_only_in_the_title_is_found(ws):
+    """A title-only match, with the entities emptied so nothing else can carry
+    it: `add` derives a title from what the card said, and a checker that does
+    not read titles cannot see most of what `add` writes."""
+    run("series", "new", "bare")
+    bare = json.loads(json.dumps(FIXTURE))
+    story = bare["episodes"][0]["stories"][0]
+    story["entities"] = []
+    story["sources"] = []
+    story["note"] = ""
+    story["id"] = "row-1"
+    (ws.series_dir / "bare" / "coverage.json").write_text(
+        json.dumps(bare, indent=2) + "\n", encoding="utf-8"
+    )
+    assert hit_count(check("foo-9.9", series="bare").output) == 1
 
 
 def test_list_still_works(fixture_series):
@@ -433,6 +466,41 @@ def test_migration_refuses_when_the_same_date_holds_different_stories(ws):
     assert r.exit_code == 1
     assert "2026-08-12" in r.output
     assert ledger_of(ws, "the-brief") == led
+
+
+def test_migration_refuses_a_source_that_holds_one_date_twice(ws):
+    """Two entries for one date in the SOURCE is not something a merge can
+    resolve either — and the naive merge writes both, so the ledger would then
+    hold a date twice and `episode` would show one of them."""
+    run("series", "new", "the-brief")
+    legacy_twice = legacy()
+    legacy_twice["episodes"].append(dict(legacy_twice["episodes"][0]))
+    path = ws.root / "twice.json"
+    path.write_text(json.dumps(legacy_twice), encoding="utf-8")
+    r = run("coverage", "migrate", str(path), "--series", "the-brief")
+    assert r.exit_code == 1
+    assert "2026-08-12" in r.output
+    assert ledger_of(ws, "the-brief")["episodes"] == []
+
+
+def test_the_migration_refuses_if_its_own_arithmetic_stops_balancing(monkeypatch):
+    """The guard under the merge, exercised directly. It is unreachable by
+    construction today, which is exactly why it is worth a test: it is there to
+    catch the edit that makes it reachable, and an untested guard is a comment.
+    """
+    from agenticsocial.video import coverage as cov
+
+    real = cov.counts
+    calls = {"n": 0}
+
+    def lying_counts(ledger):
+        calls["n"] += 1
+        stories, episodes = real(ledger)
+        return (stories - 1 if calls["n"] == 2 else stories), episodes
+
+    monkeypatch.setattr(cov, "counts", lying_counts)
+    with pytest.raises(cov.CoverageError, match="does not balance"):
+        cov.migrate({"episodes": []}, legacy())
 
 
 def test_migration_dry_run_writes_nothing(ws):
