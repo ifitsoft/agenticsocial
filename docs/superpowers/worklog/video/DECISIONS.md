@@ -2540,3 +2540,53 @@ The runner suspected a magnitude suffix escapes numeric verification. Measured:
 correctly-verified figure appears in `check`'s "names not found" list and reads as
 unchecked. D-102 warned the risk with that list is that it stops being read — this
 is exactly how that starts, and it is now a code fix rather than a footnote.
+
+## D-110 · phase 6 / task 2 · a dumbbell asserts a comparison, and the schema now says so
+
+The four defects D-109 recorded are fixed. The one that needed an argument rather
+than an edit is `dumbbell`'s citation, and it is resolved **towards citation**:
+`script.py` now has `cited: True`, so `src` and `quote` are required at load, and
+`dumbbell_prints_a_figure` and the whole `cited_when` mechanism are deleted.
+
+The exemption rested on "it renders no numbers", and that property was false of
+the type: a dumbbell draws a `caption`, a `footnote`, two `series` names and a
+label per row, and `claims.py` has extracted every one of them as a claim since
+Phase 5. So the two halves of the pipeline had been disagreeing in the worst
+possible direction — the schema told an author their beat needed nothing, and
+`check` answered `no_source` and exit 1 on that same beat. **An exemption you
+cannot reach is not a permission, it is a trap**, and the honest half of a
+disagreement is the half that verifies. The conditional version (cite only when a
+digit appears) is subsumed: it fired on `V4-Pro` and not on
+"AMIE against primary care physicians", which is exactly backwards — the digit
+inside a product name is not the claim, and the comparison in the caption is.
+
+Cost, stated: this is a spec change. §7.1 does not list `dumbbell` in the cited
+pair. Two committed test fixtures gained a `src` and a `quote`; no episode in
+`workspace/` or `engine/content/` contains a dumbbell, so nothing that has ever
+rendered is affected.
+
+### The brief's own typography claim did not survive contact with the code
+
+The task brief named "the corpus keeps U+2011 non-breaking hyphens, so a
+hand-typed quote fails `check`" as the gap that would fail most authors. **It is
+false.** §8.2.1's fold normalises `‑` `–` `—` to `-`, curly quotes to straight,
+`…` to `...`, NBSP and tabs to spaces, and case away — verified through
+`check_claim`, both directions. What refuses a quote is a *word*: `points to`
+against `pointing to`, which is what actually happened to the skill's author.
+
+Worth recording as a process point, not a pedantry: the belief came from the
+blind runner, who read the bytes, saw exotic codepoints, concluded they were the
+hazard, and was never contradicted because their run passed. **A precaution that
+is taken and works cannot tell you whether it was necessary** — and it went into
+a brief as a finding. The skill now states which differences are forgiven and
+which are not, from a table run against the checker, because "the bytes are
+scary" is advice an author cannot act on and "one wrong word refuses" is.
+
+### The entity list is quieter, and still not quiet
+
+`_name_token` now asks `claim_number` where the figure boundary is, so `2.4T` and
+`95B` are numbers and nothing else. On the operator's own episode that removed
+exactly one row. The rest of the list is still glued runs and sentence-opening
+words — `OpenAI Anthropic, Google Chinese`, `Three`, `Also`, `Latest` — which is
+D-102's known cost, unchanged and still ungated. **The fix removed the rows that
+were provably wrong (a verified figure filed as a missing name), not the noise.**
