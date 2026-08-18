@@ -3471,3 +3471,64 @@ The migrated `coverage.json` was **kept, not restored**. Restoring it would leav
 *which is exactly the state where the next episode re-tells a story as new.* The
 backup path and a one-line revert are in the report. Correct call: the safe-looking
 option was the one that loses the guarantee.
+
+## D-129 · phase 12 · the highlight landed, and the console cannot do the one thing it must not do
+
+`agsoc video console <ep>` ships §12's screens C and D as one 23KB offline HTML
+file. **2025 tests, 45/46 mutants** with the harness committed (the one survivor
+argued equivalent, with 38,586 spans measured to support it).
+
+**The headline is that the span landed.** Leader-verified on the operator's real
+`2026-08-17`: **6 of 6 `quote_span`s highlight exactly the source bytes they
+name** — including claims whose source carries U+2011 non-breaking hyphens while
+the operator typed ASCII.
+
+That is Phase 5's design paying off three phases later. `quote_span` records the
+offset in the **original** text rather than the folded text, and §8.2.1 folds for
+the *comparison only*, **specifically so this screen could exist**. The highlight
+is a slice — `document[a:b]` — **never a search.** A searched highlight would have
+been the easy implementation and would have quietly drifted from what was
+actually verified.
+
+The near miss (`closest_span`) is shown in a different colour, under a label
+saying it is **not** the quote. That matters: §8.3's "verbatim but torn from
+context" failure is the one a highlight could otherwise dress up as a feature.
+
+### What it cannot do, by construction
+
+- **No approve action of any kind** — 0 form, button, input, iframe and script
+  elements, no `on*` attributes. It prints the command. *A second way to approve
+  is the defect Phase 7 spent three tasks eliminating* (D-059, D-072), and the
+  cheapest way to guarantee it is a page with no scripting at all.
+- **Writes nothing.** Output defaults to a temp dir; an `--out` inside the
+  workspace is refused with the path `resolve()`d first, so **a symlink cannot
+  spell around it.** A full `shasum` diff of `workspace/` is clean before and
+  after.
+- **Zero network requests, verified three ways**: Chromium's request log, a real
+  HTTP server on loopback that received nothing, and zero CSP violations. The
+  loopback oracle is D-089's lesson reused — *a CSP-refused request still fires
+  the `request` event*, so the request log alone would have been the wrong
+  instrument. CSP is `default-src 'none'` with **no `script-src`, because there
+  is no script.**
+
+### Every verdict word comes from `verify`
+
+`classify`/`binding_verdict` are re-exported as **the same objects**, the remedy
+and counts lines are reused from `cli`, and **no comparison to a pass-1 verdict
+literal appears anywhere in `console.py`**. `manual` reads *attested … NOT
+verified*; pass 2 sits in a bordered block headed *"a judgement by an agent, NOT a
+measurement"*; `residual_risk` prints on `supported`; **a stale ledger shows a red
+banner and no verdicts and no highlights at all.**
+
+That last one is the right instinct: a console showing stale verdicts as current
+would be the six-overclaim pattern with better typography.
+
+### Step 5 earned its place, for the last time
+
+**Five defects came from opening the page. None came from the suite.** The worst:
+screen D printed *"write `attest:` on the beat"* above a `custom` beat's own
+attestation, because `cli._next_step` is written for blocking claims and was
+called on every card. Now gated and pinned.
+
+Every phase that required someone to *look at the artifact* found something the
+tests did not. Twelve for twelve.
