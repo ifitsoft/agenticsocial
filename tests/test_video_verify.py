@@ -464,6 +464,24 @@ def test_a_two_letter_magnitude_is_worth_its_magnitude_not_its_coefficient():
     assert check(beat("body", text="Revenue hit 95bn.", quote=spelled), spelled).verdict == "pass"
 
 
+def test_a_two_letter_magnitude_standing_alone_is_still_that_magnitude():
+    """precondition: the beat writes `bn` as a SEPARATE token, so the suffix
+    strip never sees it and the atom is the bare coefficient `95`.
+
+    My own probe, not the gate review's: closing the glued spelling `95bn` left
+    the spaced one open, and it is the same defect. `95 bn` claimed the number
+    95, and a source saying "95 million" contains 95, so a beat could be off by
+    three orders of magnitude and pass. The negative half is the one that makes
+    it worth doing rather than refusing: `95 bn` against a source writing
+    "95 billion" is the same figure and must still verify.
+    """
+    wrong = "revenue of about 95 million for the year"
+    assert check(beat("body", text="Revenue hit 95 bn.", quote=wrong), wrong).verdict == "fail"
+
+    right = "revenue of about 95 billion for the year"
+    assert check(beat("body", text="Revenue hit 95 bn.", quote=right), right).verdict == "pass"
+
+
 @pytest.mark.parametrize(
     "rendered,quote",
     [
