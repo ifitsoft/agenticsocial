@@ -117,7 +117,13 @@ const planFor = (v, mark) => ({
   series: 'the-brief',
   series_name: 'The Brief',
   byline: 'Ali Abdukarim',
-  format: { name: 'vertical', w: 1080, h: 1920 },
+  format: {
+    /* The WHOLE declared context (spec 9). A plan that names only w/h is
+       refused by engine.js's format(): half a context would put the wide
+       stage under the vertical safe area and say nothing. */
+    name: 'vertical', w: 1080, h: 1920,
+    safe_top: 400, safe_bottom: 1580, measure: 'narrow', scale: 1,
+  },
   fps: 30,
   pace: 1,
   design: {},
@@ -254,7 +260,13 @@ for (const v of VECTORS) {
     series: 'the-brief',
     series_name: 'The Brief',
     byline: 'Ali Abdukarim',
-    format: { name: 'vertical', w: 1080, h: 1920 },
+    format: {
+    /* The WHOLE declared context (spec 9). A plan that names only w/h is
+       refused by engine.js's format(): half a context would put the wide
+       stage under the vertical safe area and say nothing. */
+    name: 'vertical', w: 1080, h: 1920,
+    safe_top: 400, safe_bottom: 1580, measure: 'narrow', scale: 1,
+  },
     fps: 30,
     pace: 1,
     design: {},

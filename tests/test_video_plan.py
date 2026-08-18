@@ -57,7 +57,8 @@ def test_plan_has_the_documented_shape(series):
     plan = build_plan(series, load_episode(series, "2026-08-14"))
     assert plan["episode"] == "2026-08-14"
     assert plan["series"] == "the-brief"
-    assert plan["format"] == {"name": "vertical", "w": 1080, "h": 1920}
+    assert plan["format"] == {"name": "vertical", **plan_mod.FORMATS["vertical"]}
+    assert (plan["format"]["w"], plan["format"]["h"]) == (1080, 1920)
     assert plan["fps"] == FPS
     assert len(plan["beats"]) == 3
 
@@ -188,10 +189,13 @@ def test_unparseable_beats_raises_plan_error(series):
 
 
 def test_unknown_format_is_refused(series):
+    """`wide` was the example here until Phase 10 shipped it. A format name the
+    table does not carry is still refused, and the refusal names the ones it
+    does — an operator who typed `sqaure` needs the list, not a boolean."""
     ep = create_episode(series, "2026-08-14")
     _script(ep, THREE)
-    with pytest.raises(PlanError, match="wide"):
-        build_plan(series, load_episode(series, "2026-08-14"), fmt="wide")
+    with pytest.raises(PlanError, match="square"):
+        build_plan(series, load_episode(series, "2026-08-14"), fmt="square")
 
 
 def test_write_plan_lands_in_out_dir_and_is_valid_json(series):
@@ -514,14 +518,18 @@ def test_build_plan_refuses_a_non_colour(series, bad):
         build_plan(s, load_episode(series, "2026-08-14"))
 
 
-def test_typography_tokens_reach_the_plan_untouched(series):
-    """R1 NEGATIVE (M5). planbuild.js maps six tokens; these two are not among
-    them and are not colours."""
+def test_the_type_scale_reaches_the_plan_untouched(series):
+    """R1 NEGATIVE (M5). planbuild.js maps six COLOUR tokens; `type_scale` is not
+    among them and is not a colour — it reaches the plan as the operator wrote
+    it, and engine.js multiplies the format's scale by it.
+
+    Its neighbour `type_family` used to travel with it and is retired: see
+    tests/test_video_format.py. Phase 10, D-077, D-116.
+    """
     ep = create_episode(series, "2026-08-14")
     _script(ep, THREE)
     plan = build_plan(series, load_episode(series, "2026-08-14"))
     assert plan["design"]["type_scale"] == "default"
-    assert "SF Pro Display" in plan["design"]["type_family"]
 
 
 # --- act id -> label resolution happens in Python (R3) -------------------------
@@ -655,7 +663,9 @@ def test_planbuild_actually_passes_the_label_to_scene():
     plan = {
         "episode": "2026-08-16",
         "byline": "",
-        "design": {},
+        "design": {"type_scale": "compact"},
+        "format": {"name": "wide", "w": 1920, "h": 1080, "safe_top": 200,
+                   "safe_bottom": 900, "measure": "wide", "scale": 0.62},
         "beats": [
             {"type": "statement", "act": "01", "act_label": "01 — The headline",
              "hold": 3.0, "kicker": "", "text": "t", "src": ""},
@@ -670,16 +680,22 @@ def test_planbuild_actually_passes_the_label_to_scene():
         const fs = require('fs');
         const vm = require('vm');
         const seen = [];
+        const handed = {};
         const ctx = {
           document: { documentElement: { style: { setProperty() {} } } },
           scene: (act) => seen.push(act),
           meta: () => {},
+          /* engine.js's, stubbed — and RECORDED. The format and the type scale
+             are context this file only hands over; a planbuild that stopped
+             handing them over would render the wrong stage in silence. */
+          format: (f) => { handed.format = f; },
+          typeScale: (n) => { handed.typeScale = n; },
           E: () => ({}), P: (x) => x, rise: () => {},
         };
         vm.createContext(ctx);
         vm.runInContext(fs.readFileSync(process.env.PLANBUILD, 'utf8'), ctx);
         vm.runInContext('buildFromPlan(' + process.env.PLAN + ')', ctx);
-        console.log(JSON.stringify(seen));
+        console.log(JSON.stringify({ seen, handed }));
         """
     )
     import os
@@ -695,7 +711,12 @@ def test_planbuild_actually_passes_the_label_to_scene():
         },
     )
     assert proc.returncode == 0, proc.stderr
-    assert _json.loads(proc.stdout) == ["01 — The headline", "07", ""]
+    out = _json.loads(proc.stdout)
+    assert out["seen"] == ["01 — The headline", "07", ""]
+    # The declared context reaches the engine, whole. Phase 10: half a format
+    # would put a 1920-wide stage under the vertical safe area.
+    assert out["handed"]["format"] == plan["format"]
+    assert out["handed"]["typeScale"] == "compact"
 
 
 # --- Phase 4: the plan carries every renderable type's own fields ---------------

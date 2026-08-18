@@ -739,12 +739,13 @@ def test_render_does_not_rewrite_the_beats(series, fake):
 
 
 def test_an_unsupported_format_is_refused_before_anything_moves(series, fake):
-    """§9 lists `wide`; `plan.FORMATS` does not implement it yet. Refuse, and do
-    not spend the gate on it."""
+    """§9 lists two formats and Phase 10 ships both. A THIRD name is refused,
+    and the gate is not spent on it — an approved episode must not come out of a
+    typo as `failed`."""
     approved(series)
-    result = render("--format", "wide")
+    result = render("--format", "square")
     assert result.exit_code == 1, result.output
-    assert "wide" in result.output
+    assert "square" in result.output
     assert status_on_disk(series) == "approved"
     assert fake.calls == []
 

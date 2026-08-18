@@ -23,12 +23,76 @@ const SCENES=[];
 let META={}, ANIMS=[], CUR=-1, SC=null, TOTAL=0, STARTS=[], ACT_START={}, PACE=1;
 let stageScenes,actEl,tagEl,byEl,progEl;
 
+/* ---------------------- the declared context (spec 9) ----------------------
+   A format is a declared CONTEXT, not a stylesheet fork. Every per-format
+   difference is one of these values, and the beat builders below never read
+   any of them: they draw the same elements, and scene.html's rules apply
+   according to what the stage declares.
+
+   The default IS the vertical stage, so content/<date>.js — which carries no
+   format at all — draws exactly what it always drew. */
+let FMT={name:'vertical',w:1080,h:1920,safe_top:400,safe_bottom:1580,measure:'narrow',scale:1};
+
+/* `type_scale` was copied into plan.json and read by nobody (D-116) — a knob an
+   operator would reasonably believe controls the typography, that controlled
+   nothing, while the approval bound it. It is the multiplier ON the format's
+   scale: the type is set smaller or larger and the measure moves with it, so
+   `compact` fits more copy per card rather than merely shrinking the words.
+   Its neighbour in `[design]` — the font stack — was retired instead of wired
+   (D-077): whether a family resolves is a property of the machine rather than
+   of the string, so it could only ever fail silently. Nothing in this directory
+   names it, which is the state a grep can check. */
+const TYPE_SCALES={default:1,compact:.88,large:1.12};
+let TYPE_SCALE=1;
+
+function applyFormat(){
+  const st=document.getElementById('stage');
+  if(!st)return;
+  st.style.setProperty('--stage-w',FMT.w+'px');
+  st.style.setProperty('--stage-h',FMT.h+'px');
+  st.style.setProperty('--safe-top',FMT.safe_top+'px');
+  st.style.setProperty('--safe-bottom',FMT.safe_bottom+'px');
+  const s=FMT.scale*TYPE_SCALE;
+  st.style.setProperty('--fmt-scale',String(s));
+  st.dataset.measure=FMT.measure;
+  /* data-scaled, not "scale it always": transform:scale(1) promotes the scene
+     to its own compositing layer and changes how blurred glyphs rasterise,
+     which is the invariant this engine sells. */
+  if(s===1)delete st.dataset.scaled; else st.dataset.scaled='';
+}
+
 const P=(t)=>({html:t});
 
 /* content entry points ---------------------------------------------------- */
 function meta(m){META=m;}
-/* base duration; the PACE multiplier is applied at init */
-function scene(act,dur,tag,build){SCENES.push({act,base:dur,tag,build});}
+/* the format the plan declares. Refused rather than defaulted where it is
+   malformed: a stage silently 1080 wide when the plan said 1920 is M7. */
+function format(f){
+  if(!f)return;
+  for(const k of ['w','h','safe_top','safe_bottom','scale']){
+    if(typeof f[k]!=='number'||!isFinite(f[k])){
+      throw new Error('plan.format.'+k+' is '+JSON.stringify(f[k])+
+        ' — the stage is the format the plan declares, and a format that cannot '+
+        'say how big it is would silently render at the default size');
+    }
+  }
+  FMT=Object.assign({},FMT,f);
+  applyFormat();
+}
+function typeScale(name){
+  if(name==null||name==='')return;
+  if(!Object.prototype.hasOwnProperty.call(TYPE_SCALES,name)){
+    throw new Error('unknown type_scale '+JSON.stringify(name)+' — the scales are '+
+      Object.keys(TYPE_SCALES).join(', ')+'. Refused rather than defaulted to 1: '+
+      'a knob that reads as set and is not is exactly what D-116 found');
+  }
+  TYPE_SCALE=TYPE_SCALES[name];
+  applyFormat();
+}
+/* base duration; the PACE multiplier is applied at init. `kind` is the beat
+   type, carried so a refusal can say what it was looking at — the hand-written
+   episodes pass four arguments and are unaffected. */
+function scene(act,dur,tag,build,kind){SCENES.push({act,base:dur,tag,build,kind});}
 
 /* register an animation: fn receives eased progress */
 function an(d0,dur,ez,fn){ANIMS.push({d0,dur,ez,fn});fn(0);}
@@ -116,11 +180,18 @@ const JUMP_STAGGER=.34, JUMP_GROW_D0=.5, JUMP_GROW_DUR=.8;
 /* KPI stack — a column of headline figures. `tone` is 'blue' or 'warm'.
    item = [value, unit, suffix, decimals, prefix, sizeClass] */
 function kpis(items,d0,tone){
+  /* One container, one cell per figure. Both exist for the WIDE context, where
+     9 sets this stack as a single row: a figure and the rule under it have to
+     travel together, or a row layout interleaves four figures and four rules.
+     In the narrow context they are plain blocks in a column, which is what the
+     two committed episodes already drew — verified frame-identical. */
+  const box=E('div','kpis');
   items.forEach((it,i)=>{
-    const row=E('div','kpi '+(tone||'blue')+(it[5]?' '+it[5]:''));
+    const cell=E('div','kpi-cell',{p:box});
+    const row=E('div','kpi '+(tone||'blue')+(it[5]?' '+it[5]:''),{p:cell});
     const n=E('div','n',{p:row,text:'0'});
     const u=E('div','u',{p:row,text:it[1]});
-    const rule=E('div','kpi-rule '+(tone||'blue'));
+    const rule=E('div','kpi-rule '+(tone||'blue'),{p:cell});
     const t0=d0+i*KPI_STAGGER;
     an(t0,.5,EZ.out,p=>{row.style.opacity=p;row.style.transform=`translateY(${(1-p)*20}px)`});
     if(typeof it[0]==='number')count(n,t0,KPI_COUNT_DUR,it[0],it[2],it[3],it[4]);
@@ -291,6 +362,87 @@ function seek(t){
   stageScenes.appendChild(SC);
 }
 
+/* ============================ does it fit? ============================
+ *
+ * The check nothing else in this project can make.
+ *
+ * Verification compares the words on the card to their source. Drift compares
+ * what the operator authored to what they approved. Determinism compares a
+ * frame to itself. **None of them can see a beat whose text leaves its box.**
+ * Nothing clips, nothing throws, no status is wrong — the video is simply bad,
+ * and the first person to find out is a viewer.
+ *
+ * MEASURED, never predicted. How tall a paragraph sets is a property of the
+ * font this machine resolved and of Chromium's line breaking, which is exactly
+ * the half D-116 says no approval covers. Python could estimate it, and an
+ * estimate is a second answer to a question the page already answers — D-007's
+ * rule pointed at layout instead of timing. So the refusal happens as early as
+ * a real measurement can happen, which is here.
+ *
+ * At the SETTLED state — every animation at p=1 — because that is the card a
+ * viewer reads. At p=0 every risen word sits 115% below its line and every beat
+ * in the series "overflows".
+ *
+ * ONCE, at init, over every beat, rather than lazily as seek() reaches them:
+ * render.mjs inspects page errors immediately after load, so this costs the
+ * operator a second instead of the fourteen minutes it takes to discover beat
+ * 14 at frame 900.
+ */
+const FIT_TOL=2; /* px. A sub-pixel line box is not an overflowing card (D-040:
+                    a check that cries wolf is a check people turn off). */
+
+function fitOf(i){
+  ANIMS=[];stageScenes.innerHTML='';
+  SC=document.createElement('div');SC.className='sc';
+  stageScenes.appendChild(SC);
+  SCENES[i].build(SC);
+  for(const a of ANIMS)a.fn(1);
+  const box=SC.getBoundingClientRect();
+  let top=null,bottom=null;
+  for(const el of SC.children){
+    const r=el.getBoundingClientRect();
+    if(!r.width&&!r.height)continue; /* a spacer or an empty rule is not content */
+    if(top===null||r.top<top)top=r.top;
+    if(bottom===null||r.bottom>bottom)bottom=r.bottom;
+  }
+  /* Vertically: the union of the children, because `.sc` centres its column and
+     an overflowing card spills off BOTH ends — scrollHeight only ever sees the
+     bottom one. Horizontally: scrollWidth, because a block's own rect stays the
+     width of its container however far the glyphs run past it. */
+  const parts=[];
+  const above=top===null?0:Math.round(box.top-top);
+  const below=bottom===null?0:Math.round(bottom-box.bottom);
+  const side=Math.round(SC.scrollWidth-SC.clientWidth);
+  if(above>FIT_TOL)parts.push(above+'px above');
+  if(below>FIT_TOL)parts.push(below+'px below');
+  if(side>FIT_TOL)parts.push(side+'px past the measure');
+  return parts.length?parts.join(' and '):null;
+}
+
+function checkFit(){
+  const bad=[];
+  for(let i=0;i<SCENES.length;i++){
+    const over=fitOf(i);
+    if(over)bad.push('beat '+i+' ('+(SCENES[i].kind||'scene')+') by '+over);
+  }
+  /* Put the stage back the way a seek expects to find it, whatever the verdict:
+     CUR=-1 makes the next seek rebuild from scratch, so nothing measured here
+     can survive into a frame. */
+  CUR=-1;ANIMS=[];stageScenes.innerHTML='';SC=null;
+  if(!bad.length)return;
+  const msg='overflow — '+bad.join('; ')+'. The '+FMT.name+' safe area is '+
+    (FMT.safe_bottom-FMT.safe_top)+'px tall on a '+FMT.w+'x'+FMT.h+' stage, and '+
+    'nothing clips this: the words simply leave the card while every other check '+
+    'stays green. Shorten the beat, split it, or give the format more room';
+  /* Two audiences, the same way the CSP refusal has two: the operator scrubbing
+     the slider reads #fit (inside #ui, which the render hides, so it can never
+     reach a frame), and the renderer gets an uncaught error — the `pageerror`
+     path render.mjs already prints and exits on. */
+  const el=document.getElementById('fit');
+  if(el){el.hidden=false;el.textContent=msg;}
+  throw new Error(msg);
+}
+
 /* ============================ init ============================ */
 function init(){
   stageScenes=document.getElementById('scenes');
@@ -320,5 +472,12 @@ function init(){
   const sl=document.getElementById('sl');
   sl.addEventListener('input',()=>seek(sl.value/1000*TOTAL));
   seek(0);
-  console.log('TOTAL',TOTAL.toFixed(2),'s ·',SCENES.length,'scenes · pace',PACE);
+  console.log('TOTAL',TOTAL.toFixed(2),'s ·',SCENES.length,'scenes · pace',PACE,
+    '·',FMT.name,FMT.w+'x'+FMT.h);
+  /* Last, so everything above is already exposed: an operator whose episode
+     overflows can still scrub the slider and SEE it. Throws if it does not fit,
+     which is the whole point — a bad frame nobody looks at is the failure this
+     exists to prevent. */
+  checkFit();
+  seek(0); /* checkFit cleared the stage; leave the page on a real frame */
 }

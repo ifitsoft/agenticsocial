@@ -27,6 +27,11 @@ function applyPlanDesign(design) {
       root.style.setProperty(PLAN_TOKENS[key], design[key]);
     }
   }
+  /* The seventh token, and the one D-116 caught: `type_scale` was copied into
+   * every plan and read by nobody. engine.js owns what it MEANS — it multiplies
+   * the format's scale, so it moves the measure with the type — and this file
+   * only hands it over, the same way it hands over the colours. */
+  typeScale(design.type_scale);
 }
 
 /* Prose fields are AUTHORED TEXT, not markup.
@@ -694,6 +699,9 @@ function buildFromPlan(plan) {
   if (!plan || !Array.isArray(plan.beats) || !plan.beats.length) {
     throw new Error('plan has no beats');
   }
+  /* The format first: it sizes the stage every beat below is measured against.
+   * A plan that declares none keeps the vertical stage scene.html ships with. */
+  format(plan.format);
   applyPlanDesign(plan.design);
   meta({
     date: plan.episode,
@@ -722,6 +730,6 @@ function buildFromPlan(plan) {
     /* The index travels with the beat so a refusal can name it. An operator
      * reading "a kpis beat holds 2s" in a twelve-beat episode has to find which
      * one; `beat 7` is the row they are looking at in `agsoc video review`. */
-    scene(b.act_label || b.act || '', b.hold, b.src || '', make(b, i));
+    scene(b.act_label || b.act || '', b.hold, b.src || '', make(b, i), b.type);
   }
 }

@@ -48,7 +48,51 @@ FPS = 30
 # script.py's RENDERABLE, not a second list: two frozensets drift the first time
 # either is widened, which is the D-036 pattern that has produced five defects.
 SUPPORTED_BEATS = RENDERABLE
-FORMATS = {"vertical": {"w": 1080, "h": 1920}}
+# Spec §9: **a format is a declared context, not a stylesheet fork.** Each entry
+# is the WHOLE context, and everything the renderer does differently between the
+# two formats is driven from one of these five values:
+#
+#   w/h                    the stage
+#   safe_top/safe_bottom   the band the beats are laid out in, clear of chrome
+#   measure                which set of layout rules the stage declares
+#   scale                  the size the type is set at inside that band
+#
+# A sixth thing a format needs is a difference the stylesheet is being asked to
+# remember instead — which is the fork this whole design avoids.
+#
+# **The safe areas are the stage's, not §9's, and that is deliberate.** §9 was
+# written before the stage existed and gives vertical 430…1560; `scene.html` has
+# shipped 400…1580 since Phase 1.5, it is what both committed episodes and three
+# real ones were composed against, and R4's negative half requires vertical to
+# render byte-identically to before. Two numbers in the spec do not outrank an
+# episode an operator has already looked at, so this table records the real one
+# and the Phase 10 report flags the divergence.
+#
+# Wide's band is then derived rather than copied for the same reason. §9's
+# 120…960 overlaps the chrome (the source tag sits at `bottom:56px`, so it
+# occupies 1000…1024, but a card ending at 960 leaves no margin at all above it,
+# and the act chip needs the top). 200…900 clears both and is 700px, which at
+# scale 0.62 is 1129 layout px against vertical's 1180 — so the same script's
+# beats have very nearly the same room in both formats, which is the property
+# that makes one script produce two formats at all.
+FORMATS = {
+    "vertical": {
+        "w": 1080,
+        "h": 1920,
+        "safe_top": 400,
+        "safe_bottom": 1580,
+        "measure": "narrow",
+        "scale": 1.0,
+    },
+    "wide": {
+        "w": 1920,
+        "h": 1080,
+        "safe_top": 200,
+        "safe_bottom": 900,
+        "measure": "wide",
+        "scale": 0.62,
+    },
+}
 
 __all__ = [
     "FPS",

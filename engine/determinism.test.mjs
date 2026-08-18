@@ -225,9 +225,16 @@ const FIXTURE = [
           label: 'GDP.pdf',
           before: 22.0,
           after: 34.0,
-          shown:
-            '<img src=x onerror="this.parentNode.appendChild(' +
-            'document.createTextNode(Date.now()))">',
+          /* The same injection, spelled shorter — `after()` inserts the
+           * timestamp into the DOM exactly as `appendChild(createTextNode())`
+           * did, so the cross-load check below is still a real reproduction.
+           *
+           * It was shortened because Phase 10's fit check REFUSED this beat:
+           * escaped to text in a `.jval` (which is `white-space:nowrap`), the
+           * old spelling ran 625px past the measure. That is a true positive on
+           * a fixture nobody had looked at in that light — the handler was
+           * safely inert and also off the card. */
+          shown: '<img src=x onerror="this.after(Date.now())">',
         },
       ],
       scale: 70,
@@ -241,12 +248,32 @@ const FIXTURE = [
   },
 ];
 
+/* Both declared contexts (spec 9). The invariant is format-INDEPENDENT — a
+ * format changes layout and never timing — so it has to hold in both, and a
+ * frame at t=42.9 is the same instant either way. */
+const FORMATS = {
+  vertical: {
+    name: 'vertical', w: 1080, h: 1920,
+    safe_top: 400, safe_bottom: 1580, measure: 'narrow', scale: 1,
+  },
+  wide: {
+    name: 'wide', w: 1920, h: 1080,
+    safe_top: 200, safe_bottom: 900, measure: 'wide', scale: 0.62,
+  },
+};
+
 const PLAN = {
   episode: '2026-08-16',
   series: 'the-brief',
   series_name: 'The Brief',
   byline: 'Ali Abdukarim',
-  format: { name: 'vertical', w: 1080, h: 1920 },
+  format: {
+    /* The WHOLE declared context (spec 9). A plan that names only w/h is
+       refused by engine.js's format(): half a context would put the wide
+       stage under the vertical safe area and say nothing. */
+    name: 'vertical', w: 1080, h: 1920,
+    safe_top: 400, safe_bottom: 1580, measure: 'narrow', scale: 1,
+  },
   fps: 30,
   /* Not 1: `hold` in a plan is ALREADY scaled by pace in Python, so a renderer
    * that scales again shifts every beat and this file's seek times land in the
@@ -271,20 +298,38 @@ const PLAN = {
  * they were mid-render on. */
 const PLAN_JS = join(HERE, '.plan.js');
 const previousPlan = await readFile(PLAN_JS, 'utf8').catch(() => null);
-await writeFile(PLAN_JS, 'window.__PLAN = ' + JSON.stringify(PLAN) + ';\n', 'utf8');
+const writePlan = (fmt) =>
+  writeFile(
+    PLAN_JS,
+    'window.__PLAN = ' + JSON.stringify({ ...PLAN, format: FORMATS[fmt] }) + ';\n',
+    'utf8',
+  );
+await writePlan('vertical');
 
 /* Past the midpoint of each beat, where the text has landed. A fixture may ask
  * for a later fraction: an eased count-up is still moving well past the
  * midpoint, and a frame sampled mid-count shows a number no one authored. */
 const sampleAt = (f, i) => i * HOLD + HOLD * (f.at == null ? 0.72 : f.at);
 
+/* The day path has no plan and therefore no format: content/<date>.js draws on
+ * the stage scene.html ships with, which is the vertical one whatever size the
+ * window is. The plan path runs in BOTH contexts — same beats, same seek times,
+ * two stages. */
 const CASES = [
-  { label: 'day path', qs: 'day=2026-08-14', times: [0.5, 3.7, 42.9] },
+  { label: 'day path', qs: 'day=2026-08-14', times: [0.5, 3.7, 42.9], fmt: 'vertical' },
   {
-    label: 'plan path',
+    label: 'plan path · vertical',
     qs: 'plan=1',
     times: FIXTURE.map(sampleAt),
     content: FIXTURE,
+    fmt: 'vertical',
+  },
+  {
+    label: 'plan path · wide',
+    qs: 'plan=1',
+    times: FIXTURE.map(sampleAt),
+    content: FIXTURE,
+    fmt: 'wide',
   },
 ];
 
@@ -308,8 +353,9 @@ let failures = 0;
 const squash = (s) => s.replace(/\s+/g, '').toLowerCase();
 
 for (const c of CASES) {
+  await writePlan(c.fmt);
   const page = await browser.newPage({
-    viewport: { width: 1080, height: 1920 },
+    viewport: { width: FORMATS[c.fmt].w, height: FORMATS[c.fmt].h },
     deviceScaleFactor: 1,
   });
   const errors = [];
@@ -427,9 +473,10 @@ for (const c of CASES) {
 {
   const i = FIXTURE.findIndex((f) => f.crossLoad);
   const t = sampleAt(FIXTURE[i], i);
+  await writePlan('vertical');
   const frameAt = async () => {
     const page = await browser.newPage({
-      viewport: { width: 1080, height: 1920 },
+      viewport: { width: FORMATS.vertical.w, height: FORMATS.vertical.h },
       deviceScaleFactor: 1,
     });
     await page.goto('file://' + join(HERE, 'scene.html') + '?plan=1');

@@ -66,6 +66,19 @@ if (!Number.isInteger(plan.total_frames)) {
 const fps = plan.fps;
 const frames = plan.total_frames;
 
+/* The viewport is the FORMAT the plan declares, and for the same reason the
+ * frame count is: Python resolves it, and a second answer here is a second
+ * answer that can disagree. A `--format wide` that rendered 1080x1920 would be
+ * an mp4 nobody could tell apart from a correct one without opening it. */
+const fmt = plan.format;
+if (!fmt || !Number.isInteger(fmt.w) || !Number.isInteger(fmt.h)) {
+  console.error(
+    `${planPath}: no integer format.w/format.h — the stage is the format the ` +
+      'plan declares, and defaulting it here renders the wrong size in silence',
+  );
+  process.exit(1);
+}
+
 await writeFile(
   join(HERE, '.plan.js'),
   'window.__PLAN = ' + JSON.stringify(plan) + ';\n',
@@ -75,7 +88,7 @@ const qs = new URLSearchParams({ plan: '1' });
 
 const browser = await chromium.launch();
 const page = await browser.newPage({
-  viewport: { width: 1080, height: 1920 },
+  viewport: { width: fmt.w, height: fmt.h },
   deviceScaleFactor: 1,
 });
 
@@ -98,7 +111,10 @@ if (!total) {
   await browser.close();
   process.exit(1);
 }
-console.log(`${total.toFixed(2)}s · ${frames} frames @ ${fps}fps`);
+console.log(
+  `${total.toFixed(2)}s · ${frames} frames @ ${fps}fps · ` +
+    `${fmt.name || '?'} ${fmt.w}x${fmt.h}`,
+);
 
 const shoot = async (t, path) => {
   await page.evaluate((tt) => window.__seek(tt), t);
