@@ -2733,3 +2733,66 @@ inherits their confidence rather than the data's.
 It sits directly in front of Phase 7's approval gate, which consumes exactly
 these verdicts. **Fixed in Phase 7 Task 1**, not here, because the gate and its
 summary should agree by construction rather than by coincidence.
+
+## D-113 · phase 7 / task 1 · the gate exists, and the predicate under it was failing open
+
+`agsoc video approve <ep> --by "<name>"` lands. It loads series, episode and
+ledger itself (D-072), refuses on any `fail` / `no_source` / unattested `manual`
+naming each, refuses distinguishably on a stale or absent ledger, and records the
+approver, `script_sha256`, `pace`, `corpus_sha` and `claims_checked_at` **in the
+same gated write**. 1658 tests, **21/21 mutants**.
+
+### The finding: `is_blocking` failed open
+
+The predicate the gate was about to be built on was
+`verdict in ("fail", "no_source")` — which is **False for `supported`, for `ok`,
+and for a record with no `mechanical` block at all.** A hand-edited ledger, or a
+Phase 9 verdict that does not exist yet, would have approved with nothing checked.
+
+D-106's exact shape — *unrecognised input treated as fine rather than as
+unknown* — found this time **in the gate itself**, one task after being named.
+The lesson did not transfer on its own; it had to be looked for again.
+
+Now `verify.classify()`, and leader-verified fail-closed on every shape:
+
+```
+normal pass -> verified     phase-9 verdict     -> open
+fail        -> open         bare 'ok'           -> open
+no_source   -> open         no mechanical block -> open
+                            empty verdict       -> open
+```
+
+**It is the single function `check`'s summary, `review`'s table and the gate all
+derive from**, which kills the D-059 shape by construction rather than by
+discipline: there is no second path to disagree with. D-112's overclaim is fixed
+as a side effect —
+
+```
+6 verified · 1 attested by hand, NOT verified (D-088) · 7 claims, none open
+```
+
+### Three decisions
+
+- **`--by` is required and never inferred.** `byline` is a display credit the
+  renderer draws; `getpass.getuser()` is whoever's laptop ran the command; an env
+  var lets an unattended process sign under the operator's name. A test pins that
+  a non-empty `byline` does *not* become the approver. **Stated limit, and the
+  honesty is the point: this records a name that was typed, not evidence that a
+  human typed it.**
+- **The ledger is required, not recomputed.** It is the artifact of record and the
+  screen the human actually read — attestations, entity misses, fix lines.
+  Computing verdicts inside the gate means signing verdicts nobody displayed.
+- **`script_sha256` covers the beats document, not the file.** Forced by the code:
+  the approval record is written *into* the bytes a whole-file digest would
+  cover, so it has no fixed point.
+
+### And a hole the task created and caught
+
+R5's enumeration — *every status-writing path in `src/`, and how each is gated* —
+found that `set_status`'s new metadata parameter **is itself a status writer**
+unless the merge runs before the status assignment. Created by this task, caught
+by the check the brief demanded instead of an assertion, pinned by a test.
+
+**That is the argument for enumerating rather than asserting, in one example:**
+the enumeration found a defect that did not exist when the enumeration was
+specified.
