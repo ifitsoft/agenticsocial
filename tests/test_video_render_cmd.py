@@ -396,17 +396,18 @@ def test_an_ffmpeg_crash_leaves_the_episode_failed(series, monkeypatch):
     assert status_on_disk(series) == "failed"
 
 
-def test_an_interrupt_mid_render_leaves_the_episode_failed(series, monkeypatch):
+def test_an_interrupt_mid_render_leaves_the_episode_failed(ws, series, monkeypatch):
     """M6. Ctrl-C is not an exception the `except Exception` habit catches, and
-    it is the most likely way a fourteen-minute render ends early."""
+    it is the most likely way a fourteen-minute render ends early.
+
+    Driven through the module rather than the CLI on purpose: click turns a
+    KeyboardInterrupt into `Abort` inside `main()`, so the runner would report
+    a clean exit 1 and the test would be pinning click's handler instead of
+    this one."""
     approved(series)
     broken(monkeypatch, fail_on="node", raises=KeyboardInterrupt())
     with pytest.raises(KeyboardInterrupt):
-        runner.invoke(
-            app,
-            ["video", "render", EP, "--series", "the-brief"],
-            catch_exceptions=False,
-        )
+        R.render_episode(ws, "the-brief", EP)
     assert status_on_disk(series) == "failed"
 
 

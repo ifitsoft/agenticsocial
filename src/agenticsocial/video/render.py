@@ -162,6 +162,7 @@ def render_episode(
     ep_id: str,
     *,
     fmt: str = "vertical",
+    restart: bool = False,
     now: str | None = None,
 ) -> RenderResult:
     """Render one approved episode, or refuse. Spec §9, §10.
@@ -191,6 +192,20 @@ def render_episode(
     and a second producer of verdicts is the D-059 shape again. This requires
     the ledger to be fresh; it does not recompute it.
 
+    **A crash leaves a state the operator can recover from.** This is the video
+    analogue of `publish_variant`'s save-after-every-tweet: the point is not
+    that nothing is lost, it is that the episode is never left in a status no
+    supported command can leave. Any failure — `BaseException`, so Ctrl-C
+    counts, and it is the likeliest way a fourteen-minute render ends early —
+    moves `rendering → failed` and records why. §10's `failed → rendering` is
+    then the retry, and it passes all three checks again.
+
+    The one thing no handler catches is SIGKILL or power loss, which leaves
+    `rendering` on disk with no live process. `--restart` is the door out:
+    `rendering → failed`, then the normal path. It answers the STATUS question
+    only — drift and staleness are still asked — so it is a recovery, not a
+    bypass.
+
     **What it does NOT establish, and the success screen says so:** that these
     frames are the frames the approver would have seen. D-116 states the scope
     exactly — the approval covers everything the operator authors and nothing
@@ -214,6 +229,24 @@ def render_episode(
     episode = load_episode(series, ep_id)
 
     # --- 1. status ------------------------------------------------------------
+    if episode.status is Status.RENDERING:
+        # No handler runs on SIGKILL or a power cut, so this is a real state and
+        # the CLI has to be able to leave it. It is also indistinguishable from
+        # a render running in another terminal, which is why it takes a flag: a
+        # status that can only be escaped by hand-editing a file is a bug, and a
+        # render that silently steals another one's episode is a worse one.
+        if not restart:
+            raise RenderRefused(
+                "interrupted",
+                "this episode is already `rendering` — either a render is "
+                "running right now, or one was killed before it could record "
+                "how it ended",
+            )
+        episode = set_status(
+            episode,
+            Status.FAILED,
+            {"render": _failure_record("the previous render was abandoned", fmt, now)},
+        )
     assert_transition(episode.status, Status.RENDERING, VIDEO_TRANSITIONS)
 
     # --- 2. has anything the operator authored moved? -------------------------
@@ -232,13 +265,44 @@ def render_episode(
     # cheap and legible; this one is the guarantee.
     episode = set_status(episode, Status.RENDERING)
 
-    plan_path = write_plan(series, episode, fmt)
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    mp4, plan = _encode(series, episode, fmt, plan_path, plan)
+    try:
+        plan_path = write_plan(series, episode, fmt)
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        mp4, plan = _encode(series, episode, fmt, plan_path, plan)
+    except BaseException as e:
+        # `BaseException`, not `Exception`: Ctrl-C is the likeliest way a
+        # fourteen-minute render ends early, and an `except Exception` here
+        # would leave exactly the `rendering` forever this exists to prevent.
+        _fail_episode(episode, e, fmt, now)
+        raise
 
     record = _render_record(episode, plan, mp4, now)
     set_status(episode, Status.RENDERED, {"render": record})
     return RenderResult(record=record, path=mp4)
+
+
+def _fail_episode(episode: Episode, error: BaseException, fmt: str, now) -> None:
+    """`rendering → failed`, with what failed, and never masking the original.
+
+    A `failed` status with no account of what failed sends the operator back to
+    a terminal they have already closed. If the write itself fails there is
+    nothing useful left to do — the original exception is the one that explains
+    the episode, and swallowing it to report a second one would lose both.
+    """
+    reason = f"{type(error).__name__}: {error}".rstrip(": ")
+    try:
+        set_status(episode, Status.FAILED, {"render": _failure_record(reason, fmt, now)})
+    except Exception:  # pragma: no cover - the disk is failing under us
+        pass
+
+
+def _failure_record(reason: str, fmt: str, now) -> dict:
+    return {
+        "at": now or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "outcome": "failed",
+        "format": fmt,
+        "error": reason,
+    }
 
 
 def _render_record(episode: Episode, plan: dict, mp4: Path, now: str | None) -> dict:
@@ -254,6 +318,7 @@ def _render_record(episode: Episode, plan: dict, mp4: Path, now: str | None) -> 
     approval = approve_mod.approval_record(episode) or {}
     return {
         "at": now or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "outcome": "rendered",
         "format": plan["format"]["name"],
         # Relative to the episode directory: absolute paths in a committed
         # artifact are a lie the moment the workspace moves.

@@ -1261,6 +1261,11 @@ def video_render(
     episode: str,
     series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
     fmt: str = typer.Option("vertical", "--format", help="output format"),
+    restart: bool = typer.Option(
+        False,
+        "--restart",
+        help="an earlier render was killed: mark it failed and start over",
+    ),
 ) -> None:
     """Render an APPROVED episode to an MP4 (§9, §10).
 
@@ -1275,7 +1280,9 @@ def video_render(
     series = _text(series, "The series slug")
     head = f"{series}/{episode} · NOT rendered"
     try:
-        result = render_mod.render_episode(ws, series, episode, fmt=fmt)
+        result = render_mod.render_episode(
+            ws, series, episode, fmt=fmt, restart=restart
+        )
     except TransitionError as e:
         raise _fail(
             f"{head} — {e}. Only an episode a human has approved renders: "
@@ -1293,6 +1300,16 @@ def video_render(
 
 def _refusal(head: str, e: render_mod.RenderRefused, episode: str, series: str) -> str:
     """One screen per kind. Three answers, three files to open (D-115)."""
+    if e.kind == "interrupted":
+        typer.secho(f"{head} — {e}", fg=typer.colors.RED)
+        return _detail(
+            "fix",
+            "if nothing is running, `agsoc video render "
+            f"{episode} --series {series} --restart` marks the abandoned run "
+            "failed and starts over. A partial render is discarded, not "
+            "resumed: frames are reproducible, so there is nothing in them to "
+            "salvage",
+        )
     if e.kind == "drift":
         typer.secho(
             f"{head} — the approval no longer describes this episode", fg=typer.colors.RED
