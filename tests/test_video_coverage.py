@@ -459,11 +459,12 @@ def test_the_migrated_ledger_answers_the_check(ws):
 
 # --- `add`: what a story is, and who writes it ----------------------------------------
 
-SCRIPT = """episode: '2026-08-20'
+SCRIPT = """---
+episode: '2026-08-20'
 series: the-brief
 status: {status}
 pace: 1.0
----
+{render}---
 beats:
   - type: title
     act: "01"
@@ -509,13 +510,12 @@ def make_episode(ws, status="rendered", slug="the-brief", ep="2026-08-20"):
     d = ws.series_dir / slug / "episodes" / ep
     (d / "sources").mkdir(parents=True, exist_ok=True)
     (d / "out").mkdir(exist_ok=True)
-    body = SCRIPT.format(status=status)
+    render = ""
     if status == "rendered":
-        meta, rest = body.split("---\n", 1)
-        meta += "render:\n"
-        for k, v in RENDERED_META["render"].items():
-            meta += f"  {k}: {json.dumps(v)}\n"
-        body = meta + "---\n" + rest
+        render = "render:\n" + "".join(
+            f"  {k}: {json.dumps(v)}\n" for k, v in RENDERED_META["render"].items()
+        )
+    body = SCRIPT.format(status=status, render=render)
     (d / "script.yaml").write_text(body, encoding="utf-8")
     (d / "sources" / "_manifest.json").write_text(
         json.dumps({"pasted": {"url": "https://example.test/digest", "title": "digest"}}),
@@ -550,8 +550,11 @@ def test_add_records_the_entities_the_checker_extracted(brief, ws):
     make_episode(ws)
     run("coverage", "add", "2026-08-20", "--series", "the-brief")
     ent = {e for s in stories_of(ledger_of(ws, "the-brief")) for e in s.get("entities", [])}
-    assert "DeepSeek" in ent
-    assert any("Qwen3.8-Max" in e for e in ent)
+    # Substring, not equality: `claims.py` extracts glued multi-entity runs
+    # (D-102) — "DeepSeek V4-Pro" is one atom. That costs the ledger nothing,
+    # because the matcher is containment-based and `deepseek` finds it anyway.
+    assert any("DeepSeek" in e for e in ent), ent
+    assert any("Qwen3.8-Max" in e for e in ent), ent
 
 
 def test_add_records_the_source_the_beat_cited(brief, ws):
