@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -103,8 +104,11 @@ def _encode(
     Two renderers would be two things to keep identical, and the gated one would
     be the one nobody exercised while developing.
     """
-    frames = episode.out_dir / ".frames"
-    shutil.rmtree(frames, ignore_errors=True)
+    # Spec §5: the frames are ~2.5 GB per episode and they live in a temp
+    # directory, never inside `workspace/`. A SIGKILL runs no `finally`, and
+    # 2.5 GB of PNGs left in the operator's content directory is a mess they
+    # have to find before they can understand it.
+    frames = Path(tempfile.mkdtemp(prefix=f"agsoc-frames-{episode.id}-"))
     try:
         _run(
             ["node", "render.mjs", "--plan", str(plan_path), "--out", str(frames)],
@@ -131,7 +135,6 @@ def _encode(
         )
         return mp4, plan
     finally:
-        # ~2.5 GB per full episode (spec §5). Never leave these behind.
         shutil.rmtree(frames, ignore_errors=True)
 
 

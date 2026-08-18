@@ -34,9 +34,10 @@ const planPath = flag('plan');
 const outDir = flag('out');
 
 const qs = new URLSearchParams();
+let plan = null;
 if (planPath) {
   const { readFile, writeFile } = await import('node:fs/promises');
-  const plan = JSON.parse(await readFile(planPath, 'utf8'));
+  plan = JSON.parse(await readFile(planPath, 'utf8'));
   await writeFile(
     join(HERE, '.plan.js'),
     'window.__PLAN = ' + JSON.stringify(plan) + ';\n',
@@ -73,8 +74,21 @@ if (!total) {
   await browser.close();
   process.exit(1);
 }
-const frames = Math.round(total * FPS);
-console.log(`${day} · ${total.toFixed(2)}s · ${frames} frames @ ${FPS}fps`);
+/* Frame count and rate come from the PLAN, never from arithmetic here.
+ * Python resolves every time in the episode (D-007) and plan.json already
+ * carries `fps` and `total_frames`; recomputing them is a second answer to a
+ * question that has one, and the two disagree at the rounding boundary — which
+ * reaches a viewer as a video that stops one frame early. Refused rather than
+ * defaulted: a plan without a frame count is a plan this cannot render, and a
+ * fallback here would be the arithmetic coming straight back. */
+if (plan && !Number.isInteger(plan.total_frames)) {
+  console.error(`${planPath}: no integer total_frames — Python resolves the timing, not this file`);
+  await browser.close();
+  process.exit(1);
+}
+const fps = plan ? plan.fps : FPS;
+const frames = plan ? plan.total_frames : Math.round(total * FPS);
+console.log(`${day} · ${total.toFixed(2)}s · ${frames} frames @ ${fps}fps`);
 
 const shoot = async (t, path) => {
   await page.evaluate((tt) => window.__seek(tt), t);
@@ -107,7 +121,7 @@ if (at !== null) {
   await mkdir(dir, { recursive: true });
   const t0 = Date.now();
   for (let i = 0; i < frames; i++) {
-    await shoot(i / FPS, join(dir, String(i).padStart(5, '0') + '.png'));
+    await shoot(i / fps, join(dir, String(i).padStart(5, '0') + '.png'));
     if (i % 150 === 0 && i) {
       const pct = ((i / frames) * 100).toFixed(0);
       const eta = ((Date.now() - t0) / i) * (frames - i) / 1000;
