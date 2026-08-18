@@ -979,21 +979,25 @@ def test_an_override_written_in_the_script_reaches_the_record(tmp_path):
     change the verdict — the verdict is what was measured; the override is what
     a human decided about it.
 
-    NOTE the shape: §8.4 writes `claim_override` as a mapping of `reason` and
-    `by`, but `script.py` validates every shared field including this one with
-    `free_text`, so a mapping is refused at load. Following the code, as the
-    ground rules require. Flagged in the report.
+    The shape is §8.4's mapping of `reason` and `by` (D-103). It was a string
+    when this test was written, because `script.py` validated every shared
+    field with `free_text` and refused §8.4's own example at load; Phase 5 Task
+    3 fixed the code to match the spec, and this fixture moved with it.
     """
     _series, ep = episode_on_disk(
         tmp_path,
         sources={"local-ai-zone": "prices rose sharply"},
         beats=[{"type": "body", "text": "Prices rose 1,100%.", "src": "local-ai-zone",
                 "quote": "prices rose sharply",
-                "claim_override": "Framed as expectation, not fact. — Ali Abdukarim"}],
+                "claim_override": {"reason": "Framed as expectation, not fact.",
+                                   "by": "Ali Abdukarim"}}],
     )
     record = V.verify_episode(ep)["claims"][0]
     assert record["mechanical"]["verdict"] == "fail"
-    assert "Ali Abdukarim" in record["override"]
+    assert record["override"] == {
+        "reason": "Framed as expectation, not fact.",
+        "by": "Ali Abdukarim",
+    }
 
 
 def test_verification_opens_no_socket_and_calls_no_model(tmp_path):

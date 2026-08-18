@@ -702,8 +702,63 @@ BEAT_TYPES: dict[str, dict] = {
 }
 
 # Present on every type (spec §7.1, "shared optional fields on every type").
-# `hold` is handled separately: it has a default and a positivity rule.
-SHARED_TEXT = ("act", "kicker", "src", "quote", "claim_override")
+# `hold` is handled separately: it has a default and a positivity rule, and
+# `claim_override` because it is not text at all — see `claim_override` below.
+SHARED_TEXT = ("act", "kicker", "src", "quote")
+
+OVERRIDE_FIELDS = ("reason", "by")
+
+
+def claim_override(v: Any) -> str | None:
+    """§8.4's bypass: a written sentence with a name on it, never a flag (D-103).
+
+    This field used to be validated as free text along with `act` and `kicker`,
+    which refused §8.4's own YAML example at load. The mapping is the right
+    shape and it is load-bearing:
+
+        claim_override:
+          reason: "Framed as expectation, not fact; 'widely expected' is my read
+                   of three sourced analyst quotes, not a claim the article makes."
+          by: "Ali Abdukarim"
+
+    "An override is a visible diff in a file you commit — never a UI checkbox,
+    never a CLI flag. That asymmetry is the point: passing verification is
+    automatic, and bypassing it costs you a written sentence with your name on
+    it." A string carries the sentence but loses the name; both fields are
+    required and neither may be blank, because an override with an empty
+    `reason` IS the checkbox §8.4 says it must never be.
+
+    Unknown keys are refused rather than ignored. `approved: true` sitting
+    beside a reason nobody reads is the same failure wearing the schema's
+    blessing, and a typo (`By:`) that silently loses the name is worse than a
+    refusal an operator can see.
+    """
+    if not isinstance(v, dict):
+        return (
+            f"must be a mapping with `reason` and `by`, got {_type_name(v)}. "
+            "§8.4: an override costs a written sentence with your name on it, "
+            "and a bare string has no name in it"
+        )
+    unknown = sorted(k for k in v if k not in OVERRIDE_FIELDS)
+    if unknown:
+        listed = ", ".join(repr(k) for k in unknown)
+        return (
+            f"has unknown key(s) {listed} — it takes exactly `reason` and `by`. "
+            "Anything else is a field the gate will not read"
+        )
+    for name in OVERRIDE_FIELDS:
+        if name not in v:
+            return (
+                f"is missing `{name}` — §8.4 requires the reason AND the person "
+                "taking responsibility for it"
+            )
+        if not _is_filled(v[name]):
+            return (
+                f"`{name}` must be a non-empty string, got {_type_name(v[name])}. "
+                "An override nobody wrote is a checkbox, which is the one thing "
+                "§8.4 says this must never be"
+            )
+    return None
 
 
 @dataclass(frozen=True)
@@ -824,6 +879,9 @@ def _beat(raw: Any, index: int, where: Any) -> Beat:
             raise ScriptError(f"{at} {reason}")
 
     if "claim_override" in raw:
+        reason = claim_override(raw["claim_override"])
+        if reason:
+            raise ScriptError(f"{at} `claim_override` {reason}")
         payload["claim_override"] = raw["claim_override"]
 
     return Beat(
