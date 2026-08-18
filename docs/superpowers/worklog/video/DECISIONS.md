@@ -1914,3 +1914,45 @@ Two follow-ups, neither blocking Phase 4:
 - **Phase 5's verifier flagging any `custom` beat that touches `location` or
   `window.open`** for the approver. That is the right home for it: the same lint
   framing as D-088, surfaced to the human who is already reading the `attest`.
+
+## D-091 · SPEC · the NFKC sentence was right in conclusion and wrong in fact
+
+§8.2.1 said U+2011 "is not a compatibility variant and survives NFKC unchanged."
+Leader-measured, that is false:
+
+```
+U+2011 NON-BREAKING HYPHEN   -> U+2010 HYPHEN       still not ASCII
+U+2013 EN DASH / U+2014 EM DASH / U+2212 MINUS  -> unchanged
+U+00A0 / U+202F              -> U+0020 SPACE       fixed
+```
+
+NFKC fixes the **space** family and leaves the **hyphen** family non-ASCII. The
+conclusion — an explicit fold table is required — stands, and stands for a
+stronger reason than the one written down.
+
+**How it nearly went the other way.** My first probe asked `"‑" not in
+normalize("NFKC", s)` and printed **True**, which reads exactly like NFKC solving
+the problem. It doesn't: the codepoint is gone because it became U+2010, and
+`V4‑Pro` still fails to match `V4-Pro`. Same class as D-031 — I verified the
+wrong property, and the wrong property answered comfortably. The rule that
+catches it: **ask whether the fold reached the target, not whether a particular
+input disappeared.**
+
+Spec corrected with the measurements inline, so the next reader is not asked to
+trust a claim of the same shape.
+
+## D-092 · phase 5 / task 1 · years and ordinals are claim numbers, and nobody decided that
+
+Running §8.2.2's rule over the real brief before writing Task 1 produced 18 claim
+numbers including `2026,` (a year) and `14,` (the brief's own list numbering).
+Both are digits-only, so both must appear in a quote or the beat is refused.
+
+The spec's table never considered them. This is D-040's false-refusal end
+arriving somewhere nobody looked, and it is exactly the kind of thing that turns
+a gate into theatre one reflexive override at a time.
+
+**Handed to Task 1 as an explicit decision rather than a default**, with both
+directions costed: exempting years is not free, because a stale date presented as
+current is a real failure mode §8.3 names. Recorded here because the finding is
+worth more than whichever answer it gets — *the rule was validated against real
+prose twice, and produced a new question both times.*
