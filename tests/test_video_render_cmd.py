@@ -346,6 +346,22 @@ def test_each_refusal_names_the_file_the_operator_must_open(series, fake):
     assert "sha256" not in screens["ledger"]
 
 
+def test_each_refusal_offers_its_own_fix(series, fake):
+    """M4, the half the first version of this file missed.
+
+    Collapsing the three screens into one framing SURVIVED the distinctness
+    check above, because the underlying reasons still read differently — the
+    `why` line comes from `approval_drift` and `stale_reason` and those were
+    always going to differ. What collapsed was the FIX line, which is the half
+    an operator acts on, and it was pointing every refusal at `--restart`.
+    """
+    screens = _three_refusals(series)
+    assert "put the change back" in screens["drift"]
+    assert "agsoc video check" in screens["ledger"]
+    for other in ("drift", "ledger", "status"):
+        assert "--restart" not in screens[other], other
+
+
 def test_the_gate_calls_three_named_checks(series):
     """M5, D-113. Folding them into one predicate rebuilds the two-paths-to-one-
     answer shape Phase 7 spent three tasks eliminating. Read off the AST, not
@@ -556,12 +572,39 @@ def test_no_frames_are_left_behind_anywhere_in_the_workspace(series, ws, fake):
     assert not list(Path(ws.root).rglob("*.png"))
 
 
+def _frames_dir(fake):
+    node = [c for c in fake.calls if Path(c[0]).name == "node"][0]
+    return Path(node[node.index("--out") + 1])
+
+
+def test_the_frames_are_deleted_after_the_encode(series, fake):
+    """R4. ~2.5 GB per episode. They live outside `workspace/` (spec §5), which
+    is exactly why the workspace check above cannot see them leak — this one
+    follows the directory the renderer was actually given."""
+    approved(series)
+    render()
+    assert not _frames_dir(fake).exists()
+
+
+def test_the_frames_are_deleted_when_the_render_fails(series, monkeypatch):
+    """The same, on the path where the disk is likeliest to be the problem."""
+    approved(series)
+    f = broken(monkeypatch, fail_on="ffmpeg", stderr="No space left on device")
+    assert render().exit_code == 1
+    assert not _frames_dir(f).exists()
+
+
 def test_the_render_is_recorded_in_the_script(series, fake):
     """R4. "somewhere stated" means stated in the artifact, not in scrollback."""
     approved(series)
     render()
     record = meta_on_disk(series)["render"]
-    assert record["file"].endswith("vertical-1080x1920.mp4")
+    assert record["file"] == "out/vertical-1080x1920.mp4"
+    # Relative to the episode, not absolute: a committed artifact that names
+    # `/Users/someone/...` is a lie the moment the workspace moves, and it
+    # names the machine it was rendered on to anyone who reads the file.
+    assert not Path(record["file"]).is_absolute()
+    assert (series.episodes_dir / EP / record["file"]).is_file()
     assert record["format"] == "vertical"
     assert record["script_file_sha256"]
 
