@@ -574,9 +574,17 @@ bypassing it costs you a written sentence with your name on it.
 A format is a declared context, not a stylesheet fork:
 
 ```js
-vertical = { w:1080, h:1920, safeTop:430, safeBottom:1560, measure:'narrow', scale:1.00 }
-wide     = { w:1920, h:1080, safeTop:120, safeBottom: 960, measure:'wide',   scale:0.62 }
+vertical = { w:1080, h:1920, safeTop:400, safeBottom:1580, measure:'narrow', scale:1.00 }
+wide     = { w:1920, h:1080, safeTop:200, safeBottom: 900, measure:'wide',   scale:0.62 }
 ```
+
+**Both safe bands were corrected on 2026-08-18 against the shipped engine.**
+Vertical's `430…1560` was never what the engine drew — the stage has always been
+`400…1580`, and that stage is pinned by 51 byte-identical probe frames of the two
+committed episodes, so the spec was the thing that was wrong. Wide's `120…960`
+collides with the chrome; `200…900` is derived so both formats have near-equal
+room in layout units, which is what makes one script legitimately render as two.
+The arithmetic lives in `plan.py::FORMATS`.
 
 Each beat type implements layout per `measure`. The differences are real but few:
 

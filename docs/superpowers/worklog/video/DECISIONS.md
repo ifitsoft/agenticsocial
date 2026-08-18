@@ -3341,3 +3341,79 @@ types `judge` inline for at least one claim.
 Also carried: the self-contained-beat rewrite has worked examples that have
 **never themselves been run through `check`** — the implementer flagged it as
 their sharpest concern, and they are right to.
+
+## D-125 · phase 10 · the format is a context, and overflow is the only thing that could not be checked
+
+**One layout system, two declared contexts.** `plan.FORMATS` carries the whole
+context; `engine.js` applies it to the stage; **no beat builder changed and none
+reads it.** §9's per-format differences live in one stylesheet keyed on what the
+stage declares. That is the fork avoided — and the second copy is always the one
+nobody looks at.
+
+1900 tests, four Node suites green, **26/26 mutants** (first sweep 24/26, both
+survivors gaps in the implementer's own tests). **Vertical is unchanged and it
+was measured, not asserted:** 51 probe frames of the two committed episodes and
+71 of the operator's three, every PNG hash identical before and after.
+
+### Overflow, and why it had to be page-time
+
+`checkFit()` builds every beat before frame 0, settles every animation at `p=1`,
+and compares the scene column's children at **both** ends — a centred column
+spills both ways — plus `scrollWidth`. It throws naming beat, type, pixels and
+format, and **the renderer exits before a single frame**.
+
+The brief asked for plan time; the implementer argued page time and is right:
+**text height is a property of the resolved font**, so a Python estimate would be
+a second answer that disagrees with the first — the D-059 shape in a new costume.
+
+**It found a true positive on its first run**: the determinism suite's hostile
+`shown` cell ran 625px past the measure. A check whose first execution finds a
+real defect in existing content is a check worth having.
+
+### D-116 resolved by splitting it
+
+- **`type_scale` wired.** It multiplies the format scale, so the measure moves
+  with the type. **Proven by measuring type, not by grep** — which is the right
+  standard given D-116 was itself found by grepping for a string.
+- **`type_family` retired.** It is the one design value that **cannot be
+  validated**, because whether a family resolves is a property of the machine —
+  the same machine-dependence that keeps fonts outside the approval (D-116).
+  Retired rather than refused: the operator's existing file still loads, with one
+  warning. `plan.json` and the approval now resolve `[design]` through the same
+  function, so the drift false positive closes without narrowing coverage.
+
+## D-126 · SPEC · §9's safe-area numbers were wrong for vertical and unusable for wide
+
+Amended against the shipped engine. **Vertical's `430…1560` was never what the
+engine drew** — it has always been `400…1580`, and that stage is pinned by 51
+byte-identical probe frames, so **the spec was the thing that was wrong.** Wide's
+`120…960` collides with the chrome; `200…900` gives both formats near-equal room
+in layout units, which is what lets one script render as two.
+
+Worth stating because the alternative was tempting: implementing §9 literally
+would have changed every vertical frame of both committed episodes to match a
+number nobody had ever rendered. **When a spec constant and a shipped artifact
+disagree, the artifact is the evidence** — the spec records an intention, the
+frames record what happened.
+
+## D-127 · phase 10 · what is still visually wrong with every check green
+
+The implementer was asked what could still be wrong, and answered honestly rather
+than reassuringly. Recorded verbatim in substance, because this is the phase where
+"the tests pass" is not sufficient:
+
+- **Sparse beats read as lost at 16:9** — evidenced from an actual mp4 frame, not
+  predicted.
+- **The right third of the wide frame is empty**, by a typographic choice the
+  implementer made and nobody approved.
+- **~150 cards nobody has opened.**
+- **Left-of-card overflow is deliberately not detected** — a symmetric check cried
+  wolf on the dumbbell's markers, so the asymmetry is a known, chosen gap rather
+  than an oversight.
+
+Also flagged and out of scope by decision, not by discovery: **per-format text
+would be a schema change.** One script does produce both formats; what does not
+survive the transposition is anything composed *for* the shape.
+
+And not implemented: `render <ep>` rendering every enabled format, `[formats]
+enabled` being read by anything but the list screen, and `preview --format`.
