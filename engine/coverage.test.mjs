@@ -82,8 +82,11 @@ console.log('\n  the regression: a hyphenated product term against a spaced ledg
 }
 
 {
-  /* Separators are noise, in every direction an author might type them. */
-  const forms = ['gemini-3.7', 'gemini 3.7', 'Gemini_3.7', 'GEMINI-3-7'];
+  /* Separators are noise, in every direction an author might type them —
+   * including the direction where the author writes none and the ledger has
+   * one. `gemini3.7` against `Gemini 3.7 Flash` is the case a
+   * collapse-separators-to-a-space normalisation gets wrong on its own. */
+  const forms = ['gemini-3.7', 'gemini 3.7', 'Gemini_3.7', 'GEMINI-3-7', 'gemini3.7'];
   const counts = forms.map((f) => hitCount(run(['check', f]).out));
   ok(
     'every separator spelling of the same term gives the same answer',
