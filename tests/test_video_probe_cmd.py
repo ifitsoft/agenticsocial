@@ -198,6 +198,19 @@ def test_a_probe_at_a_time_asks_for_exactly_one_frame(fake, series):
     assert "--probe" not in cmd
 
 
+def test_a_refused_probe_does_not_destroy_the_last_one(fake, series):
+    """Found by running it. The clearing ran before the range check, so
+    `--at 90` on a six-second episode refused correctly — and took the frames
+    the operator was looking at with it. A refusal must cost nothing; that is
+    what makes it safe to type a number and see."""
+    ep = episode(series)
+    probe()
+    before = sorted(p.name for p in (ep.dir / "probe").glob("*.png"))
+    assert before
+    assert probe("--at", "90").exit_code == 1
+    assert sorted(p.name for p in (ep.dir / "probe").glob("*.png")) == before
+
+
 def test_a_time_outside_the_episode_is_refused(fake, series):
     """A frame at t=90 of a 6-second episode is a black rectangle, and a black
     rectangle reads as a broken renderer. Python knows the runtime — it resolved
