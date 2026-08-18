@@ -708,7 +708,7 @@ def test_an_unchanged_claim_keeps_its_verdict_across_a_re_check(series):
     ep = episode(series, [clean_beat(), fabricated_beat()])
     assert check().exit_code == 1
     assert judge(claim="c-001", risk=RISK).exit_code == 0
-    write_script(ep, [clean_beat(), fabricated_beat(text="Old price: $1.32 per 1M.")])
+    write_script(ep, [clean_beat(), second_beat()])
     assert check().exit_code == 0
     carried = block_of(series)
     assert carried is not None and carried["residual_risk"] == RISK

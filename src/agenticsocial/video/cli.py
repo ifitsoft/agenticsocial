@@ -297,6 +297,13 @@ def _join(parts) -> str:
 is_blocking = verify_mod.is_blocking
 classify = verify_mod.classify
 
+# Pass 2's state, for the same reason and on the same terms: the SAME object, so
+# the screen and the gate cannot disagree about what a judgement said. This is
+# the only way any of this file reads the `adversarial` field — nothing here
+# subscripts it, because a second reading of that block is a second place §8.4's
+# list is spelled out (D-059).
+adversarial_state = verify_mod.adversarial_state
+
 
 def _verdict(record: dict) -> str:
     return str((record.get("mechanical") or {}).get("verdict") or "?")
@@ -680,6 +687,7 @@ def video_review(
     typer.echo("")
     if verdicts is not None:
         _print_claim_summary(ledger)
+        _print_pass2(verify_mod.claim_records(ledger))
 
     _echo_runtime(script, check)
 
@@ -743,6 +751,31 @@ def _next_step(record: dict) -> str:
     widen the citation — and the third one §8.4 allows, which costs a written
     sentence with your name on it.
     """
+    # Pass 2 first, and with different words, because the two refusals ask for
+    # different acts. A pass-1 `fail` says the figure is not in the quote —
+    # correct it or widen the citation. A `refuted` claim's figure IS in the
+    # quote: nothing about the citation is wrong and widening it changes
+    # nothing, so printing pass 1's remedy over a pass-2 refusal sends an
+    # operator to edit the one part of the beat that was right.
+    state, _ = adversarial_state(record)
+    if state in ("refuted", "unsupported"):
+        return (
+            f"pass 2 found this claim {state} and the citation is not the "
+            "problem: rewrite the beat to what the source actually supports, "
+            "drop it, or write a `claim_override` (reason + by) saying why the "
+            "refutation is wrong"
+        )
+    if state in ("stale", "expired"):
+        return (
+            "re-judge this claim — `agsoc video judge <ep> --claim <id>`. The "
+            "judgement on record was made about other words, or too long ago "
+            "to stand"
+        )
+    if state == "malformed":
+        return (
+            "the pass-2 judgement on this claim cannot be read — re-run it with "
+            "`agsoc video judge <ep> --claim <id>`"
+        )
     verdict = _verdict(record)
     mechanical = record.get("mechanical") or {}
     if verdict == "no_source":
@@ -785,8 +818,25 @@ def _claim_row(record: dict) -> str:
     return (
         f" {mark}{star} {record.get('id', '?'):<7} beat {record.get('beat_index'):>2}  "
         f"{_clip(str(record.get('beat_type', '?')), TYPE_WIDTH):<{TYPE_WIDTH}}  "
-        f"{_verdict(record)}"
+        f"{_verdict(record)}{_pass2_mark(record)}"
     )
+
+
+def _pass2_mark(record: dict) -> str:
+    """What pass 2 said, on the row, or nothing at all when it has not run.
+
+    A refuted claim's MECHANICAL verdict is `pass` — that is the whole point of
+    pass 2 — so a row that prints only pass 1 puts a green word on the line the
+    gate is about to refuse. Silent when unjudged: a mark on every row of every
+    episode is a mark nobody reads on the one that matters.
+    """
+    state, _ = adversarial_state(record)
+    return "" if state == "unjudged" else f" · pass 2 {state}"
+
+
+def _pass2_why(record: dict) -> str:
+    """Why pass 2 refuses this claim, or "". The screens never read the block."""
+    return adversarial_state(record)[1]
 
 
 def _cleared_summary(records: list[dict]) -> str:
@@ -830,6 +880,8 @@ def _print_detail(ep, record: dict, documents: dict) -> None:
     typer.secho(_claim_row(record).rstrip(), fg=typer.colors.RED)
     if _reason(record):
         typer.echo(_detail("why", _reason(record)))
+    if _pass2_why(record):
+        typer.echo(_detail("pass 2", _pass2_why(record)))
     if record.get("text"):
         typer.echo(_detail("beat", record["text"]))
     if record.get("quote"):
@@ -955,6 +1007,54 @@ def _print_overrides(records: list[dict]) -> None:
     typer.echo("")
 
 
+def _print_pass2(records: list[dict]) -> None:
+    """§8.3's pass, on both screens: what it covered, and what kind of thing it is.
+
+    Three things this block has to do, and only the first is obvious:
+
+      * **Say how much of the episode pass 2 reached.** §8.4 does not refuse an
+        unjudged claim, so an episode can be signed with pass 2 never run — and
+        that must not look like an episode pass 2 cleared. The count is printed
+        even at zero, which is the one case it exists for.
+      * **Say that these are judgements.** Pass 1 re-runs to the same answer in a
+        year and pass 2 does not. A reader who cannot tell them apart trusts them
+        equally, so the line says so and every judgement carries its author and
+        the date it stops standing.
+      * **Print `residual_risk` on SUPPORTED claims.** §8.3 calls it often the
+        most useful output of the whole pass — "the source does not state an
+        effective date" is exactly what a human should read before signing — and
+        a risk shown only on failures is a risk nobody reads on the episode they
+        are about to approve. Absent risks stay silent: most claims have none,
+        and "no residual risk" on every line is the noise this has to cut
+        through.
+    """
+    if not records:
+        return
+    tally = verify_mod.pass2_tally(records)
+    typer.echo(
+        textwrap.fill(
+            f"pass 2  {tally['judged']} of {_plural(tally['total'], 'claim')} "
+            "judged — a judgement by an agent, NOT a measurement: not "
+            "reproducible, and it expires",
+            width=ROW_WIDTH,
+            subsequent_indent="        ",
+        )
+    )
+    for record in records:
+        judged = verify_mod.judgement(record)
+        if judged is None:
+            continue
+        parts = [
+            f"{judged['state']} — judged by {judged['judged_by']} on "
+            f"{_one_line(str(judged['judged_at']))}, stops standing "
+            f"{judged['expires_on']}"
+        ]
+        if judged["residual_risk"]:
+            parts.append(f"residual risk: {judged['residual_risk']}")
+        typer.echo(_detail(str(record.get("id", "?")), " · ".join(parts), indent=4))
+    typer.echo("")
+
+
 def _print_entities(records: list[dict]) -> None:
     """§8.2 step 3, recorded and NOT gated — D-102, said on the screen.
 
@@ -1064,6 +1164,7 @@ def video_check(
         _print_detail(ep, record, documents)
     _print_attestations(records)
     _print_overrides(records)
+    _print_pass2(records)
     _print_entities(records)
 
     typer.echo(f"wrote {path}")
@@ -1079,6 +1180,83 @@ def video_check(
     typer.secho(_cleared_summary(records), fg=typer.colors.GREEN)
 
 
+@video_app.command("judge")
+def video_judge(
+    episode: str,
+    claim: str = typer.Option(..., "--claim", help="claim id, e.g. c-001"),
+    verdict: str = typer.Option(
+        ..., "--verdict", help="supported · unsupported · refuted"
+    ),
+    refutation: str = typer.Option(
+        ...,
+        "--refutation",
+        help="what you attacked and what the source said — required, §8.3",
+    ),
+    risk: Optional[str] = typer.Option(
+        None, "--risk", help="residual risk, recorded even on `supported`"
+    ),
+    by: str = typer.Option(..., "--by", help="who or what judged — required"),
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+) -> None:
+    """Record one pass-2 verdict into claims.json (§8.3). It makes no judgement.
+
+    **This command stores an argument somebody else made.** The CLI contains no
+    LLM calls (CLAUDE.md) and pass 2 is irreducibly a judgement pass, so the
+    `verify` skill runs one blind refuter per claim and this writes down what it
+    concluded. Nothing here reaches the network or a model, and nothing here
+    decides anything except whether the record is well formed.
+
+    `--refutation` is required and may not be blank. A `supported` with no
+    account of what was attacked records only that somebody looked, which is
+    worth nothing — it is the evidence for the verdict, and this project has
+    printed a conclusion stronger than its evidence four times.
+
+    Takes IDENTIFIERS and loads the ledger itself (D-072). It refuses on a
+    missing or stale `claims.json`, on an unknown claim id, and on a claim pass
+    1 did not clear.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    claim = _text(claim, "The claim id")
+    refutation = _text(refutation, "The refutation")
+    by = _text(by, "The judge")
+    if risk is not None:
+        risk = _text(risk, "The residual risk")
+    try:
+        s = load_series(ws, series)
+        ep = load_episode(s, episode)
+        block = verify_mod.record_adversarial(
+            ep,
+            claim,
+            verdict=verdict,
+            attempted_refutation=refutation,
+            residual_risk=risk,
+            by=by,
+        )
+    except (SeriesError, EpisodeError, verify_mod.VerifyError) as e:
+        raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot write {verify_mod.CLAIMS_NAME}: {e}")
+
+    typer.echo(f"{s.slug}/{ep.id} · {claim} · pass 2 {block['verdict']}")
+    typer.echo(_detail("refuted", block["attempted_refutation"], indent=2))
+    if block["residual_risk"]:
+        typer.echo(_detail("risk", block["residual_risk"], indent=2))
+    # The honesty line, on the screen the agent that recorded it reads. A stored
+    # judgement that looks like a stored measurement is the confusion this whole
+    # record exists to prevent.
+    typer.echo(
+        _detail(
+            "note",
+            f"a judgement by {block['judged_by']}, not a measurement — not "
+            f"reproducible, and it stops standing after "
+            f"{verify_mod.PASS2_HORIZON_DAYS} days",
+            indent=2,
+        )
+    )
+
+
 def _print_open_claims(records: list[dict]) -> None:
     """Name every claim that refused, and say what to do about each.
 
@@ -1089,6 +1267,8 @@ def _print_open_claims(records: list[dict]) -> None:
         typer.secho(_claim_row(record).rstrip(), fg=typer.colors.RED)
         if _reason(record):
             typer.echo(_detail("why", _reason(record)))
+        if _pass2_why(record):
+            typer.echo(_detail("pass 2", _pass2_why(record)))
         typer.echo(_detail("fix", _next_step(record)))
 
 

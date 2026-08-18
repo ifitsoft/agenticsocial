@@ -733,7 +733,17 @@ def test_review_shows_an_overridden_claim_as_what_it_measured(series):
     result = run("video", "review", EP, "--series", "the-brief")
     rows = [line for line in result.output.splitlines() if "  0  " in line]
     assert rows and "fail*" in rows[0], result.output
-    assert "pass" not in result.output
+    # Everything except the pass-2 coverage banner, which is headed "pass 2 …"
+    # and is about how many claims an adversarial refuter reached — not a
+    # verdict on this or any other claim. The exclusion is named rather than the
+    # assertion loosened: "the word `pass` is nowhere on this screen" was always
+    # a whole-screen search for a four-letter string (D-118), and the property
+    # this test is for is that no VERDICT on this claim reads `pass`.
+    verdicts = [
+        line for line in result.output.splitlines()
+        if not line.lower().startswith("pass 2")
+    ]
+    assert "pass" not in "\n".join(verdicts)
     assert "Ali Abdukarim" in result.output
 
 
