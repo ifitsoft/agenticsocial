@@ -39,6 +39,15 @@ Three asymmetries in it, each deliberate:
     **This module therefore does not implement §8.2 step 3 as a gate, and says
     so** rather than pretending the check is stronger than it is.
 
+**A figure this pass cannot value is checked by its spelling, never skipped.**
+`3/4`, `1e9`, `12:30`, `2010-2011` and a non-ASCII digit are figures whose
+arithmetic this module does not do; `claims.figure` still returns them, with no
+value, and the quote must spell them exactly. The alternative was what the code
+did until F1: a token that was neither digits-only nor a name yielded no atom,
+so *"I cannot read this figure"* and *"this figure is fine"* produced the same
+verdict. That is the one direction a component whose entire job is to notice
+must never fail in.
+
 Folding (§8.2.1) applies to the comparison only. Nothing here normalises a byte
 on disk — `sha256` still covers the originals, which is what §4 rests on — and
 every span recorded is an offset into the ORIGINAL document, because the fold
@@ -766,12 +775,48 @@ def write_ledger(episode: Episode, ledger: dict) -> Path:
     return path
 
 
+def _script_drift(episode: Episode, ledger: dict) -> str | None:
+    """Has the script moved under this ledger? `corpus_sha` cannot see it.
+
+    The corpus half answers for the bytes a claim was checked AGAINST. This is
+    the other half: the beats themselves. Rewrite a figure and every verdict in
+    `claims.json` still lines up by `beat_index` and is now about a sentence
+    nobody wrote — the same lie as a stale corpus, arriving through the other
+    door.
+
+    Compared on the CLAIMS the script produces, not on the file's bytes: a
+    reformatted comment is not a changed assertion, and a check invalidated by
+    whitespace is one operators re-run without reading.
+    """
+    try:
+        script = script_mod.load_script(episode)
+    except script_mod.ScriptError as e:
+        return f"the script no longer loads, so nothing can be compared — {e}"
+    try:
+        claims = claims_mod.extract_claims(script)
+    except claims_mod.ClaimsError as e:
+        return f"the script no longer yields claims to compare — {e}"
+    recorded = [
+        (r.get("id"), r.get("beat_index"), r.get("text"), r.get("src"), r.get("quote"))
+        for r in (ledger.get("claims") or [])
+        if isinstance(r, dict)
+    ]
+    current = [(c.id, c.beat_index, c.text, c.src, c.quote) for c in claims]
+    if recorded != current:
+        return "the script has changed since this check was written"
+    return None
+
+
 def stale_reason(episode: Episode, ledger: dict | None) -> str | None:
     """Why this ledger no longer describes what is on disk, or None.
 
     R3: recording `corpus_sha` and never comparing it is a field, not a
     guarantee. Task 3's `check` and Phase 7's `approve` both need this answer
-    and must not each invent their own.
+    and must not each invent their own — and until F3 was found, the script
+    half WAS invented separately, as a display helper in `cli.py`. An `approve`
+    written to this docstring got `None` for an edited script and would have
+    approved a ledger describing sentences nobody wrote. Both halves live here
+    now, and both load what they compare from the episode themselves (D-072).
     """
     if ledger is None:
         return f"no {CLAIMS_NAME} — run `agsoc video check` first"
@@ -794,4 +839,4 @@ def stale_reason(episode: Episode, ledger: dict | None) -> str | None:
             continue
     if corpus_sha(documents) != ledger["corpus_sha"]:
         return "the corpus has changed since this check was written — re-run it"
-    return None
+    return _script_drift(episode, ledger)

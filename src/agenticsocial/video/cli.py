@@ -16,7 +16,7 @@ from . import verify as verify_mod
 from .episode import create_episode, episode_ids, load_episode
 from .models import EpisodeError, SeriesError
 from .plan import PlanError, check_runtime
-from .script import RENDERABLE, Beat, Script, ScriptError, load_script
+from .script import RENDERABLE, Beat, ScriptError, load_script
 from .series import load_series, scaffold_series, series_slugs
 
 series_app = typer.Typer(help="Manage video series.", no_args_is_help=True)
@@ -455,35 +455,7 @@ def _review_table(beats, verdicts: dict | None = None) -> list[str]:
     return lines
 
 
-def _script_drift(script: Script, ledger: dict) -> str | None:
-    """Has the script moved under this ledger? `corpus_sha` cannot see it.
-
-    Task 2's `stale_reason` answers the corpus half — the bytes a claim was
-    checked against. The other half is the beats themselves: rewrite a figure,
-    and every verdict in `claims.json` still lines up by `beat_index` and is
-    now about a sentence nobody wrote. That is the same lie as a stale corpus
-    arriving through the other door, and the display must not tell it.
-
-    Compared on the CLAIMS the script produces, not on the file's bytes: a
-    reformatted comment is not a changed assertion, and a check invalidated by
-    whitespace is one operators re-run without reading.
-    """
-    try:
-        claims = claims_mod.extract_claims(script)
-    except claims_mod.ClaimsError as e:
-        return f"the script no longer yields claims to compare — {e}"
-    recorded = [
-        (r.get("id"), r.get("beat_index"), r.get("text"), r.get("src"), r.get("quote"))
-        for r in (ledger.get("claims") or [])
-        if isinstance(r, dict)
-    ]
-    current = [(c.id, c.beat_index, c.text, c.src, c.quote) for c in claims]
-    if recorded != current:
-        return "the script has changed since this check was written"
-    return None
-
-
-def _ledger_state(episode, script: Script):
+def _ledger_state(episode):
     """`(ledger, note, warn, verdicts)` — what `review` may show of `claims.json`.
 
     `verdicts` is None whenever the ledger cannot be trusted, and then NO
@@ -499,9 +471,10 @@ def _ledger_state(episode, script: Script):
         ledger = verify_mod.read_ledger(episode)
     except verify_mod.VerifyError as e:
         return None, f"{e} — verdicts are not shown", True, None
-    stale = verify_mod.stale_reason(episode, ledger) or (
-        _script_drift(script, ledger) if ledger is not None else None
-    )
+    # Both halves — corpus and script — come from `stale_reason`. They used to
+    # be two answers, one of them a display helper living here, and Phase 7's
+    # gate would have called the shared one and got the incomplete answer (F3).
+    stale = verify_mod.stale_reason(episode, ledger)
     if ledger is None:
         return None, str(stale), False, None
     if stale:
@@ -596,7 +569,7 @@ def video_review(
 
     check = check_runtime(script, s)
     beats = script.beats
-    ledger, ledger_note, warn, verdicts = _ledger_state(ep, script)
+    ledger, ledger_note, warn, verdicts = _ledger_state(ep)
 
     typer.echo(
         f"{s.slug}/{ep.id} · {ep.status.value} · {_plural(len(beats), 'beat')} · "

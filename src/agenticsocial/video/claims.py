@@ -25,7 +25,16 @@ against `planbuild.js`'s own `b.`/`r.`/`it.` property reads. What that does not
 catch is a field both files know about and this one classifies wrongly — see the
 Task 1 report.
 
-Three decisions that are this module's rather than the spec's:
+Four decisions that are this module's rather than the spec's:
+
+  * **A token that begins with a digit is a figure; one that begins with a
+    letter is an identifier.** That is the whole boundary (`figure`), and it is
+    what keeps D-071's exemptions — `V4-Pro`, `Qwen3.8-Max`, `GPT-5.6`, `M1` —
+    while refusing to let `950bn` or `3/4` be exempt for the same reason. A
+    figure this module cannot value is still a figure: it is returned with no
+    value, and §8.2 then demands the quote spell it. Nothing numeric-looking is
+    silently dropped, because a silent drop and a clean pass are the same
+    screen.
 
   * **Years and list ordinals stay claim numbers** (D-092). The rule is
     digits-only with no shape or range exemption. A stale date presented as
