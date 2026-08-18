@@ -134,7 +134,9 @@ def test_check_takes_identifiers_and_no_caller_built_object(series):
     caller could shape. A `Script` or `Episode` parameter is the mutant, and it
     is visible in the signature.
     """
-    sig = inspect.signature(video_cli.video_check)
+    # eval_str: `from __future__ import annotations` makes every annotation a
+    # string, and `"Script" is not str` would pass with the mutant in place.
+    sig = inspect.signature(video_cli.video_check, eval_str=True)
     assert [p.name for p in sig.parameters.values()] == ["episode", "series"]
     for p in sig.parameters.values():
         assert p.annotation is str, f"`{p.name}` takes {p.annotation!r}, not an identifier"
@@ -439,6 +441,35 @@ def test_review_stays_inside_its_width_however_long_the_quote_is(series):
     over = [line for line in result.output.splitlines() if len(line) > video_cli.ROW_WIDTH]
     assert not over, over
     assert "DeepSeek's 1.6T MoE flagship" in result.output
+
+
+def test_the_check_screen_stays_inside_its_width_too(series):
+    """precondition: M6 on the other screen. The failure screen carries the
+    longest strings in the product — a whole quote, a reason, a source excerpt —
+    and it is the screen an operator reads when they are already annoyed."""
+    episode(
+        series,
+        [
+            fabricated_beat(
+                text="DeepSeek's old price was $0.11 per 1M tokens, which is a "
+                "long sentence about Mistral Nemotron and Qwen and several other "
+                "names nobody will find in this source at all.",
+                quote="announced new pricing starting August 16 at about $1.32 / "
+                "$3.96 per 1M tokens (in/out), which is a very long citation",
+            )
+        ],
+    )
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 1
+    # The path to claims.json is exempt: a clipped path is a path you cannot
+    # paste, and its length is the operator's own directory layout, not
+    # something this screen chose.
+    over = [
+        line
+        for line in result.output.splitlines()
+        if len(line) > video_cli.ROW_WIDTH and not line.startswith("wrote ")
+    ]
+    assert not over, over
 
 
 def test_review_shows_the_verdict_beside_the_beat_it_belongs_to(series):
