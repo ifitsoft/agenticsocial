@@ -3133,3 +3133,68 @@ Recorded plainly rather than quietly: **the render pipeline is not installable.*
 For the operator running from this checkout it works today; for anyone else it
 does not exist. It belongs to whichever phase first needs the product to leave
 this directory.
+
+## D-121 · phase 9 / task 1 · pass 2 has a place to go, and the ledger says what it is worth
+
+`adversarial_state()` gives one answer per claim — `unjudged · supported ·
+unsupported · refuted · malformed · stale · expired` — with the sentence the
+screens print. `classify()` was **extended, not forked**, and pass 2 vetoes
+*before* the mechanical verdict, **because the claims it catches are exactly the
+ones pass 1 calls `pass`.** 1871 tests, **35/35 mutants with the harness
+committed** (`task-1-mutants.py`) — the first response to D-118, and the sweep's
+own first run was 30/34 with all four survivors the implementer's own.
+
+Leader-verified through the real path:
+
+```
+bound supported                -> supported | verified
+after editing the beat text    -> stale     | open
+blank attempted_refutation     -> open
+claims reproducible: true      -> open   (malformed)
+unknown verdict                -> open
+```
+
+**`attempted_refutation` is required at both ends** — the writer refuses a blank
+one and the gate refuses a stored blank one, as two separate mutants. A
+`supported` without it records only that someone looked.
+
+### Saying that a judgement is not a measurement, four times over
+
+Pass 1 is mechanical and returns the same answer in a year. Pass 2 is an agent's
+opinion. A reader who cannot tell them apart will trust them equally, so the
+distinction is built in four independent places: `reproducible: false` is a
+**checked** field (claiming `true` is malformed → open); the vocabulary differs
+where the concepts do (`judged_at`/`judged_by` versus `checked_at`, with a test
+that pass 1 does not borrow those words); both screens head the block *"a
+judgement by an agent, NOT a measurement"*; and the flag travels with the count
+into the signed artifact.
+
+**Expiry: a `supported` expires after 90 days; a `refuted` never does.** The
+argument is exactly right — the corpus and the script are covered by digests, and
+**the judge is not.** No digest of "what the refuter knew" exists or can. Ninety
+days costs nothing on the normal path and fires precisely on a ledger resurrected
+from a branch or a shelf. Ordering is shape → binding → verdict → expiry, so age
+can never convert *"a refuter knocked this over"* into a housekeeping chore.
+
+### The ruling the implementer asked for: `unjudged` is reported, not gated
+
+My brief's mutant table implied an unjudged claim should be `open`. **The
+implementer decided against it and is right.** §8.4 enumerates `fail`, `refuted`,
+`unsupported`, `no_source` and unattested `manual` — **absence of a judgement is
+not on the list**, and gating it would have left the project unable to approve
+anything, including the operator's three live episodes, until the skill exists.
+
+Coverage is instead **reported** on both screens and in the approval record, at
+zero, so an episode signed with pass 2 never run cannot be mistaken for one pass 2
+cleared. That is the honest shape: the gate enforces the spec's list, and the
+screen tells you what was not done.
+
+Ruled: **stands as built.** If pass 2 should ever be mandatory, that is a spec
+change to §8.4, not a quiet tightening of the gate.
+
+### And two defects that only running it found
+
+`review`'s table printed `pass` on a **refuted** claim — the column an operator
+scans before signing — and the refusal stuttered. Neither was visible to reading;
+both were caught by Step 6's requirement to produce the screens. **That is the
+third phase running where the demonstration step found what review missed.**
