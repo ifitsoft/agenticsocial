@@ -119,12 +119,12 @@ run M5a "a migrated episode is counted and not written" $C \
 run M5b "the last story of each episode is left behind" $C \
   '            episodes.append(ep)' \
   '            episodes.append({**ep, "stories": ep.get("stories", [])[:-1]})' $PY_ALL
-run M5c "a date that differs is overwritten instead of refused" $C \
-  "            raise CoverageError(
-                f\"{date} is already in this series' ledger with different \"" \
-  "            episodes[episodes.index(mine)] = ep
-            raise CoverageError(
-                f\"{date} is already in this series' ledger with different \"" $PY_ALL
+run M5c "a date that differs is silently overwritten, no refusal at all" $C \
+  "        elif mine == ep:
+            skipped.append(date)" \
+  "        elif True:
+            episodes[episodes.index(mine)] = ep
+            skipped.append(date)" $PY_ALL
 run M5d "the arithmetic that must balance is not checked" $C \
   '    if after_stories != before_stories + moved_stories:' \
   '    if False:' $PY_ALL
@@ -195,7 +195,7 @@ run M9c "the same episode can be recorded twice" $C \
   '    if False:' $PY_ALL
 run M9d "--dry-run writes after all" $L \
   '    if dry_run:
-        typer.echo("\\n  --dry-run: nothing written.\\n")
+        typer.echo("\n  --dry-run: nothing written.\n")
         return
     try:
         coverage_mod.save_ledger(s, merged)
@@ -207,7 +207,7 @@ run M9d "--dry-run writes after all" $L \
     except OSError as e:
         raise _fail(f"cannot write {coverage_mod.LEDGER_NAME}: {e}")
     if dry_run:
-        typer.echo("\\n  --dry-run: nothing written.\\n")
+        typer.echo("\n  --dry-run: nothing written.\n")
         return
     stories, episodes = coverage_mod.counts(merged)' $PY_ALL
 run M9e "the screen stops saying the ledger holds what was rendered" $L \
@@ -226,10 +226,10 @@ run M10b "a broken neighbouring series takes the check down" $L \
 run M10c "the ledger is written non-atomically" $C \
   '    atomic_write(
         ledger_path(series),
-        json.dumps(ledger, indent=2, ensure_ascii=False) + "\\n",
+        json.dumps(ledger, indent=2, ensure_ascii=False) + "\n",
     )' \
   '    ledger_path(series).write_text(
-        json.dumps(ledger, indent=2, ensure_ascii=False) + "\\n", encoding="utf-8"
+        json.dumps(ledger, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )' $PY_ALL
 
 echo "----- $((KILLED+SURVIVED)) mutants · $KILLED killed · $SURVIVED survived" | tee -a $LOG

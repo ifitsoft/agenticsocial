@@ -261,11 +261,18 @@ def test_the_series_ledger_is_what_was_read(fixture_series):
     assert hit_count(r.output) == 0
 
 
-def test_a_term_that_appears_only_in_an_entity_is_found(fixture_series):
-    """The ledger's own fields are not decoration. `Acme` is in `entities` and
-    nowhere else in that row — and an author searching a vendor name is the
-    commonest search this tool gets."""
-    assert hit_count(check("acme", series="fixture").output) == 1
+def test_a_term_that_appears_only_in_an_entity_is_found(ws):
+    """The ledger's own fields are not decoration, and an author searching a
+    vendor name is the commonest search this tool gets. The entity here appears
+    in NO other field — a sweep killed the earlier version of this test, which
+    searched for a name the title carried too."""
+    run("series", "new", "entities-only")
+    led = json.loads(json.dumps(FIXTURE))
+    led["episodes"][0]["stories"][0]["entities"] = ["Zetacorp Holdings"]
+    (ws.series_dir / "entities-only" / "coverage.json").write_text(
+        json.dumps(led, indent=2) + "\n", encoding="utf-8"
+    )
+    assert hit_count(check("zetacorp", series="entities-only").output) == 1
 
 
 def test_a_term_that_appears_only_in_a_source_is_found(fixture_series):
@@ -645,11 +652,31 @@ def test_add_records_the_rendered_file_and_runtime(brief, ws):
 
 def test_add_refuses_an_episode_that_was_never_rendered(brief, ws):
     """R5: `add` records after render. An episode still in review has not told
-    anyone anything."""
+    anyone anything.
+
+    Asserted on the status refusal SPECIFICALLY: there are two guards here (the
+    status, and the render record beside it), and each will refuse the other's
+    input. A sweep found that an assertion on the word "render" alone let
+    either guard be deleted while the other quietly covered for it."""
     make_episode(ws, status="in_review")
     r = run("coverage", "add", "2026-08-20", "--series", "the-brief")
     assert r.exit_code == 1
-    assert "render" in r.output.lower()
+    assert "in_review, not rendered" in r.output
+    assert ledger_of(ws, "the-brief")["episodes"] == legacy()["episodes"]
+
+
+def test_add_refuses_an_episode_marked_rendered_with_no_render_record(brief, ws):
+    """The other guard, on its own input. `rendered` with nothing to account for
+    it is a status somebody hand-edited, and the ledger is not the place to
+    find that out."""
+    d = make_episode(ws, status="rendered")
+    body = (d / "script.yaml").read_text(encoding="utf-8")
+    head, rest = body.split("render:\n", 1)
+    rest = rest.split("---\n", 1)[1]
+    (d / "script.yaml").write_text(head + "---\n" + rest, encoding="utf-8")
+    r = run("coverage", "add", "2026-08-20", "--series", "the-brief")
+    assert r.exit_code == 1
+    assert "no render record" in r.output
     assert ledger_of(ws, "the-brief")["episodes"] == legacy()["episodes"]
 
 
@@ -670,6 +697,22 @@ def test_add_replace_rewrites_the_episode_in_place(brief, ws):
     assert r.exit_code == 0
     dates = [e["date"] for e in ledger_of(ws, "the-brief")["episodes"]]
     assert dates.count("2026-08-20") == 1
+
+
+def test_the_ledger_is_written_atomically(brief, ws, monkeypatch):
+    """Every workspace write goes through `atomic_write` (CLAUDE.md). A ledger
+    half-written by an interrupted `add` is a ledger that has lost history — the
+    one thing this file must never do."""
+    from agenticsocial.video import coverage as cov
+
+    seen = []
+    real = cov.atomic_write
+    monkeypatch.setattr(
+        cov, "atomic_write", lambda p, t: (seen.append(p), real(p, t))[1]
+    )
+    make_episode(ws)
+    assert run("coverage", "add", "2026-08-20", "--series", "the-brief").exit_code == 0
+    assert seen == [ws.series_dir / "the-brief" / "coverage.json"]
 
 
 def test_add_dry_run_writes_nothing(brief, ws):
