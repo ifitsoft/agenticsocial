@@ -1002,3 +1002,328 @@ def test_the_judge_command_says_what_it_wrote_and_what_it_is(series):
     assert "c-001" in result.output
     assert "supported" in result.output
     assert "not reproducible" in _screen(result)
+
+
+# --- the fifth overclaim: the summary and the table share one source ------------------
+#
+# Phase 9 Task 3. `review` printed `claims  24 pass` and `! c-005 · beat 4 · pass`
+# over a table cell reading `unsupported`, because Task 1 converted `_claim_cell`
+# and left `_counts` and that head line on the measurement. D-106, D-110, D-112,
+# D-118 and this one are the same shape: a line that says more than what it
+# counted. A partially converted screen is worse than an unconverted one.
+
+
+def third_beat(**over):
+    """A third pass-1 clean beat, so a mixed screen has three different words."""
+    beat = {
+        "type": "statement",
+        "hold": 3.0,
+        "text": "The new pricing starts on August 16.",
+        "src": "local-ai-zone",
+        "quote": "announced new pricing starting August 16",
+    }
+    beat.update(over)
+    return beat
+
+
+def mixed(series):
+    """Three claims, three different binding verdicts: refuted · unsupported · pass."""
+    episode(series, [clean_beat(), second_beat(), third_beat()])
+    assert check().exit_code == 0
+    assert judge(claim="c-001", verdict="refuted").exit_code == 0
+    assert judge(claim="c-002", verdict="unsupported").exit_code == 0
+    return review()
+
+
+def claims_head(result) -> str:
+    """The `claims  …` counts line, without its `(checked …)` tail.
+
+    Named rather than searched: `pass` appears a dozen places on this screen and
+    D-118's survivor was a test that matched one of the others.
+    """
+    line = next(
+        line for line in result.output.splitlines() if line.startswith("claims  ")
+    )
+    return line.split("   (checked")[0].strip()
+
+
+def head_counts(result) -> dict:
+    """`claims  1 pass · 1 refuted` → `{'pass': 1, 'refuted': 1}`."""
+    body = claims_head(result)[len("claims  "):]
+    out = {}
+    for part in body.split(" · "):
+        n, word = part.split(" ", 1)
+        out[word] = int(n)
+    return out
+
+
+def table_cell(result, beat_index: int) -> str:
+    """The `claim` column of one table row, sliced by the header's own offset."""
+    lines = result.output.splitlines()
+    header = next(line for line in lines if "  claim" in line and "  text" in line)
+    start = header.index("claim")
+    row = next(
+        line
+        for line in lines
+        if len(line) > start and line[:6].strip().isdigit()
+        and int(line[:6].strip()) == beat_index
+    )
+    return row[start:start + 11].strip()
+
+
+def open_line(result, claim_id: str) -> str:
+    """The `! c-001 · beat 0 · …` line for one claim, and only that line."""
+    return next(
+        line.strip()
+        for line in result.output.splitlines()
+        if line.strip().startswith(f"! {claim_id} ")
+    )
+
+
+def test_the_claim_count_is_not_pass_1s_verdict_on_a_refused_claim(series):
+    """M1. `claims  3 pass` over a table that reads `refuted` on two of the three
+    rows. The count is the line an operator in a hurry reads instead of the
+    table, which is exactly why it may not be the friendlier number."""
+    result = mixed(series)
+    assert claims_head(result) == "claims  1 pass · 1 refuted · 1 unsupported", (
+        claims_head(result)
+    )
+
+
+def test_the_summary_counts_are_the_words_in_the_table_above_them(series):
+    """M3's negative half, asserted as a fact about one screen rather than as
+    two code paths that happen to agree today: every word in the claim column,
+    tallied, IS the summary line."""
+    result = mixed(series)
+    cells: dict[str, int] = {}
+    for index in range(3):
+        cell = table_cell(result, index)
+        cells[cell] = cells.get(cell, 0) + 1
+    assert cells == {"refuted": 1, "unsupported": 1, "pass": 1}, cells
+    assert head_counts(result) == cells
+
+
+def test_the_open_claims_own_line_says_the_verdict_that_binds(series):
+    """M2. The line whose entire job is *this claim is open* ended with the word
+    `pass`. The measurement is not dropped — it is labelled as pass 1's, which
+    is the difference between reporting it and claiming it."""
+    result = mixed(series)
+    line = open_line(result, "c-001")
+    verdict = line.split(" · ")[2]
+    assert verdict.startswith("refuted"), line
+    assert "pass 1 pass" in line, line
+
+
+def test_a_claim_pass_2_cleared_still_reads_as_the_measurement(series):
+    """R1's positive half. A screen that prints `supported` in the claim column
+    has replaced the measurement with a judgement, and pass 1 is the stronger
+    statement of the two — so a `supported` claim reads `pass`, as it always
+    did, and this whole change is invisible on a clean episode."""
+    episode(series, [clean_beat(), second_beat()])
+    assert check().exit_code == 0
+    assert judge(claim="c-001", verdict="supported").exit_code == 0
+    result = review()
+    assert claims_head(result) == "claims  2 pass", claims_head(result)
+    assert table_cell(result, 0) == "pass"
+
+
+def test_the_count_and_the_cell_come_from_one_function():
+    """M3. Not "they agree" — `_counts` and `_claim_cell` call the same function
+    and neither reads the measurement itself (D-059's shape, D-113's remedy)."""
+    tree = ast.parse(Path("src/agenticsocial/video/cli.py").read_text(encoding="utf-8"))
+    funcs = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+    for name in ("_counts", "_claim_cell"):
+        calls = set()
+        for node in ast.walk(funcs[name]):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    calls.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    calls.add(node.func.attr)
+        assert "binding_verdict" in calls, f"{name} does not derive the verdict"
+        assert "_verdict" not in calls, f"{name} still reads pass 1 directly"
+
+
+def test_the_screens_and_the_verdict_share_one_object():
+    """The same import discipline as `classify` and `adversarial_state`: a
+    wrapper here is the second code path this task exists to delete."""
+    assert video_cli.binding_verdict is V.binding_verdict
+
+
+def test_the_binding_verdict_is_pass_2s_only_where_pass_2_refuses(series):
+    """One record, one word, every state of pass 2 — including the three that
+    are not verdicts at all. A `stale` judgement does not restore `pass`: it is
+    an unanswered question, and it prints as one."""
+    def record_with(block):
+        record = {
+            "id": "c-001", "beat_index": 0, "text": "t", "src": "s", "quote": "q",
+            "mechanical": {"verdict": "pass"},
+            "adversarial": None,
+        }
+        if block is not None:
+            record["adversarial"] = {
+                "attempted_refutation": REFUTATION,
+                "judged_by": JUDGE,
+                "judged_at": days_ago(1),
+                "reproducible": False,
+                "claim_sha256": V.claim_sha256(record),
+                **block,
+            }
+        return record
+
+    assert V.binding_verdict(record_with(None)) == "pass"
+    assert V.binding_verdict(record_with({"verdict": "supported"})) == "pass"
+    assert V.binding_verdict(record_with({"verdict": "refuted"})) == "refuted"
+    assert V.binding_verdict(record_with({"verdict": "unsupported"})) == "unsupported"
+    assert V.binding_verdict(record_with({"verdict": "invented"})) == "malformed"
+    expired = record_with({"verdict": "supported"})
+    expired["adversarial"]["judged_at"] = days_ago(V.PASS2_HORIZON_DAYS + 1)
+    assert V.binding_verdict(expired) == "expired"
+    stale = record_with({"verdict": "supported"})
+    stale["text"] = "the beat moved after it was judged"
+    assert V.binding_verdict(stale) == "stale"
+    # And a pass-1 refusal is still pass 1's word, judged or not.
+    failed = record_with(None)
+    failed["mechanical"]["verdict"] = "fail"
+    assert V.binding_verdict(failed) == "fail"
+
+
+def test_check_counts_the_binding_verdict_too(series):
+    """R1 on the other screen. `check` prints its counts from the same function,
+    and it is the screen an agent reads before it stops working."""
+    mixed(series)
+    result = check()
+    head = next(
+        line for line in result.output.splitlines() if line.startswith("the-brief/")
+    )
+    assert head.endswith("3 claims · 1 pass · 1 refuted · 1 unsupported"), head
+
+
+# --- R3: a refutation reaches the ledger byte-exact -----------------------------------
+#
+# `--refutation "$1.32"` records `.32`: the shell removes `$1` before the CLI is
+# reached, the write succeeds, and the verdict looks completely normal on screen
+# while quoting a price nobody wrote.
+
+MONEY = (
+    "SUBJECT and CONTEXT: the source writes about $1.32 / $3.96 per 1M tokens "
+    "(in/out), hedged with `about`, and the card drops it; it's a 100% figure "
+    "the source doesn't assert."
+)
+
+
+def judge_file(series, tmp_path, text=MONEY, risk_text=None, claim="c-001"):
+    path = tmp_path / f"{claim}.refutation.txt"
+    path.write_text(text, encoding="utf-8")
+    args = [
+        "video", "judge", EP, "--series", "the-brief", "--claim", claim,
+        "--verdict", "unsupported", "--refutation-file", str(path), "--by", JUDGE,
+    ]
+    if risk_text is not None:
+        risk_path = tmp_path / f"{claim}.risk.txt"
+        risk_path.write_text(risk_text, encoding="utf-8")
+        args += ["--risk-file", str(risk_path)]
+    return run(*args)
+
+
+def test_a_refutation_reaches_the_ledger_byte_exact_from_a_file(series, tmp_path):
+    """M4. The shell is the thing that ate the money, so the fix is a path that
+    never puts the prose through one. `$`, backticks and apostrophes survive."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = judge_file(series, tmp_path)
+    assert result.exit_code == 0, result.output
+    assert block_of(series)["attempted_refutation"] == MONEY
+
+
+def test_the_residual_risk_can_come_from_a_file_too(series, tmp_path):
+    """The risk is prose from the same reply, out of the same shell. A byte-exact
+    path for one of the two fields is a fix for half the bug."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    risk = "The source's `$1.32` is hedged with `about` and carries no end date."
+    result = judge_file(series, tmp_path, risk_text=risk)
+    assert result.exit_code == 0, result.output
+    assert block_of(series)["residual_risk"] == risk
+
+
+def test_the_judge_refuses_a_refutation_given_two_ways(series, tmp_path):
+    """Two sources for one field is the D-059 shape at the input boundary: the
+    silent winner is whichever the code happens to read second."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    path = tmp_path / "r.txt"
+    path.write_text(MONEY, encoding="utf-8")
+    result = run(
+        "video", "judge", EP, "--series", "the-brief", "--claim", "c-001",
+        "--verdict", "unsupported", "--refutation", "typed by hand",
+        "--refutation-file", str(path), "--by", JUDGE,
+    )
+    assert result.exit_code == 1, result.output
+    assert "--refutation-file" in result.output
+    assert block_of(series) is None
+
+
+def test_the_judge_still_needs_a_refutation_one_way_or_the_other(series):
+    """M11 is not weakened by making the inline flag optional: a verdict with no
+    account of what was attacked is still refused, and the refusal names both
+    ways to give one."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = run(
+        "video", "judge", EP, "--series", "the-brief", "--claim", "c-001",
+        "--verdict", "unsupported", "--by", JUDGE,
+    )
+    assert result.exit_code == 1, result.output
+    assert "--refutation-file" in result.output
+    assert "--refutation" in result.output
+    assert block_of(series) is None
+
+
+def test_an_unreadable_refutation_file_is_a_refusal_not_a_traceback(series, tmp_path):
+    """D-035: a traceback and a clean refusal are the same exit code to a test,
+    and only one of them tells the agent what to do next. Nothing is written."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    missing = tmp_path / "nope" / "c-001.refutation.txt"
+    result = run(
+        "video", "judge", EP, "--series", "the-brief", "--claim", "c-001",
+        "--verdict", "unsupported", "--refutation-file", str(missing), "--by", JUDGE,
+    )
+    assert result.exit_code == 1, result.output
+    assert str(missing) in result.output
+    assert block_of(series) is None
+
+
+def test_an_inline_refutation_that_lost_a_dollar_sign_says_so(series):
+    """M4's other half — the path an agent actually types. The CLI cannot see
+    what the shell deleted, so it says what it CAN see: a figure with no leading
+    digit, which is what `$1.32` leaves behind. A note, not a refusal, because
+    `.32` is a legal thing to write and this is a suspicion."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = judge(
+        refutation="CONTEXT: the source writes about .32 / .96 per 1M tokens.",
+        verdict="unsupported",
+    )
+    assert result.exit_code == 0, result.output
+    note = labelled(result, "warning")
+    assert ".32" in note
+    assert "--refutation-file" in note
+
+
+def test_the_note_is_silent_on_prose_that_lost_nothing(series):
+    """Its negative half. A warning that fires on ordinary refutations is one an
+    agent learns to ignore before the run where it is true."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = judge(
+        refutation="CONTEXT: the source writes $1.32 and 0.32, v.32 and 1.6T.",
+        verdict="unsupported",
+    )
+    assert result.exit_code == 0, result.output
+    assert "warning" not in _screen(result)
