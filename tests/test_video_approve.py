@@ -272,25 +272,6 @@ def test_an_entity_miss_does_not_block(series):
     assert status_on_disk(series) == "approved"
 
 
-def test_an_override_does_not_clear_a_fail_in_this_task(series):
-    """Task 1 scope. §8.4's override is Task 2; until it lands, `approve` must
-    not treat a recorded override as an applied one — a gate that goes quiet
-    because someone wrote a sentence nobody consumed is worse than no gate."""
-    episode(
-        series,
-        [
-            fabricated_beat(
-                claim_override={"reason": "the figure is my own arithmetic", "by": BY}
-            )
-        ],
-    )
-    assert check().exit_code == 1
-    result = approve()
-    assert result.exit_code == 1, result.output
-    assert "c-001" in result.output
-    assert status_on_disk(series) == "in_review"
-
-
 def test_an_unknown_verdict_fails_closed(series):
     """Own sweep. `is_blocking` used to answer "not blocking" for any verdict it
     did not recognise — the D-106 shape: a value the rule cannot read treated as
@@ -717,3 +698,325 @@ def test_approve_does_not_resolve_a_partial_episode_id(series):
     result = approve(ep_id="2026-08-1")
     assert result.exit_code == 1, result.output
     assert status_on_disk(series) == "in_review"
+
+
+# --- Part A: §8.4's override, applied ---------------------------------------------
+#
+# Task 1 recorded an override and consumed nothing. `check` told the operator
+# *"`approve` is what reads an override"* while `approve` read no such thing —
+# a promise, not a description. These tests are what makes the sentence true.
+#
+# The asymmetry §8.4 states is the whole design: *passing verification is
+# automatic; bypassing it costs you a written sentence with your name on it.*
+# So every test here has two halves — the sentence clears its claim, and
+# anything less than a sentence with a name on it clears nothing.
+
+OVERRIDE = {
+    "reason": "Framed as expectation, not fact; 'widely expected' is my read of "
+    "three sourced analyst quotes, not a claim the article makes.",
+    "by": BY,
+}
+
+
+def test_an_override_clears_the_claim_it_names(series):
+    """R1. The whole of Part A: a `fail` plus a written sentence approves.
+
+    Task 1's `test_an_override_does_not_clear_a_fail_in_this_task` is the
+    negative this replaces — it pinned the scope of that task, not a property.
+    """
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    assert check().exit_code == 0, "the override clears the claim on check too"
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert status_on_disk(series) == "approved"
+
+
+def test_an_override_clears_exactly_the_claim_it_names(series):
+    """M1. An override on one claim must not clear the claim beside it — the
+    two beats are the same type, the same source and the same shape of failure,
+    so an implementation that clears "the beat" or "a failing claim" passes on
+    everything except which id it names."""
+    episode(
+        series,
+        [
+            fabricated_beat(),
+            fabricated_beat(
+                text="DeepSeek's old price was $0.12 per 1M tokens.",
+                claim_override=dict(OVERRIDE),
+            ),
+        ],
+    )
+    assert check().exit_code == 1
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-001" in result.output
+    assert "c-002" not in result.output, "the overridden claim was re-opened"
+    assert status_on_disk(series) == "in_review"
+
+
+def test_an_override_does_not_clear_the_episode(series):
+    """M2. One written sentence buys one claim. The unattested `custom` beat is
+    a different KIND of open claim, so an override that clears the episode —
+    or that clears "everything after it" — shows up here and nowhere else."""
+    episode(
+        series,
+        [
+            fabricated_beat(claim_override=dict(OVERRIDE)),
+            custom_beat(attest="   "),
+        ],
+    )
+    assert check().exit_code == 1
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-002" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"reason": "   ", "by": BY},
+        {"reason": "it is fine", "by": ""},
+        {"reason": "it is fine"},
+        {"by": BY},
+        "it is fine, trust me",
+        {"reason": "it is fine", "by": BY, "approved": True},
+        {},
+        [],
+    ],
+    ids=[
+        "blank-reason",
+        "blank-by",
+        "no-by",
+        "no-reason",
+        "bare-string",
+        "unknown-key",
+        "empty-mapping",
+        "not-a-mapping",
+    ],
+)
+def test_an_override_that_is_not_a_sentence_with_a_name_clears_nothing(series, bad):
+    """M3, at the gate rather than at the loader.
+
+    `script.py` refuses these at load (D-103), but `claims.json` is a file on
+    disk and the gate reads the LEDGER. A gate that trusts the loader to have
+    already refused is a gate that clears a claim on `{}` the moment anyone
+    hand-edits the artifact — and `approved: true` sitting beside a reason
+    nobody reads is the checkbox §8.4 says this must never be.
+    """
+    episode(series, [fabricated_beat()])
+    assert check().exit_code == 1
+    ledger = read_ledger_file(series)
+    ledger["claims"][0]["override"] = bad
+    write_ledger_file(series, ledger)
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-001" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def _screen(result) -> str:
+    """The output, minus the `wrote <path>` line — pytest's tmp directories are
+    named after the test, so a test about the word "override" writes it into
+    every path it prints. Lowercased, because these assertions are about words
+    a human reads, not about capitalisation."""
+    return "\n".join(
+        line for line in result.output.splitlines() if not line.startswith("wrote ")
+    ).lower()
+
+
+def test_an_absent_override_is_normal_and_silent(series):
+    """M3's negative half. Overrides are rare; a screen that mentions them on
+    every clean run is a screen whose mention gets tuned out."""
+    episode(series, [clean_beat()])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "override" not in _screen(result), result.output
+    approved = approve()
+    assert approved.exit_code == 0, approved.output
+    assert "override" not in _screen(approved), approved.output
+
+
+def test_an_overridden_claim_is_not_verified(series):
+    """M4. It is its own state. "Cleared by a person" and "checked by a machine"
+    are the two things this project exists to keep apart (D-088's argument, one
+    door along), and a summary that collapses them is D-112's overclaim."""
+    record = {"mechanical": {"verdict": "fail"}, "override": dict(OVERRIDE)}
+    assert V.classify(record) == "overridden"
+    assert V.is_blocking(record) is False
+
+
+def test_the_approval_record_counts_an_override_separately(series):
+    """M4 in the artifact. The committed diff must not say "1 of 1 verified"
+    about a claim a machine refused."""
+    episode(series, [clean_beat(), fabricated_beat(claim_override=dict(OVERRIDE))])
+    assert check().exit_code == 0
+    assert approve().exit_code == 0, "precondition"
+    counted = approval_on_disk(series)["claims"]
+    assert counted == {"total": 2, "verified": 1, "attested": 0, "overridden": 1}
+
+
+def test_the_approval_names_every_claim_it_cleared_by_override(series):
+    """§8.4's accountability, carried into the record a human commits. A count
+    says how many sentences were spent; only the ids and the names say which
+    claims are standing on a person rather than on a source."""
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    overrides = approval_on_disk(series)["overrides"]
+    assert overrides == [{"id": "c-001", "by": BY, "reason": OVERRIDE["reason"]}]
+
+
+def test_the_approve_screen_does_not_call_an_overridden_episode_verified(series):
+    """M4 on the screen — and the screen is the deliverable (D-104). The exit
+    code is read by a machine; this line is read by the person who signed."""
+    episode(series, [clean_beat(), fabricated_beat(claim_override=dict(OVERRIDE))])
+    check()
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert "2 of 2 verified" not in result.output
+    assert "1 of 2 verified" in result.output
+    assert "override" in result.output
+
+
+def test_an_overridden_claim_does_not_block(series):
+    """M5, R3's negative half. A state that is distinguishable everywhere and
+    still refuses is not an override, it is a slower refusal."""
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "not verified" in result.output
+    assert "fail" in result.output, "the measurement is still on the screen"
+
+
+def test_the_override_rate_is_on_the_screen(series):
+    """M11 / D-040. A high override rate means the checker is wrong, not the
+    operator — and nobody can notice a rate that is never printed. It is on
+    BOTH screens because `check` is where the operator decides to write one and
+    `approve` is where they sign for it."""
+    episode(series, [clean_beat(), fabricated_beat(claim_override=dict(OVERRIDE))])
+    checked = check()
+    assert checked.exit_code == 0, checked.output
+    assert "override rate" in checked.output
+    assert "1 of 2" in checked.output
+    approved = approve()
+    assert approved.exit_code == 0, approved.output
+    assert "override rate" in approved.output
+
+
+def test_the_override_rate_is_not_printed_when_there_are_none(series):
+    """M11's negative half — `override rate 0%` on every clean run is noise,
+    and noise is what the rate has to cut through when it matters."""
+    episode(series, [clean_beat()])
+    assert "override rate" not in check().output
+
+
+def test_an_override_on_a_claim_that_passes_anyway_is_flagged_stale(series):
+    """The decision this task had to make, pinned. A stale override is a
+    written sentence about a problem that no longer exists; leaving it silent is
+    how the sentence stops meaning anything. It WARNS and does not refuse —
+    refusing would make the remedy "delete the paragraph you wrote", which
+    inverts §8.4's cost asymmetry."""
+    episode(series, [clean_beat(claim_override=dict(OVERRIDE))])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "stale" in result.output
+    assert "c-001" in result.output
+    approved = approve()
+    assert approved.exit_code == 0, approved.output
+    assert status_on_disk(series) == "approved"
+    assert approval_on_disk(series)["claims"] == {
+        "total": 1,
+        "verified": 1,
+        "attested": 0,
+        "overridden": 0,
+    }
+
+
+def test_a_stale_override_is_not_reported_on_a_claim_it_clears(series):
+    """The negative half of the stale warning: an override that is doing its
+    job must not be nagged about, or the warning is one more line to skip."""
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "stale" not in result.output
+
+
+def test_an_override_clears_an_unattested_manual_claim(series):
+    """A `custom` beat with no `attest` but a written override: the override is
+    strictly MORE than an attestation — a sentence plus a name — so refusing it
+    would mean the weaker artifact clears and the stronger one does not."""
+    episode(series, [custom_beat(attest="  ", claim_override=dict(OVERRIDE))])
+    assert check().exit_code == 0
+    assert approve().exit_code == 0
+    assert approval_on_disk(series)["claims"]["overridden"] == 1
+
+
+@pytest.mark.parametrize(
+    "record,expected",
+    [
+        ({"mechanical": {"verdict": "pass"}, "override": dict(OVERRIDE)}, "verified"),
+        (
+            {
+                "mechanical": {"verdict": "manual", "attest": "it draws x"},
+                "override": dict(OVERRIDE),
+            },
+            "attested",
+        ),
+        ({"mechanical": {"verdict": "fail"}, "override": dict(OVERRIDE)}, "overridden"),
+        ({"mechanical": {"verdict": "no_source"}, "override": dict(OVERRIDE)}, "overridden"),
+        ({"mechanical": {"verdict": "refuted"}, "override": dict(OVERRIDE)}, "overridden"),
+        ({"mechanical": {}, "override": dict(OVERRIDE)}, "overridden"),
+        ({"mechanical": {"verdict": "fail"}, "override": {"by": BY}}, "open"),
+        ({"mechanical": {"verdict": "fail"}, "override": None}, "open"),
+    ],
+    ids=[
+        "pass-wins",
+        "attested-wins",
+        "fail",
+        "no_source",
+        "unknown-phase-9-verdict",
+        "no-mechanical-block",
+        "malformed",
+        "absent",
+    ],
+)
+def test_classify_answers_the_override_too(record, expected):
+    """M6/M10. One record, one answer, four states — and the MEASUREMENT wins
+    where it is clean, so an override never has to be deleted to make a passing
+    claim read as passing."""
+    assert V.classify(record) == expected
+    assert V.is_blocking(record) is (expected == "open")
+
+
+def test_the_gate_and_every_screen_share_one_classify():
+    """M10. Not "they agree" — the same object. A wrapper is where two answers
+    to one question drift apart (D-059)."""
+    assert video_cli.classify is V.classify
+    assert video_cli.is_blocking is V.is_blocking
+
+
+def test_only_verify_reads_a_claims_override():
+    """M10, mechanised. Any module that reads `record["override"]` for itself
+    is a second place §8.4's rule is spelled out, and the first time the two
+    disagree is the first time a checkbox clears a claim.
+
+    Enumerated over the AST rather than by grep so a string in a docstring or a
+    comment does not count, and so the test keeps running after this task.
+    """
+    import agenticsocial.video as pkg
+
+    root = Path(pkg.__file__).parent
+    offenders = {}
+    for path in sorted(root.glob("*.py")):
+        if path.name == "verify.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and node.value == "override"
+        ]
+        if found:
+            offenders[path.name] = len(found)
+    assert offenders == {}, offenders
