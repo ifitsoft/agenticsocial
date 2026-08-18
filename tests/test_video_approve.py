@@ -706,3 +706,14 @@ def test_the_extra_record_cannot_smuggle_a_status(series):
     assert status_on_disk(series) == "in_review"
     meta, _, _ = read_script(ep.script_path)
     assert meta["note"] == "kept"
+
+
+def test_approve_does_not_resolve_a_partial_episode_id(series):
+    """The gate names its subject exactly. `resolve_episode`'s substring match
+    is right for `review`, which shows you what it found; here the thing it
+    might find is an approval of an episode nobody named."""
+    episode(series, [clean_beat()])
+    check()
+    result = approve(ep_id="2026-08-1")
+    assert result.exit_code == 1, result.output
+    assert status_on_disk(series) == "in_review"
