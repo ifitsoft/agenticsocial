@@ -673,6 +673,7 @@ def video_review(
             textwrap.fill(_one_line(ledger_note), width=ROW_WIDTH),
             fg=typer.colors.YELLOW if warn else None,
         )
+    _echo_drift(ep)
     typer.echo("")
     for line in _review_table(beats, verdicts):
         typer.echo(line)
@@ -681,7 +682,6 @@ def video_review(
         _print_claim_summary(ledger)
 
     _echo_runtime(script, check)
-    _echo_drift(ep)
 
     # Valid beats this phase cannot draw yet. Named, counted, and NOT treated as
     # an operator error: the fix is to implement the renderer, not to edit the
@@ -944,7 +944,14 @@ def _print_overrides(records: list[dict]) -> None:
                 _detail(str(record.get("id", "?")), _sentence(written), indent=4)
             )
         typer.echo("")
-    typer.echo(_detail("override", _override_rate(len(applied), len(records)), indent=2))
+    typer.echo(
+        textwrap.fill(
+            f"override {_override_rate(len(applied), len(records))}",
+            width=ROW_WIDTH,
+            initial_indent="  ",
+            subsequent_indent="  ",
+        )
+    )
     typer.echo("")
 
 
@@ -1038,6 +1045,11 @@ def video_check(
 
     head = f"{s.slug}/{ep.id} · {_plural(len(records), 'claim')}"
     typer.echo(f"{head} · {_counts(records)}" if records else head)
+    # At the TOP, with `review`'s stale-ledger banner, and not down with the
+    # runtime report: the last line of this screen is a summary of the claims,
+    # and a green "none open" printed under a red drift warning is the last
+    # thing read (D-112's shape). A banner above the table is read first.
+    _echo_drift(ep)
     typer.echo("")
     for record in records:
         line = _claim_row(record).rstrip()
@@ -1056,7 +1068,6 @@ def video_check(
 
     typer.echo(f"wrote {path}")
     _echo_runtime(script, runtime)
-    _echo_drift(ep)
     if not records:
         typer.echo("no claims — this script asserts nothing about the world")
         return
