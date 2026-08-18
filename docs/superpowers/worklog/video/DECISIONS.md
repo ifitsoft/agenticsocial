@@ -2078,3 +2078,51 @@ can assert a number nothing verifies.
 Also recorded: `engine/content/*.js` are hand-written author JS and bypass the
 sanitiser by design, so `--day 2026-08-14` is a regression test for the *engine*,
 not evidence the sanitiser ran.
+
+## D-095 · phase 4 / gate · the re-gate could not break it, and the reason is structural
+
+A second blind reviewer attacked the closed `shown` vocabulary with 100+ distinct
+payloads and got nothing:
+
+- **63 payloads through the page's own `shownHTML()`, parsed by real Chromium** —
+  casing and whitespace inside the tag, attributes, raw `img`/`svg`/`script`/
+  `iframe srcdoc`/`base`/`form`, character references decoding into markup
+  (`&#60;`, `&#x3c;`, zero-padded, semicolon-less, double- and triple-encoded,
+  legacy uppercase `&LT;`), fullwidth `＜s＞`, RTL overrides, ZWSP, BOM, a
+  2000-deep nest. **The only element the parser ever built was `S`, with zero
+  attributes in any case.**
+- **13 payloads compared across two separate page loads** — DOM byte-identical,
+  screenshot SHA-256 identical, `page.url()` unchanged. That is the decisive
+  test; two seeks in one page load would have passed a persistent injected node.
+- **The eager-conversion defence is real, not aspirational.** A `custom` beat
+  reassigning `escapeHTML`, `shownHTML`, and mutating `window.__PLAN` directly is
+  inert, because `planJumpRows` runs while the plan is walked — the row tuple is
+  already strings by the time any authored `js` executes.
+- **18 other authored fields** carrying `<img onerror>` are inert; `E()` is the
+  only `innerHTML` sink and the plan path feeds it only escape-first output.
+- **The two gates are consistent in the safe direction.** Of 63 payloads Python
+  accepts 26, and every one renders as text-or-`<s>`. `planbuild.js` is the
+  stricter of the two — the correct asymmetry, since a plan reaches the page
+  without Python at all.
+
+**Why it holds is worth more than the fact that it does.** `shownHTML` has no
+production that can emit an attribute or any tag name other than `s`. The surface
+is bounded by what the function can *construct*, not by a list of what it
+rejects — so it cannot be out-spelled. That is the general form of the D-088
+lesson: **a boundary you can enumerate the outputs of beats a boundary you can
+only enumerate the inputs to.**
+
+### The usability cost, accepted with its mitigation
+
+`shown: '<1% &rarr; 3%'` is a plausible real cell and is now refused. That is a
+correct rule charging a real cost, not a defect — and the refusal names the fix:
+*"Write a literal `<` as `&lt;`"*, with `&lt;1% &rarr; 3%` verified rendering
+correctly. D-040's failure mode is a gate that refuses without teaching; a
+refusal carrying its own remedy is the version an operator does not learn to
+override.
+
+Also closed en route: ANSI escapes in `shown` cannot spoof the review screen —
+`cli.py::_one_line` maps C0 controls and DEL to spaces, so ESC never reaches the
+terminal.
+
+**Verdict: Phase 4 merges.**
