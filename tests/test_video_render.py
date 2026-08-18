@@ -99,7 +99,7 @@ def test_the_mp4_records_the_script_hash(series, episode, fake):
     R.preview(series, episode)
     ff = [c for c in fake.calls if Path(c[0]).name == "ffmpeg"][0]
     joined = " ".join(str(a) for a in ff)
-    assert "script_sha256=" in joined
+    assert "script_file_sha256=" in joined
 
 
 def test_frames_are_cleaned_up(series, episode, fake):

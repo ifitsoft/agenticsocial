@@ -1039,3 +1039,272 @@ def test_only_verify_reads_a_claims_override():
         if found:
             offenders[path.name] = len(found)
     assert offenders == {}, offenders
+
+
+# --- Part B: drift, and the edit only the digest can see ----------------------------
+#
+# §10, and it is deliberately stricter than the text pipeline: *a render is
+# expensive and a video is harder to retract.*
+#
+#   > `approve` records `script_sha256`, and `render` refuses if the script has
+#   > changed since approval, naming the drift.
+#
+# `render` is Phase 8. The refusal is built here, as a check with its own tests,
+# and Phase 8 wires the command into it — a stubbed command would be a second
+# place the rule lives before the rule has a caller.
+
+
+def jump_beat(**over):
+    """A chart whose bars are drawn from `before`/`after` against `scale`.
+
+    `scale` is the field this half of the task exists for: it is not a claim
+    (`claims.COLLECTORS` maps `positive_number` to `None`, deliberately — it
+    reaches no sentence), so editing it changes every bar on the frame while
+    every claim still verifies and no number anywhere is wrong.
+    """
+    beat = {
+        "type": "jumpChart",
+        "hold": 4.0,
+        "rows": [{"label": "V4-Pro", "before": 1.32, "after": 3.96}],
+        "scale": 5,
+        "footnote": "per 1M tokens",
+        "src": "local-ai-zone",
+        "quote": "about $1.32 / $3.96 per 1M tokens",
+    }
+    beat.update(over)
+    return beat
+
+
+def edit_script(series, transform, ep_id=EP):
+    """Rewrite the beats document the way an operator would: load, change one
+    thing, write it back. The metadata document — status, approval — is left
+    exactly as it was, which is the state drift detection exists to find."""
+    path = series.episodes_dir / ep_id / "script.yaml"
+    meta_text, beats_text, _ = read_script(path)
+    beats = yaml.safe_load(beats_text)
+    transform(beats)
+    head = yaml.safe_dump(meta_text, sort_keys=False, allow_unicode=True).strip()
+    body = yaml.safe_dump(beats, sort_keys=False, allow_unicode=True)
+    path.write_text(f"---\n{head}\n---\n{body}", encoding="utf-8")
+
+
+def drift(series, ep_id=EP):
+    return approve_mod.approval_drift(load_episode(series, ep_id))
+
+
+def test_an_approval_binds_the_bytes_it_approved(series):
+    """R4's precondition. An approval that reports drift against the very bytes
+    it just signed is an alarm nobody can turn off, and an alarm nobody can turn
+    off is one everybody turns off."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0
+    assert drift(series) is None
+
+
+def test_editing_the_script_after_approval_is_detected(series):
+    """M6. The one thing §10 asks for."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    assert drift(series) is not None
+
+
+def test_the_drift_names_itself(series):
+    """M7. "Changed" is a true statement and a useless one. The message has to
+    carry what moved, what was signed, what is there now, and who signed it —
+    an operator reading it should not have to open the file to learn which of
+    the two answers is the one they meant."""
+    episode(series, [clean_beat()])
+    check()
+    record = None
+    assert approve().exit_code == 0, "precondition"
+    record = approval_on_disk(series)
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    message = drift(series)
+    assert "beats" in message
+    assert record["script_sha256"] in message, "the digest that was signed"
+    assert BY in message and record["at"] in message, "who signed it, and when"
+    from agenticsocial.video.episode import beats_sha256
+
+    assert beats_sha256(load_episode(series, EP)) in message, "what is there now"
+
+
+def test_editing_only_a_charts_scale_is_caught(series):
+    """M8 / R5 — the case Phase 5 named, and the reason the digest exists.
+
+    `scale` shifts every bar on the frame. It is in no claim, so every claim
+    still verifies; it is in no source, so `corpus_sha` is unchanged; it is not
+    a number anyone typed wrong, so no numeric check can object. `stale_reason`
+    — both halves of it, corpus AND claims — answers "this ledger is current",
+    correctly.
+
+    Only the digest can see it. If this test is the one that fails, the
+    approval has stopped meaning "these bytes" and started meaning "these
+    sentences", and the difference is a chart the approver never saw.
+    """
+    episode(series, [jump_beat()])
+    assert check().exit_code == 0, "precondition: the chart's figures verify"
+    assert approve().exit_code == 0, "precondition"
+    before = read_ledger_file(series)
+
+    edit_script(series, lambda b: b["beats"][0].update(scale=25))
+
+    ep = load_episode(series, EP)
+    assert check().exit_code == 0, "the claims still verify — nothing is wrong"
+    after = read_ledger_file(series)
+    assert after["claims"] == before["claims"], "not one verdict moved"
+    assert after["corpus_sha"] == before["corpus_sha"], "the corpus never moved"
+    assert verify_mod_stale(ep) is None, "the ledger is current, and it is"
+    assert drift(series) is not None, "and the frame is not the one that was signed"
+
+
+def verify_mod_stale(ep):
+    return V.stale_reason(ep, V.read_ledger(ep))
+
+
+def test_a_status_change_is_not_drift(series):
+    """M9. The reason the digest covers the beats document and not the file.
+
+    `approved → rendering` rewrites `status` in the metadata document. Under a
+    whole-file digest, Phase 8's own first move would invalidate the approval it
+    is acting on, and `failed → rendering` would report drift that never
+    happened — an alarm that fires on the pipeline's own churn.
+    """
+    from agenticsocial.video.episode import set_status
+
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    set_status(load_episode(series, EP), Status.RENDERING)
+    assert status_on_disk(series) == "rendering"
+    assert drift(series) is None
+
+
+def test_drift_names_a_pace_change_the_digest_cannot_cover(series):
+    """`pace` lives in the metadata document, so it is OUTSIDE the digest by
+    construction — and it multiplies every hold, which is the whole runtime of
+    the video. `approve` records it beside the digest rather than pretending the
+    hash covered it, and this is the half that reads it back."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["pace"] = 1.4
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    message = drift(series)
+    assert "pace" in message
+    assert "1.4" in message
+
+
+def test_an_episode_with_no_approval_fails_closed(series):
+    """The check answers "do these bytes carry a signature", so "no signature at
+    all" is an answer it must give rather than a case it must be asked about
+    separately. D-106's shape, pre-empted: a caller that reads `None` as "fine"
+    renders an episode nobody ever approved."""
+    episode(series, [clean_beat()])
+    message = drift(series)
+    assert message is not None
+    assert "approval" in message
+
+
+def test_drift_is_read_from_disk_not_from_the_object_it_was_handed(series):
+    """D-072, in the form this check needs. A caller holding an `Episode` loaded
+    before the edit must not be able to make the drift disappear by handing it
+    over — that is exactly the shape of the bypass that published a draft."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    stale_object = load_episode(series, EP)
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    assert approve_mod.approval_drift(stale_object) is not None
+
+
+def test_re_approving_after_an_intentional_edit_clears_the_drift(series):
+    """M12, R4's negative half. Drift is not a trap you cannot escape: the way
+    out is the way in — edit, mark `in_review`, check, approve — and the new
+    approval binds the new bytes."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    first = approval_on_disk(series)["script_sha256"]
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    assert drift(series) is not None, "precondition: it drifted"
+
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["status"] = "in_review"
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+
+    assert check().exit_code == 0
+    assert approve().exit_code == 0
+    assert approval_on_disk(series)["script_sha256"] != first
+    assert drift(series) is None
+
+
+def test_a_script_with_no_beats_document_is_drift_not_a_traceback(series):
+    """Fails closed on a file it cannot hash. `render` must get an answer it can
+    refuse on, not an exception it might catch as "no drift"."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, _, _ = read_script(path)
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n", encoding="utf-8")
+    assert drift(series) is not None
+
+
+def test_check_says_when_an_approval_no_longer_describes_the_script(series):
+    """M7 at the only place an operator can see it before Phase 8. An approval
+    that stopped being true is otherwise visible to nothing until the render —
+    which is the expensive step §10 wrote this rule to protect."""
+    episode(series, [jump_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    edit_script(series, lambda b: b["beats"][0].update(scale=25))
+    checked = check()
+    assert "approval" in checked.output.lower()
+    assert "changed" in checked.output.lower()
+    reviewed = run("video", "review", EP, "--series", "the-brief")
+    assert "changed" in reviewed.output.lower()
+
+
+def test_no_drift_banner_on_an_episode_that_has_not_drifted(series):
+    """The negative half. A banner on every approved episode is a banner nobody
+    reads by the time one of them is true; a banner on every DRAFT is worse,
+    because "not approved yet" is the normal state of a fresh script."""
+    episode(series, [clean_beat()])
+    first = check()
+    assert "approval" not in first.output.lower(), first.output
+    assert approve().exit_code == 0
+    second = check()
+    assert "no longer" not in second.output.lower(), second.output
+
+
+def test_the_plan_and_the_approval_do_not_share_a_key_name(series):
+    """D-036, named by Task 1 and fixed here. `plan.json` carried
+    `script_sha256` over the WHOLE FILE while the approval carries it over the
+    BEATS — one key, two meanings, in two files someone will eventually compare.
+
+    The approval's name is the one that stays: §10 names the field for the
+    approval, and it is the one an operator reads. `plan.json`'s becomes
+    `script_file_sha256`, which is what it has always measured.
+    """
+    from agenticsocial.video.episode import beats_sha256
+    from agenticsocial.video.plan import build_plan
+
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    ep = load_episode(series, EP)
+    plan = build_plan(series, ep)
+    assert "script_sha256" not in plan
+    whole_file = hashlib.sha256(ep.script_path.read_bytes()).hexdigest()
+    assert plan["script_file_sha256"] == whole_file
+    assert approval_on_disk(series)["script_sha256"] == beats_sha256(ep)
+    assert plan["script_file_sha256"] != approval_on_disk(series)["script_sha256"]
