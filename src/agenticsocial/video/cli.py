@@ -2024,3 +2024,55 @@ def coverage_episode(
         typer.echo(f"   {story.get('title', '')}")
         typer.echo(f"   sources: {', '.join(story.get('sources') or [])}")
     typer.echo("")
+
+
+@coverage_app.command("migrate")
+def coverage_migrate(
+    source: Path = typer.Argument(..., help="a ledger to merge in, e.g. engine/coverage.json"),
+    series: str = typer.Option(..., "--series", help="the series that produced those episodes"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="report; write nothing"),
+) -> None:
+    """Merge a ledger written before Phase 11 into the series that produced it.
+
+    `--series` is required and takes exactly one slug: copying one shared
+    ledger into every series would suppress, in each of them, stories that
+    series never told. Idempotent — an episode already present with identical
+    content is skipped, so an operator unsure whether it ran can just run it.
+    An episode present with DIFFERENT content is refused by name: picking a
+    winner would lose the entry that was not picked.
+    """
+    ws = _workspace()
+    series = _text(series, "The series slug")
+    s = _coverage_series(ws, series)
+    try:
+        legacy = coverage_mod.load_legacy(Path(source))
+        ledger = coverage_mod.load_ledger(s)
+        merged, report = coverage_mod.migrate(ledger, legacy)
+    except coverage_mod.CoverageError as e:
+        raise _fail(str(e))
+
+    typer.echo(f"\n  {source} → {coverage_mod.ledger_path(s)}")
+    typer.echo(
+        f"  source holds {report.stories_source} stories across "
+        f"{len(legacy['episodes'])} episodes"
+    )
+    typer.echo(
+        f"  moved {len(report.episodes_moved)} episode(s): "
+        f"{', '.join(report.episodes_moved) or 'none'}"
+    )
+    if report.episodes_skipped:
+        typer.echo(
+            f"  already present, unchanged: {', '.join(report.episodes_skipped)}"
+        )
+    typer.echo(f"  stories {report.stories_before} → {report.stories_after}")
+    if dry_run:
+        typer.echo("\n  --dry-run: nothing written.\n")
+        return
+    try:
+        coverage_mod.save_ledger(s, merged)
+    except OSError as e:
+        raise _fail(f"cannot write {coverage_mod.LEDGER_NAME}: {e}")
+    typer.echo(
+        f"\n  the source file is not modified — it stays as the record of what "
+        f"was migrated.\n  Check it reads back: `agsoc coverage list --series {s.slug}`\n"
+    )

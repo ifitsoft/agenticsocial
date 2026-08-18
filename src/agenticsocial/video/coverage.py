@@ -364,3 +364,79 @@ def add_entry(ledger: dict, entry: dict, replace: bool = False) -> dict:
     episodes.sort(key=lambda e: e.get("date", ""))
     ledger["episodes"] = episodes
     return ledger
+
+
+# --- migration ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MigrationReport:
+    episodes_moved: list[str]
+    episodes_skipped: list[str]
+    stories_before: int
+    stories_after: int
+    stories_source: int
+
+
+def load_legacy(path: Path) -> dict:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise CoverageError(f"no such ledger: {path}")
+    except OSError as e:
+        raise CoverageError(f"{path}: cannot read — {e}")
+    except json.JSONDecodeError as e:
+        raise CoverageError(f"{path}: malformed JSON — {e}")
+    return validate_ledger(raw, path)
+
+
+def migrate(ledger: dict, legacy: dict) -> tuple[dict, MigrationReport]:
+    """Merge a legacy ledger into a series ledger, losing nothing.
+
+    A migration that silently drops an entry is worse than no migration at all,
+    because the failure mode is a story re-told as new. So: episodes are matched
+    by date, an identical date is skipped (the migration is idempotent, which is
+    what lets an operator who is unsure just run it), a *differing* date is
+    refused by name rather than resolved by guess, and the story count is
+    asserted before the result is handed back.
+    """
+    before_stories, _ = counts(ledger)
+    by_date = {e.get("date"): e for e in ledger["episodes"]}
+    moved, skipped = [], []
+    episodes = list(ledger["episodes"])
+    for ep in legacy["episodes"]:
+        date = ep.get("date")
+        mine = by_date.get(date)
+        if mine is None:
+            episodes.append(ep)
+            moved.append(date)
+        elif mine == ep:
+            skipped.append(date)
+        else:
+            raise CoverageError(
+                f"{date} is already in this series' ledger with different "
+                "content. Nothing was written. Reconcile the two entries by "
+                "hand — picking a winner here would lose whichever entry was "
+                "not picked, and a lost entry is a story re-told as new."
+            )
+    episodes.sort(key=lambda e: e.get("date", ""))
+    merged = {**ledger, "episodes": episodes}
+    after_stories, _ = counts(merged)
+    source_stories, _ = counts(legacy)
+    moved_stories = sum(
+        len(e.get("stories", [])) for e in legacy["episodes"] if e.get("date") in moved
+    )
+    if after_stories != before_stories + moved_stories:
+        # Unreachable by construction; asserted anyway because the one thing
+        # this function must never do quietly is lose a row.
+        raise CoverageError(
+            f"migration arithmetic does not balance: {before_stories} + "
+            f"{moved_stories} != {after_stories}. Nothing was written."
+        )
+    return merged, MigrationReport(
+        episodes_moved=moved,
+        episodes_skipped=skipped,
+        stories_before=before_stories,
+        stories_after=after_stories,
+        stories_source=source_stories,
+    )
