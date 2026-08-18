@@ -3069,3 +3069,67 @@ happens before anything is removed. **A command that has decided not to do
 anything must not have done something**, and this is the second time in this
 phase that running the real thing found what reading it did not (the first was
 `95d5cfe`, `rendered` being sent to `approve`).
+
+## D-118 · phase 8 · a mutation score with no harness behind it, and a test that read the diagnosis as the remedy
+
+Phase 8's Task 1 commit message claimed **26/26**. The follow-up implementer went
+looking for the harness or the log and **found neither — just the number.** They
+re-ran it themselves: **23/26, three survivors.**
+
+The instructive one is **M4b, and the commit written to kill it is the one that
+did not**: the assertion was `"put the change back" in screens["drift"]`, but that
+sentence is `approval_drift`'s own wording, so it lands on the *why* line no matter
+what the *fix* line says. **The test was reading the diagnosis and calling it the
+remedy** — the two remedies could have been made identical with it green.
+
+That is D-035's family arriving through a new door: not a harness that performs
+the transformation under test, but an assertion that matches a string produced by
+a *different* part of the output than the one it claims to check. The rule
+generalises: **assert on the line you mean, not on a substring that happens to
+appear somewhere in the screen.**
+
+And the meta-lesson, which this project has now earned the right to state:
+**a mutation score is a measurement, not a claim.** Reported without a log it is
+indistinguishable from a guess, and this one was 12% optimistic. Every future
+report cites the harness output or the number does not count. At HEAD the sweep
+is **34/34** with evidence.
+
+## D-119 · phase 8 / tasks 2-3 · the second route to an MP4 is gone, and looking is now cheap
+
+**The flag goes, the files stay.** `render.mjs --day` was a second route to an
+MP4 that passed neither `check` nor `approve` — **D-113's shape rebuilt in
+Node**, a gate and a path around it. `content/*.js` remain as regression fixtures
+because `determinism.test.mjs` loads them through `scene.html?day=…`, the
+*browser's* loader rather than the renderer's, so retiring the product path costs
+no coverage. Two tests pin each half.
+
+**`agsoc video probe` is its own command**, not a flag on `render`. The argument
+is the right one: *pointing an operator at a flag on the fourteen-minute command
+is one dropped flag away from the wait they were trying to avoid.* Leader-measured
+on the demo episode:
+
+```
+render  36.9s   105 frames
+probe    5.6s     3 frames (one per beat)
+--at T   ~1.0s    1 frame
+```
+
+**That ratio is the answer to D-116.** The approval does not cover the pixels, so
+looking at them has to be cheap enough that an operator actually does it. A
+guarantee you cannot afford to verify is a guarantee nobody checks.
+
+**Running the command found a defect the green suite did not:** `--at 90` refused
+correctly *and deleted the previous probe's frames on the way out*. Now a rule —
+every refusal happens before anything is removed — and leader-verified: the
+refusal names the range and `s00..s02.png` survive.
+
+## D-120 · carried, open · D-056 is still open, and it is the largest known gap
+
+`ENGINE_DIR` is `parents[3]` and `engine/` is unpackaged, so **`render` works from
+a source checkout and nowhere else.** D-056 called it *required before Phase 8*.
+Phase 8 did not need it and shipped without it.
+
+Recorded plainly rather than quietly: **the render pipeline is not installable.**
+For the operator running from this checkout it works today; for anyone else it
+does not exist. It belongs to whichever phase first needs the product to leave
+this directory.
