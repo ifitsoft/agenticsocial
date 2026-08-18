@@ -625,6 +625,104 @@ def test_check_counts_every_claim_and_names_the_ones_that_refuse(series):
     assert "1 no_source" in result.output
 
 
+# --- what the sweep found: six things the screen claims to show, unpinned ------------
+
+
+def test_the_failure_screen_says_what_to_do_about_each_kind_of_refusal(series):
+    """precondition: the two refusals need DIFFERENT actions — one is a
+    citation, the other a rewrite. A screen that names the problem and not the
+    move is the bare red mark §8.2 exists to avoid, one step later."""
+    episode(
+        series,
+        [
+            fabricated_beat(),
+            {"type": "body", "hold": 3.0, "text": "Prices moved a lot."},
+        ],
+    )
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert "widen `quote:`" in result.output, result.output
+    assert "claim_override" in result.output
+    assert "cite the beat" in result.output
+
+
+def test_the_failure_screen_shows_the_quote_the_claim_was_checked_against(series):
+    """precondition: the whole point of the task. The operator needs the number,
+    the quote it was checked against and the source it came from in one view;
+    the reason alone sends them back to the file to find out what was compared.
+    """
+    episode(series, [fabricated_beat()])
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert "announced new pricing starting August 16" in result.output
+    assert "sources/local-ai-zone.txt" in result.output
+
+
+def test_check_lists_every_claim_not_only_the_ones_that_refuse(series):
+    """precondition: three claims, one refusing. A screen showing only failures
+    cannot answer "was this beat checked at all?" — which is the question a
+    `no_source` beat and an exempt beat give different answers to."""
+    episode(series, [clean_beat(), fabricated_beat(), clean_beat()])
+    result = run("video", "check", EP, "--series", "the-brief")
+    for claim_id in ("c-001", "c-002", "c-003"):
+        assert claim_id in result.output, result.output
+
+
+def test_review_names_the_open_claims_and_why_under_the_table(series):
+    """precondition: the verdict column says WHICH beat; nothing in the table
+    says why. An operator working from a bare verdict is an operator overriding
+    from a bare verdict."""
+    episode(series, [clean_beat(), fabricated_beat()])
+    run("video", "check", EP, "--series", "the-brief")
+    result = run("video", "review", EP, "--series", "the-brief")
+    assert "c-002" in result.output, result.output
+    assert "does not contain 0.11" in result.output
+
+
+def test_review_shows_an_overridden_claim_as_what_it_measured(series):
+    """precondition: M11 on the review screen. The verdict is what was measured;
+    the override is what a human decided about it. `pass` on that row is the one
+    thing this display must never say."""
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    run("video", "check", EP, "--series", "the-brief")
+    result = run("video", "review", EP, "--series", "the-brief")
+    rows = [line for line in result.output.splitlines() if "  0  " in line]
+    assert rows and "fail*" in rows[0], result.output
+    assert "pass" not in result.output
+    assert "Ali Abdukarim" in result.output
+
+
+def test_an_unchecked_episode_is_not_dressed_up_as_a_warning(series):
+    """precondition: M8's negative half, at the level colour actually reaches
+    the terminal. "Not checked yet" is the normal state of a fresh script; a
+    yellow line about it trains the operator to skip yellow lines, and the stale
+    banner goes with it. Asserted with `color=True` because `CliRunner` strips
+    styling by default, and the mutant is invisible without it."""
+    ep = episode(series, [clean_beat()])
+    fresh = runner.invoke(
+        app, ["video", "review", EP, "--series", "the-brief"], color=True
+    )
+    # Scoped to the ledger's own line: the runtime verdict is legitimately
+    # yellow on this fixture, and asserting over the whole screen would pass for
+    # the wrong reason.
+    note = [ln for ln in fresh.output.splitlines() if "agsoc video check" in ln]
+    assert note, fresh.output
+    assert "\x1b[33m" not in note[0], "an unchecked episode is not a warning"
+
+    run("video", "check", EP, "--series", "the-brief")
+    corpus.write_document(
+        ep,
+        SOURCE.replace("1.6T", "9.9T"),
+        url="https://local-ai-zone.example/x",
+        key="local-ai-zone",
+        fetched_at="2026-08-17",
+        replace=True,
+    )
+    stale = runner.invoke(
+        app, ["video", "review", EP, "--series", "the-brief"], color=True
+    )
+    banner = [ln for ln in stale.output.splitlines() if "STALE" in ln]
+    assert banner and "\x1b[33m" in banner[0], "a stale ledger IS a warning"
+
+
 def test_check_reports_a_missing_episode_rather_than_a_traceback(series):
     """precondition: the commonest operator typo."""
     result = run("video", "check", "2026-01-01", "--series", "the-brief")
