@@ -1219,13 +1219,15 @@ def _covered_inputs(inputs: dict) -> str:
     Derived from the record, never re-listed here: the screen and the file are
     one answer, and a hand-written summary is where they would stop being one.
     """
+    labels = {"design": "design", "acts": "act labels"}
     parts = []
     for key in sorted(inputs):
         value = inputs[key]
+        label = labels.get(key, key)
         if isinstance(value, dict):
-            parts.append(f"{key} ({len(value)})")
+            parts.append(f"{label} ({len(value)})")
         else:
-            parts.append(key)
+            parts.append(label)
     return (
         f"series.toml is covered too — {', '.join(parts)}. Change any of them "
         "and this approval no longer describes the frame"

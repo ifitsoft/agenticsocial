@@ -416,11 +416,30 @@ def series_inputs(series: Series) -> dict:
             json.dumps(value, allow_nan=False)
         except (TypeError, ValueError) as e:
             raise PlanError(
-                f"[design]/`series.{attr}` holds a value an approval cannot "
-                f"compare — {value!r} ({e}). Dates, times and non-finite numbers "
-                "have no comparable form here; write it as a string. Refusing "
-                "rather than dropping it: an approval that silently skips a "
-                "value covers less than it says it does"
+                f"series.toml: {_culprit(attr, value)} holds a value an "
+                f"approval cannot compare ({e}). Dates, times and non-finite "
+                "numbers have no comparable form here; write it as a string. "
+                "Refusing rather than dropping it: an approval that silently "
+                "skips a value covers less than it says it does"
             ) from e
         inputs[attr] = value
     return inputs
+
+
+def _culprit(attr: str, value) -> str:
+    """Name the key that cannot be compared, not the table it is sitting in.
+
+    A refusal that prints the whole `[design]` table and leaves the operator to
+    spot the odd value in it has made them do the work the message existed to
+    save — the same standard the drift message is held to.
+    """
+    if isinstance(value, dict):
+        bad = []
+        for key, inner in value.items():
+            try:
+                json.dumps(inner, allow_nan=False)
+            except (TypeError, ValueError):
+                bad.append(f"{key} = {inner!r}")
+        if bad:
+            return f"[{attr}] " + ", ".join(bad)
+    return f"`series.{attr}` = {value!r}"
