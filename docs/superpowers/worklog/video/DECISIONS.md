@@ -2011,3 +2011,70 @@ markup surface must be closed. An `on*` blocklist is D-088's `window['Ma'+'th']`
 again: a lint sold as a boundary. Attribute-free tags plus named entities, since
 every event handler is an attribute, and `<s>34.4</s> &rarr; 43.6` in
 `2026-08-14.js` is the whole real requirement.
+
+## D-094 · phase 4 / task 5 · the surface is closed, and my brief was wrong about why
+
+`shown` now has a **closed vocabulary — `<s>`, `</s>` and character references,
+nothing else.** Verified by re-running the original attack against the fix:
+
+```
+load 1 : ["THE BRIEF", false]     load 2 : ["THE BRIEF", false]
+VERDICT: reproducible — handler did not run
+```
+
+1312 tests, `deterministic`, `no request escapes the page`, both probes clean.
+**18/18 mutants killed, including the two the gate review reported as survivors.**
+
+Three implementation choices worth keeping:
+
+- **Two gates of different kinds.** `script.py` *refuses*; `planbuild.js`
+  *escapes*. Both, because a plan reaches the page without Python at all
+  (`render.mjs --plan`, both node suites), and because a `custom` beat can
+  reassign `escapeHTML` at seek time (D-089) — so the conversion happens eagerly
+  while the plan is walked, not lazily when the DOM is built.
+- **Tags matched verbatim**, so no attribute has a path through and *the spelling
+  of the handler is never a question the code has to answer.* That is the
+  difference between a vocabulary and a blocklist, made structural.
+- **F3 resolved by making the exemption conditional on the property that
+  justifies it**: a dumbbell whose caption/footnote/label carries a digit must
+  carry `src` and `quote`. Not a digit ban — that makes `n=159 cases`
+  unwritable — and not `cited: True`, which is a spec change. The docstring
+  claim is now enforced rather than merely asserted.
+
+### The brief defect, which is mine
+
+I wrote: *"The network exfiltration half is ALREADY CLOSED. Do not re-fix it."*
+The implementer tested it anyway and, at the tests-only commit, got bytes:
+
+```
+FAIL shown (jumpChart) nothing reached the sink — RECEIVED ["GET /shown?d=The%20Brief"]
+```
+
+The vector is `location.href` — **the channel D-090 records as the one CSP cannot
+close, which I wrote myself one turn earlier.**
+
+The error is D-091's exactly: I ran `fetch` from a `shown` field, watched
+`connect-src` refuse it, and generalised from one vector to the channel. *A
+blocked `fetch` is evidence about `fetch`.* Two instances in two turns is a
+pattern, not a slip — the failure is **concluding from the probe that succeeded
+instead of the one that would hurt**, and it is the same shape as D-031.
+
+What actually saved it: the brief said "do not re-fix" and the implementer tested
+it regardless. **A brief instruction not to look is worth less than a test**, and
+the ground rule that briefs are fallible — 24 defects across five phases against
+zero implementer errors — is what licensed ignoring me. That rule earns its place
+in every brief.
+
+The closed vocabulary shuts this vector too; the CSP was never touched.
+
+### Carried to Phase 5
+
+`shown` can still **state a figure the bar does not draw** (F2). D-081 already
+carries the field as a legitimate frame/script divergence; it now needs the
+stronger form — **`shown`'s digits checked against the row's own `before`/`after`,
+which sit in the same mapping.** Cheap, local, and closes the last way a chart
+can assert a number nothing verifies.
+
+Also recorded: `engine/content/*.js` are hand-written author JS and bypass the
+sanitiser by design, so `--day 2026-08-14` is a regression test for the *engine*,
+not evidence the sanitiser ran.
