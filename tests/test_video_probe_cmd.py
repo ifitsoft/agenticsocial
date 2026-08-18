@@ -237,7 +237,13 @@ def test_nothing_is_written_into_the_engine(fake, series):
 
 def test_a_second_probe_replaces_the_first(fake, series):
     """Stale frames beside fresh ones are the same class of problem as a stale
-    ledger: an operator cannot tell which describes the current script."""
+    ledger: an operator cannot tell which describes the current script.
+
+    The renderer clears its own `--probe` directory, but only that one and only
+    in that mode — so the clearing this asserts is Python's, which is also the
+    only version this test could see: the fake renderer writes files, it does
+    not reimplement `rm -rf`.
+    """
     ep = episode(series)
     probe()
     (ep.dir / "probe" / "s99.png").write_bytes(b"\x89PNG")

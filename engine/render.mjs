@@ -106,8 +106,12 @@ const shoot = async (t, path) => {
 };
 
 if (at !== null) {
-  await mkdir(join(HERE, 'probe'), { recursive: true });
-  const p = join(HERE, 'probe', `at-${at}.png`);
+  /* --out here too. A single frame belongs to the episode that produced it as
+   * much as a sweep does, and engine/ is a gitignored working area — a frame
+   * left there is one nobody finds and nobody cleans up. */
+  const dir = outDir || join(HERE, 'probe');
+  await mkdir(dir, { recursive: true });
+  const p = join(dir, `at-${at}.png`);
   await shoot(at, p);
   console.log(p);
 } else if (probe) {

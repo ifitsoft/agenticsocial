@@ -56,3 +56,11 @@ class Episode:
     @property
     def out_dir(self) -> Path:
         return self.dir / "out"
+
+    @property
+    def probe_dir(self) -> Path:
+        """Single-frame inspection PNGs. Spec §5 puts it beside `out/`, and
+        `create_episode` has made it since Phase 1. Beside rather than inside
+        because `out/` is the deliverable — the thing you upload — and a probe
+        is a working note about it."""
+        return self.dir / "probe"

@@ -108,7 +108,9 @@ def test_frames_are_cleaned_up(series, episode, fake):
 
 
 def test_probe_stops_before_ffmpeg(series, episode, fake):
-    R.preview(series, episode, probe=True)
+    """Phase 8 moved this off `preview`: the cheap operation was a flag on the
+    fourteen-minute one, and `agsoc video probe` is its own command now."""
+    R.probe(series, episode)
     assert not [c for c in fake.calls if Path(c[0]).name == "ffmpeg"]
 
 

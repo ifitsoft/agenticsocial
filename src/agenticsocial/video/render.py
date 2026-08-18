@@ -70,29 +70,87 @@ def _run(cmd: list[str], what: str) -> None:
         raise RenderError(f"{what} failed (exit {proc.returncode}):\n  " + "\n  ".join(tail))
 
 
-def preview(
-    series: Series, episode: Episode, fmt: str = "vertical", probe: bool = False
-) -> Path:
-    """Render an episode without touching its status. Returns the output path."""
+def preview(series: Series, episode: Episode, fmt: str = "vertical") -> Path:
+    """Render an episode to video without touching its status. Returns the mp4.
+
+    It took a `probe=True` until Phase 8. That made the cheap operation a flag
+    on the expensive one — see `probe` below for why that is the wrong way
+    round — and `probe` is now its own function and its own command.
+    """
     if fmt not in FORMATS:
         raise RenderError(f"unsupported format {fmt!r}")
-    _require_tools(probe)
+    _require_tools(False)
+
+    plan_path = write_plan(series, episode, fmt)  # raises PlanError before any subprocess
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    return _encode(series, episode, fmt, plan_path, plan)[0]
+
+
+def probe(
+    series: Series, episode: Episode, fmt: str = "vertical", at: float | None = None
+) -> Path:
+    """One frame per beat, or one frame at `at`. No encode. Spec §6.
+
+    **This is the answer to D-116's gap.** The approval covers everything the
+    operator authors and nothing the renderer is: a font substitution changes
+    every frame with all three of `render`'s checks green. Nothing can make the
+    approval cover the pixels, so the honest response is to make looking at them
+    cheap — seconds and a handful of PNGs, against ~230 ms per frame for the
+    fourteen minutes a full episode costs.
+
+    **Ungated, deliberately.** No status is read and none is written. Probing is
+    how an operator decides whether to approve, so requiring approval first
+    inverts the workflow; and `rendered` being terminal (D-006) is a statement
+    about transitions, not about whether you may look at the file.
+
+    It renders the SAME plan `render` would — `write_plan` is called the same
+    way — because a probe drawn from anywhere else would be inspecting something
+    other than the render it is meant to inform.
+    """
+    if fmt not in FORMATS:
+        raise RenderError(
+            f"unsupported format {fmt!r} — this phase renders: "
+            f"{', '.join(sorted(FORMATS))}"
+        )
+    # node only. A probe never encodes, and demanding ffmpeg here would send an
+    # operator to install something this command does not use.
+    _require_tools(True)
 
     plan_path = write_plan(series, episode, fmt)  # raises PlanError before any subprocess
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
-    if probe:
-        # --out, not engine/probe: probe frames belong to the episode that
-        # produced them, and two episodes probed in a row must not overwrite
-        # each other. render.mjs honours --out in probe mode for this reason.
-        out = episode.out_dir / "probe"
+    out = episode.probe_dir
+    # Clear the last probe first, HERE rather than in the renderer. Stale frames
+    # beside fresh ones are the stale-ledger problem in PNG form: an operator
+    # cannot tell which of them describes the script they are reading. render.mjs
+    # also clears its --probe directory, but only that one and only in that mode,
+    # and a guarantee that lives in the subprocess is one Python cannot state.
+    out.mkdir(parents=True, exist_ok=True)
+    for stale_png in out.glob("*.png"):
+        stale_png.unlink()
+
+    if at is None:
         _run(
             ["node", "render.mjs", "--plan", str(plan_path), "--probe", "--out", str(out)],
             "the renderer",
         )
         return out
 
-    return _encode(series, episode, fmt, plan_path, plan)[0]
+    total = plan["total_sec"]
+    if at < 0 or at > total:
+        # Python resolved the runtime, so this costs nothing — and the frame it
+        # would otherwise shoot is a black rectangle, which reads as a broken
+        # renderer rather than as a number typed past the end.
+        raise RenderError(
+            f"t={at:g}s is outside this episode — it runs {total:.1f}s"
+        )
+    # Frames belong to the episode that produced them: --out, never
+    # engine/probe, so two episodes probed in a row cannot overwrite each other.
+    _run(
+        ["node", "render.mjs", "--plan", str(plan_path), "--at", str(at), "--out", str(out)],
+        "the renderer",
+    )
+    return out / f"at-{at}.png"
 
 
 def _encode(

@@ -1238,22 +1238,68 @@ def _covered_inputs(inputs: dict) -> str:
 def video_preview(
     episode: str,
     series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
-    probe: bool = typer.Option(False, "--probe", help="one frame per beat, no video"),
 ) -> None:
-    """Render an episode to video. Does NOT change its status — the gated
-    `render` command arrives with the approval workflow."""
+    """Render an episode to video WITHOUT the gate. Changes no status.
+
+    It carried a `--probe` flag until Phase 8. `probe` is its own command now:
+    the cheap operation must not be a flag on the fourteen-minute one.
+    """
     ws = _workspace()
     episode = _text(episode, "The episode id")
     series = _text(series, "The series slug")
     try:
         s = load_series(ws, series)
         ep = load_episode(s, episode)
-        out = render_mod.preview(s, ep, probe=probe)
+        out = render_mod.preview(s, ep)
     except (SeriesError, EpisodeError, PlanError, render_mod.RenderError) as e:
         raise _fail(str(e))
     except OSError as e:
         raise _fail(f"cannot write output: {e}")
     typer.echo(f"wrote {out}")
+
+
+@video_app.command("probe")
+def video_probe(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    at: float = typer.Option(
+        None, "--at", help="one frame at t=T seconds, instead of one per beat"
+    ),
+    fmt: str = typer.Option("vertical", "--format", help="output format"),
+) -> None:
+    """Look at the frames — one per beat, or one at `--at T`. No encode (§6).
+
+    This is the honest answer to what an approval does not cover (D-116). The
+    beats, `pace` and the design are signed; `engine.js`, `scene.html`'s CSS,
+    the font this machine resolved, Chromium and ffmpeg are not, and a font
+    substitution changes every frame with every check green. Nothing can extend
+    the approval over the pixels, so looking at them is made cheap instead.
+
+    It moves no status and works at any status: probing is how you decide
+    whether to approve.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    try:
+        s = load_series(ws, series)
+        ep = load_episode(s, episode)
+        out = render_mod.probe(s, ep, fmt=fmt, at=at)
+    except (SeriesError, EpisodeError, PlanError, render_mod.RenderError) as e:
+        raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot write output: {e}")
+    frames = sorted(out.glob("*.png")) if out.is_dir() else [out]
+    typer.secho(f"{series}/{episode} · {len(frames)} frame(s)", fg=typer.colors.GREEN)
+    typer.echo(f"      {'at' if at is not None else 'in':<{LABEL_WIDTH}}{out}")
+    typer.echo(
+        _detail(
+            "note",
+            "nothing moved — a probe reads the script and draws frames. What "
+            "you are looking at is this machine's fonts and this machine's "
+            "Chromium, which is exactly the part no approval covers",
+        )
+    )
 
 
 @video_app.command("render")
@@ -1384,7 +1430,7 @@ def _echo_rendered(series: str, episode: str, result) -> None:
             "planbuild.js, scene.html's CSS, the font this machine resolved, "
             "Chromium and ffmpeg are all outside the approval, and the font is "
             "the one that differs between machines. Nobody has looked at this "
-            f"video: `agsoc video preview {episode} --series {series} --probe` "
-            "puts one frame per beat on disk",
+            f"video: `agsoc video probe {episode} --series {series}` puts one "
+            "frame per beat on disk in seconds",
         )
     )
