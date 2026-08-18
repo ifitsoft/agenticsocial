@@ -235,6 +235,81 @@ def dumbbell_within_track(payload: dict) -> str | None:
     return None
 
 
+# --- `shown`: the one authored field that reaches innerHTML ----------------------
+
+# The closed vocabulary. `<s>` and `</s>`, written exactly, and nothing else.
+#
+# Counted rather than chosen, the way D-080 widened the prose vocabulary: all
+# four `shown` cells in engine/content/2026-08-14.js are `<s>34.4</s> &rarr;
+# 43.6`, so a strikethrough and a named entity are the entire real requirement.
+# `<b>` and `<em>` are deliberately absent — no committed `shown` uses either,
+# and a tag added because it might be wanted is how a closed surface reopens. A
+# storyboard that needs one should be refused here and the vocabulary widened on
+# the same counted evidence, in the open.
+SHOWN_TAGS = ("<s>", "</s>")
+
+
+def _shown_markup(v: str) -> str | None:
+    """The first fragment of `v` that is outside the vocabulary, or None.
+
+    Every tag, comment, doctype and CDATA section in HTML starts with `<`, so
+    that is the character this walks. Attribute-free is what makes the rule
+    safe, and it is why the tags are compared VERBATIM rather than parsed:
+    `<s onclick="…">` is not `<s>`, so there is no attribute — event handler,
+    `style`, or whatever a future Chromium adds — with a path through.
+
+    The NEGATIVE half is deliberate. A bare `&` is an ampersand and a bare `>`
+    is a greater-than: neither can open a tag, both render as themselves, and
+    refusing them would be a ban on punctuation dressed as a security rule.
+    """
+    for i, ch in enumerate(v):
+        if ch != "<":
+            continue
+        if any(v.startswith(tag, i) for tag in SHOWN_TAGS):
+            continue
+        end = v.find(">", i)
+        return v[i : end + 1] if 0 <= end <= i + 60 else v[i : i + 40]
+    return None
+
+
+def shown_markup(v: Any) -> str | None:
+    """`shown` is DATA, not a script. R1–R3 of Phase 4 Task 5.
+
+    The engine sets this field with `html:`, and innerHTML does not only grant
+    tags — it grants ATTRIBUTES, and every inline event handler is an attribute.
+    Leader-verified in a real browser from a plain `jumpChart` beat, no `custom`
+    and no `attest` anywhere in the plan:
+
+        shown: '<img src=x onerror="…document.createTextNode(Date.now())…">'
+        load 1, frame t=1.0 : THE BRIEF|T1787015967789
+        load 2, frame t=1.0 : THE BRIEF|T1787015970251
+
+    `__seek(t)` purity — the one invariant this project has never had to re-fix
+    — broken by a data field, and the same beat reached a loopback sink through
+    `location.href`, the channel D-090 records as the one a CSP cannot close.
+
+    Refused HERE, before any render, and not left to the renderer's sanitiser:
+    the plan is the contract, and a human approves this script by reading a
+    screen. A script that validates and then relies on the renderer to defuse it
+    has already been signed off.
+    """
+    reason = free_text(v)
+    if reason:
+        return reason
+    bad = _shown_markup(v)
+    if bad is None:
+        return None
+    return (
+        f"carries markup outside the closed vocabulary: {bad!r}. `shown` is set "
+        "as innerHTML, and innerHTML grants attributes as well as tags — every "
+        "inline event handler is an attribute, so this field can run JavaScript "
+        "and break `__seek(t)` purity. It may contain `<s>` and `</s>`, written "
+        "exactly and with no attributes, and character references such as "
+        "`&rarr;` — that is what the committed episodes use. Write a literal "
+        "`<` as `&lt;`"
+    )
+
+
 def jump_rows(v: Any) -> str | None:
     """`rows[{label, before, after, shown}]` — spec §7.1 as corrected by D-068.
 
@@ -251,7 +326,8 @@ def jump_rows(v: Any) -> str | None:
     `before`/`after` are checked as numbers, not as truthy: a benchmark that
     scored 0 before is a real bar. `shown` is a display override — the engine
     sets it as `html` — so an empty one deliberately blanks the value cell, the
-    way `sub: ""` blanks a title card's subtitle.
+    way `sub: ""` blanks a title card's subtitle. Its markup vocabulary is
+    closed (`shown_markup`): a display override is not a script.
     """
     if not isinstance(v, list):
         return f"must be a list, got {_type_name(v)}"
@@ -277,8 +353,10 @@ def jump_rows(v: Any) -> str | None:
                 return (
                     f"[{i}] `{name}` must be a number, got {_type_name(item[name])}"
                 )
-        if "shown" in item and not _is_str(item["shown"]):
-            return f"[{i}] `shown` must be a string, got {_type_name(item['shown'])}"
+        if "shown" in item:
+            reason = shown_markup(item["shown"])
+            if reason:
+                return f"[{i}] `shown` {reason}"
     return None
 
 

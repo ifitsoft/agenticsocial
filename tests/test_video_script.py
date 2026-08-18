@@ -1549,7 +1549,7 @@ REAL_SHOWN = [
 ]
 
 
-def _jump(shown):
+def _shown_beat(shown):
     return dict(
         VALID["jumpChart"],
         rows=[{"label": "FrontierCode", "before": 34.4, "after": 43.6, "shown": shown}],
@@ -1562,7 +1562,7 @@ def test_the_shown_the_committed_episode_writes_is_accepted(series, value):
     four of these, and the strikethrough and the arrow are the whole point of
     the field — a rule that refuses them has replaced the type rather than
     secured it."""
-    script = _load(series, [_jump(value)])
+    script = _load(series, [_shown_beat(value)])
     assert script.beats[0].fields["rows"][0]["shown"] == value
 
 
@@ -1598,7 +1598,7 @@ def test_markup_outside_the_vocabulary_is_refused_at_validation(series, value):
     validates and then needs the renderer to save it has already been approved
     by a human reading a screen that did not show this."""
     with pytest.raises(S.ScriptError) as e:
-        _load(series, [_jump(value)])
+        _load(series, [_shown_beat(value)])
     assert "shown" in str(e.value)
 
 
@@ -1644,7 +1644,7 @@ def test_a_shown_that_is_only_text_and_entities_is_accepted(series, value):
     ban on punctuation. A bare `&` is an ampersand, a bare `>` is a
     greater-than, and `&lt;s&gt;` is an author asking for the characters — none
     of them can open a tag, so none of them is refused."""
-    script = _load(series, [_jump(value)])
+    script = _load(series, [_shown_beat(value)])
     assert script.beats[0].fields["rows"][0]["shown"] == value
 
 

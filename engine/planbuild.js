@@ -51,8 +51,10 @@ function applyPlanDesign(design) {
  * same reason in miniature: a single-asterisk pass run first would take the
  * first `*` of every `**` opener and emphasise from there.
  *
- * `jumpChart.shown` is exempt — it is a documented HTML override and
- * content/2026-08-14.js relies on `<s>34.4</s> &rarr; 43.6`.
+ * `jumpChart.shown` has its own, WIDER vocabulary rather than an exemption —
+ * see shownHTML. It is a documented HTML override and content/2026-08-14.js
+ * relies on `<s>34.4</s> &rarr; 43.6`; what it is not is a place a script can
+ * write arbitrary markup.
  */
 function escapeHTML(t) {
   return String(t)
@@ -73,6 +75,55 @@ function proseHTML(t) {
 /* The prose counterpart of P(): use it for every operator-authored field. */
 function prose(t) {
   return { html: proseHTML(t) };
+}
+
+/* `jumpChart.rows[].shown` — the one authored field set as `html`, and a CLOSED
+ * vocabulary rather than an exemption.
+ *
+ * innerHTML does not only grant tags. It grants ATTRIBUTES, and every inline
+ * event handler is an attribute. Measured in a real browser from a plain
+ * jumpChart beat — no `custom`, no `attest`, nothing script.py's determinism
+ * lint has ever read:
+ *
+ *     shown: '<img src=x onerror="…document.createTextNode(Date.now())…">'
+ *     load 1, frame t=1.0 : THE BRIEF|T1787015967789
+ *     load 2, frame t=1.0 : THE BRIEF|T1787015970251
+ *
+ * `__seek(t)` purity, broken by a data field, and the same beat reached a
+ * loopback sink through `location.href` — the navigation D-090 records as the
+ * one channel the page's CSP cannot close.
+ *
+ * The vocabulary is `<s>`, `</s>` and character references, and nothing else.
+ * Derived by counting rather than by taste, the way D-080 widened the prose
+ * vocabulary: all four `shown` cells in content/2026-08-14.js are
+ * `<s>34.4</s> &rarr; 43.6`, so a strikethrough and a named entity are the
+ * entire real requirement. `<b>` and `<em>` are deliberately NOT here — no
+ * committed `shown` uses either, and adding a tag nobody has needed is how a
+ * closed surface quietly reopens.
+ *
+ * ATTRIBUTE-FREE is what makes it safe, and it is why the tags are matched
+ * VERBATIM rather than parsed: `<s onclick="…">` is not `<s>`, so it never
+ * becomes an element, and no attribute — event handler, `style`, anything a
+ * future Chromium invents — has a path through. A blocklist of `on*` spellings
+ * would be the `window['Ma'+'th']` situation from D-088: a lint sold as a
+ * boundary.
+ *
+ * Character references are allowed as a CLASS because the class is safe: a
+ * reference decodes to a character, and the HTML parser never re-reads that
+ * character as markup. `&lt;s&gt;` is three characters on the frame, not a tag.
+ *
+ * The ORDER is the same trick as proseHTML's, pointed the other way: escape,
+ * then restore the tags, then restore the references. Restoring references
+ * first would turn an authored `&lt;s&gt;` into a live element on the next
+ * pass — the author asked for the characters and would get the tag.
+ */
+function shownHTML(t) {
+  return escapeHTML(t)
+    .replace(/&lt;(\/?)s&gt;/g, '<$1s>')
+    .replace(
+      /&amp;(#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{0,30});/g,
+      '&$1;',
+    );
 }
 
 function buildStatement(b) {
@@ -442,8 +493,22 @@ function planJumpRows(b) {
      * `<s>34.4</s> &rarr; 43.6`. Absent blanks the cell rather than printing
      * `undefined`; `shown: ""` blanks it deliberately, the way `sub: ""`
      * blanks a title card's subtitle, and the two are indistinguishable to the
-     * viewer by design. */
-    out.push([r.label, r.before, r.after, typeof r.shown === 'string' ? r.shown : '']);
+     * viewer by design.
+     *
+     * Through shownHTML, and HERE rather than inside the closure below. Two
+     * reasons, and the second is not obvious: script.py refuses anything
+     * outside the vocabulary before a render can start, but a plan reaches this
+     * page without passing through Python at all (`render.mjs --plan` reads any
+     * JSON, and the tests write their own) — and a `custom` beat can reassign
+     * `escapeHTML` from inside a script.yaml (D-089). Its `js` runs at seek()
+     * time; this runs while the plan is being walked, so the conversion is
+     * already done before any authored code can touch the escaper. */
+    out.push([
+      r.label,
+      r.before,
+      r.after,
+      typeof r.shown === 'string' ? shownHTML(r.shown) : '',
+    ]);
   }
   return out;
 }
