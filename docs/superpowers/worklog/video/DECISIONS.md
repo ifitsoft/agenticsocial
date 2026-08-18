@@ -2205,3 +2205,89 @@ Here the strictness is not judgement — it is a comparison operator that cannot
 represent the thing being compared. **Track the override rate from day one; a
 high rate means the checker is wrong, not the operator**, and this is what that
 looks like before anyone has overridden anything.
+
+## D-099 · phase 5 / task 2 · the sentence is true, and it caught its own author
+
+Pass 1 works. Leader-verified on the four cases D-098 was written for:
+
+```
+95B vs "95 billion" : True      0.75 vs "75 cents" : False
+9B  vs "95 billion" : False     1,000,000 vs "1M"  : True
+```
+
+1471 tests, 37/37 mutants. But the result worth recording is Step 6.
+
+**On the first real run, the checker caught two fabricated numbers, and they were
+the implementer's own.** They built a before/after price chart from the
+operator's brief and invented the "before" figures — the brief never publishes
+DeepSeek's old prices. Their report says it plainly: *a chart I hadn't noticed
+I'd fabricated.*
+
+That is the entire product thesis demonstrated on its first contact with real
+content, and demonstrated in the only way that counts: **against the person who
+built the checker, on work they believed was fine.** Not a synthetic fixture, not
+a planted bug. A number invented in good faith by someone assembling a chart from
+a source that did not contain it — which is exactly how this fails in the real
+world, and exactly what no amount of careful authoring prevents.
+
+Spec §7 example: 2/5 refused, both the beat rather than the checker (an uncited
+cold open, and a kicker whose citation did not cover its own framing). With those
+citations written, 0/5. Real brief: 1/8, and the 1 is true.
+
+**M1 and M2 are one source edit.** Substring matching is simultaneously the
+false-refusal mutant and the false-acceptance one — the cleanest possible
+statement of why D-098 strengthened the check rather than relaxing it.
+
+## D-100 · phase 5 / task 2 · a mutation harness that gets faster can start lying
+
+The first sweep reported two survivors that were not. With the suite down to
+0.17s, consecutive mutants land inside a single mtime second and CPython reuses a
+stale `.pyc` — so the harness tested the *unmutated* module and reported the
+mutant as surviving.
+
+**A false survivor is the benign direction; the same mechanism produces false
+kills**, which would silently inflate every mutation score this project reports —
+and mutation testing is this project's primary quality metric. Fix:
+`PYTHONDONTWRITEBYTECODE=1` in the sweep.
+
+This is D-035 in a new place: the *harness* stopped being able to observe the
+thing it was measuring, and it started happening only because the suite got fast.
+**Speed changed the correctness of the measurement.**
+
+## D-101 · phase 5 / task 2 · an ellipsis in a quote is how humans shorten citations
+
+§8.2.1 folds U+2026 to `...`, and literal search then demanded three full stops no
+source ever wrote. The spec's own `list` beat quotes
+`"…available today in the Gemini API…"` — **a guaranteed refusal on the commonest
+way a person shortens a citation.**
+
+Trimmed at the **edges only**. An internal `…` stays literal, deliberately: a
+wildcard there would let a beat quote `"prices … fell"` against a source saying
+prices rose *before* they fell. **Edge elision is abbreviation; internal elision
+is editing.** The distinction is the whole safety argument and it is why this is
+not a general wildcard.
+
+## D-102 · phase 5 / task 2 · entity presence is recorded, not gated — with the numbers to justify it
+
+§8.2 step 3 is deliberately **not** implemented as a gate, and the report says so
+rather than shipping a check that looks stricter than it is.
+
+Measured on the real brief: 20 entity atoms, **7 unfindable (35%)**. Gating them
+would refuse **5 of 8 beats (62%)** instead of 1 of 8. **Not one of the seven is a
+real entity error** — five are Task 1's glued multi-entity runs, one is `2.4T`
+read as a name, one is `USD`.
+
+D-040's failure mode, arithmetically: a 62% refusal rate on correct work trains an
+operator to override everything, including the true refusal that is sitting right
+there in the same run. **A check that cannot distinguish its own tokeniser's
+errors from the author's must not hold the gate**, and the honest move is to
+record it for the human rather than dress it up as verification. Revisit when
+entity extraction is better than an orthographic rule; it is Phase 9's territory.
+
+## D-103 · SPEC · `claim_override` is a mapping in §8.4 and a string in the code
+
+`script.py` validates every shared field with `free_text`, so **§8.4's own YAML
+example is refused at load.** The mapping is the right shape and it is
+load-bearing: `reason` plus `by` is what makes an override *a written sentence
+with your name on it* rather than a flag. Task 3 fixes the code to match the
+spec, before Phase 7's gate reads it.
