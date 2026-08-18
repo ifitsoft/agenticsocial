@@ -2614,3 +2614,67 @@ exactly one row. The rest of the list is still glued runs and sentence-opening
 words — `OpenAI Anthropic, Google Chinese`, `Three`, `Also`, `Latest` — which is
 D-102's known cost, unchanged and still ungated. **The fix removed the rows that
 were provably wrong (a verified figure filed as a missing name), not the noise.**
+
+## D-111 · phase 6 · two blind runs, two clean first passes — and the pass was not the finding
+
+| | beats | claims | first `check` | overrides | runtime |
+|---|---|---|---|---|---|
+| Runner A | 24 | 22/22 | exit 0 | 0 | 120.0s |
+| Runner B | 26 | 24/24 | exit 0 | 0 | 120.0s |
+
+Two fresh agents, no project context, forbidden from reading any spec, plan or
+decision. Neither opened the schema. **Phase 6's exit criterion is met twice.**
+
+The skill works. What the runs were actually *for* is the friction each produced,
+and Runner B produced the most serious defect found in this phase.
+
+### The coverage check clears stories it should catch
+
+```
+node engine/coverage.mjs check gemini-3.7  ->  "NOT COVERED. Safe to run as new."
+node engine/coverage.mjs check gemini      ->  4 prior mention(s)
+```
+
+Leader-verified. Runner B passed `gemini-3.7`, got a clean bill, and **cleared
+the brief's headline story — one this series ran three days earlier as its own
+headline.** It survived only because the runner independently re-ran bare vendor
+terms and read the printed titles, which the skill never told it to do.
+
+CLAUDE.md states the invariant: *the series must never re-tell a story as if it
+were new.* This is that invariant failing **in the safe-looking direction**,
+which is the worst direction available to a check of this kind.
+
+The mechanism: the ledger stores product names with spaces (`gemini 3.7 flash`),
+the check is a substring match, so **every hyphenated product term is a possible
+false negative — and hyphenated is exactly how an author writes a product.**
+
+**The message is the second defect and the more general one.** "NOT COVERED.
+Safe to run as new" asserts a conclusion the search cannot support: a substring
+miss supports *"this string does not appear"*, nothing more. That is the third
+time in two phases that something in this pipeline has claimed more than it knew
+— after `verify.py`'s comment promising `bn`/`mn` were refused (D-106), and my
+own retracted typography finding (D-110). **A tool that says "safe" has to be
+right about it**, and `coverage.mjs` had no tests at all, which is why it was
+never asked.
+
+### Why two runners, and what the second one bought
+
+Runner A's log was 12 items and it passed. Had the phase stopped there, the
+coverage defect would have shipped: A used bare vendor terms by instinct and
+never hit it. **The second run was not a formality — it was the one that found
+the thing that matters**, and it found it by making a different arbitrary choice
+at a point the skill left open.
+
+That is the argument for repeating a behavioural test with a different actor
+rather than re-running it with the same one: **the variance between two
+executions is the measurement.** Where they diverged is precisely where the
+instructions were underspecified, and one of those divergences was load-bearing.
+
+### The skill's own arithmetic did not reconcile
+
+"22–26 beats, laid out as two cold-open beats + four acts of 4–6 beats + one
+signoff" yields **19–27**. Neither endpoint matches. Both runners landed inside
+the stated band anyway — A wrote 24, B wrote 26 — so the error was invisible to
+the outcome and visible only to a reader who did the sum. Worth keeping as a
+reminder that **a passing acceptance test does not validate the document that
+produced it.**
