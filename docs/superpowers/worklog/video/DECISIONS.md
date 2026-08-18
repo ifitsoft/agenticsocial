@@ -2678,3 +2678,58 @@ the stated band anyway — A wrote 24, B wrote 26 — so the error was invisible
 the outcome and visible only to a reader who did the sum. Worth keeping as a
 reminder that **a passing acceptance test does not validate the document that
 produced it.**
+
+## D-112 · phase 6 / task 3 · the coverage check is fixed, and the third overclaim was found where it was predicted
+
+```
+gemini-3.7  ->  3 prior mention(s)          (was: "NOT COVERED. Safe to run as new.")
+v4-pro      ->  no entry matches this string
+```
+
+The matcher now strips non-alphanumerics from **both** sides and asks for
+containment, so `gemini-3.7`, `gemini 3.7`, `gemini-3-7-flash` and `gemini3.7`
+are one query. **The change is one-directional: it can only add matches, never
+drop one** — which is the property that makes it safe to make in a hurry. Cost is
+false positives (`aiact` finds *EU AI Act*), and that is the correct direction to
+be wrong in for a check whose failure mode is re-telling a story as new.
+
+The message no longer says "safe". It names what was searched and states the
+bound — *the ledger holds only what a person wrote into it after an episode
+shipped* — and points at near-miss entries without counting them as hits. That
+pointer is the manual step Runner B had to invent for itself.
+
+`engine/coverage.test.mjs` is new: 27 assertions, plain node, driving the binary
+as a subprocess, invented ledgers in a temp file. **`coverage.mjs` had no tests at
+all**, which is the whole reason a tool that said "safe" was never asked whether
+it was.
+
+**The mutation sweep reported honestly: 15/17 first, then 21/21.** One survivor
+was a real gap (the no-separator spelling `gemini3.7`). The other was an
+*equivalent* mutant that proved half the new matcher was dead code — brute force
+found zero inputs where the spaced pass hits and the squashed pass does not, so
+it was deleted. **An equivalent mutant is usually noise; here it was a design
+review**, and the right response was to remove code rather than to argue for it.
+
+### The third overclaim, found where D-111 predicted one would be
+
+`agsoc video check` prints, in green:
+
+```
+the-brief/2026-08-17 · 7 claims · 6 pass · 1 manual
+7 claims verified, none open
+```
+
+**It counts as "verified" a claim the same screen calls *"attested by hand — no
+machine checked these"*.** Leader-confirmed — and I read that exact output
+earlier tonight without noticing, which is the point: the sentence is reassuring
+and scans as a summary of the table above it.
+
+Three for three now — `verify.py`'s comment (D-106), my typography claim (D-110),
+`coverage.mjs`'s "safe" (D-112) — and the pattern is stable enough to state as a
+rule: **wherever this system summarises, it rounds toward reassurance.** The
+summary line is written last, by someone who already knows the answer, and it
+inherits their confidence rather than the data's.
+
+It sits directly in front of Phase 7's approval gate, which consumes exactly
+these verdicts. **Fixed in Phase 7 Task 1**, not here, because the gate and its
+summary should agree by construction rather than by coincidence.
