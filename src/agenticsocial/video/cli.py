@@ -603,7 +603,10 @@ def video_review(
         f"pace {_pace(script.pace)}"
     )
     if ledger_note:
-        typer.secho(ledger_note, fg=typer.colors.YELLOW if warn else None)
+        typer.secho(
+            textwrap.fill(_one_line(ledger_note), width=ROW_WIDTH),
+            fg=typer.colors.YELLOW if warn else None,
+        )
     typer.echo("")
     for line in _review_table(beats, verdicts):
         typer.echo(line)

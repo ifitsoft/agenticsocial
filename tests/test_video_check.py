@@ -510,6 +510,10 @@ def test_a_ledger_whose_corpus_has_changed_is_reported_stale_and_shows_no_verdic
     assert result.exit_code == 0, result.output
     assert "stale" in result.output.lower()
     assert "pass" not in result.output, result.output
+    # The banner is the longest line this screen ever prints, and it is printed
+    # on the run where the operator is least inclined to read carefully.
+    over = [line for line in result.output.splitlines() if len(line) > video_cli.ROW_WIDTH]
+    assert not over, over
 
 
 def test_a_current_ledger_is_shown_normally_with_no_scary_noise(series):
