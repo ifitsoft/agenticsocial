@@ -1254,3 +1254,111 @@ def video_preview(
     except OSError as e:
         raise _fail(f"cannot write output: {e}")
     typer.echo(f"wrote {out}")
+
+
+@video_app.command("render")
+def video_render(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    fmt: str = typer.Option("vertical", "--format", help="output format"),
+) -> None:
+    """Render an APPROVED episode to an MP4 (§9, §10).
+
+    Three checks, and they stay three so you are told which thing moved
+    (D-115): the status, the approval against what you authored, and the claim
+    ledger against the corpus. It does not re-run `check` — the ledger on disk
+    is the artifact of record, and a second set of verdicts computed here would
+    be verdicts nobody displayed.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    head = f"{series}/{episode} · NOT rendered"
+    try:
+        result = render_mod.render_episode(ws, series, episode, fmt=fmt)
+    except TransitionError as e:
+        raise _fail(
+            f"{head} — {e}. Only an episode a human has approved renders: "
+            f"`agsoc video approve {episode} --series {series} --by \"Your Name\"`"
+        )
+    except render_mod.RenderRefused as e:
+        raise _fail(_refusal(head, e, episode, series))
+    except (SeriesError, EpisodeError, PlanError, verify_mod.VerifyError,
+            render_mod.RenderError) as e:
+        raise _fail(f"{head} — {e}")
+    except OSError as e:
+        raise _fail(f"{head} — cannot write output: {e}")
+    _echo_rendered(series, episode, result)
+
+
+def _refusal(head: str, e: render_mod.RenderRefused, episode: str, series: str) -> str:
+    """One screen per kind. Three answers, three files to open (D-115)."""
+    if e.kind == "drift":
+        typer.secho(
+            f"{head} — the approval no longer describes this episode", fg=typer.colors.RED
+        )
+        typer.echo(_detail("why", str(e)))
+        return _detail(
+            "fix",
+            "put the change back, or run `agsoc video check "
+            f"{episode} --series {series}` and approve again",
+        )
+    typer.secho(f"{head} — the check does not describe this script", fg=typer.colors.RED)
+    typer.echo(_detail("why", str(e)))
+    return _detail(
+        "fix", f"run `agsoc video check {episode} --series {series}`, read it, then approve"
+    )
+
+
+def _size(n: int) -> str:
+    return f"{n / 1_000_000:.1f} MB" if n >= 100_000 else f"{n / 1000:.0f} kB"
+
+
+def _echo_rendered(series: str, episode: str, result) -> None:
+    """The success screen, written deliberately (D-116).
+
+    It may say the episode was approved and that nothing the operator authored
+    has changed, because all three checks just passed. It may **not** say or
+    imply that this is what the approver saw: `engine.js`, `planbuild.js`,
+    `scene.html`'s CSS, the resolved font, Chromium and ffmpeg are all outside
+    the approval, and a font substitution changes every frame with every check
+    green.
+
+    This project has overclaimed on the summary line four times (D-106, D-110,
+    D-112, D-113) — always here, always because the summary is written last by
+    someone who already knows the answer. So the last line is not a flourish; it
+    is the part that makes the rest of the screen true.
+    """
+    record = result.record
+    typer.secho(f"{series}/{episode} · rendered", fg=typer.colors.GREEN)
+    # Not through `_detail`: a wrapped path is a path you cannot copy out of a
+    # terminal, and this is the one line an operator will select and paste.
+    typer.echo(f"      file      {result.path}")
+    typer.echo(
+        _detail(
+            "",
+            f"{_size(record['bytes'])} · {record['runtime_sec']:.1f}s · "
+            f"{record['width']}x{record['height']} · {record['frames']} frames "
+            f"@ {record['fps']}fps",
+        )
+    )
+    approval = record.get("approval") or {}
+    typer.echo(
+        _detail(
+            "approved",
+            f"{approval.get('by')} at {approval.get('at')} — and nothing you "
+            "authored has changed since: the beats, `pace` and series.toml's "
+            "design are the ones that were signed",
+        )
+    )
+    typer.echo(
+        _detail(
+            "not covered",
+            "what DREW these frames was never approved — engine.js, "
+            "planbuild.js, scene.html's CSS, the font this machine resolved, "
+            "Chromium and ffmpeg are all outside the approval, and the font is "
+            "the one that differs between machines. Nobody has looked at this "
+            f"video: `agsoc video preview {episode} --series {series} --probe` "
+            "puts one frame per beat on disk",
+        )
+    )

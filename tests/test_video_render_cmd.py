@@ -161,6 +161,30 @@ def episode(series, beats=None, sources=None, ep_id=EP, status="in_review"):
     return load_episode(series, ep_id)
 
 
+def edit_beats(series, beats, ep_id=EP):
+    """Change the beats and NOTHING else.
+
+    `write_script` rewrites the whole file, which wipes the approval record —
+    and "no approval on record" is a different drift from "the beats moved".
+    The bug this file is pinning is an edit to an episode that is still, on
+    disk, approved by a named human.
+    """
+    path = series.episodes_dir / ep_id / "script.yaml"
+    head, sep, _ = path.read_text(encoding="utf-8").partition("\n---\n")
+    body = yaml.safe_dump({"beats": list(beats)}, sort_keys=False, allow_unicode=True)
+    path.write_text(head + sep + body, encoding="utf-8")
+
+
+def force_status_on_disk(series, status, ep_id=EP):
+    """Set the status by editing the file, which is what a SIGKILL leaves behind
+    and what no supported command can do."""
+    path = series.episodes_dir / ep_id / "script.yaml"
+    text = path.read_text(encoding="utf-8")
+    before = status_on_disk(series, ep_id)
+    assert f"status: {before}" in text
+    path.write_text(text.replace(f"status: {before}", f"status: {status}", 1), "utf-8")
+
+
 def check(ep_id=EP):
     return run("video", "check", ep_id, "--series", "the-brief")
 
@@ -228,11 +252,7 @@ def test_a_drifted_episode_does_not_render(series, fake):
     """M2. An edit after approval, which §10 exists to catch: the approval is
     still on the file and still says `approved`."""
     approved(series)
-    write_script(
-        load_episode(series, EP),
-        [clean_beat(), clean_beat(text="Something else entirely.")],
-        status="approved",
-    )
+    edit_beats(series, [clean_beat(), clean_beat(text="Something else entirely.")])
     result = render()
     assert result.exit_code == 1, result.output
     assert "sha256" in result.output
@@ -298,11 +318,7 @@ def _three_refusals(series):
     out["status"] = render(ep_id="ep-status").output.replace("ep-status", "<ep>")
 
     approved(series, ep_id="ep-drift")
-    write_script(
-        load_episode(series, "ep-drift"),
-        [clean_beat(text="Moved.")],
-        status="approved",
-    )
+    edit_beats(series, [clean_beat(text="Moved.")], ep_id="ep-drift")
     out["drift"] = render(ep_id="ep-drift").output.replace("ep-drift", "<ep>")
 
     approved(series, ep_id="ep-stale")
@@ -425,7 +441,7 @@ def test_a_retry_still_passes_all_three_checks(series, monkeypatch, fake):
     broken(monkeypatch, fail_on="node", stderr="boom")
     assert render().exit_code == 1
 
-    write_script(load_episode(series, EP), [clean_beat(text="Moved.")], status="failed")
+    edit_beats(series, [clean_beat(text="Moved.")])
     monkeypatch.setattr(R.subprocess, "run", fake)
     result = render()
     assert result.exit_code == 1, result.output
@@ -437,13 +453,7 @@ def test_a_killed_render_can_be_recovered_without_editing_a_file(series, fake):
     """M6. SIGKILL and power loss run no handler, so `rendering` on disk with no
     live process is a state the CLI has to be able to leave."""
     approved(series)
-    ep_path = series.episodes_dir / EP / "script.yaml"
-    ep_path.write_text(
-        ep_path.read_text(encoding="utf-8").replace(
-            "status: approved", "status: rendering"
-        ),
-        encoding="utf-8",
-    )
+    force_status_on_disk(series, "rendering")
     refused = render()
     assert refused.exit_code == 1, refused.output
     assert "--restart" in refused.output
@@ -458,7 +468,8 @@ def test_restart_does_not_skip_the_gate(series, fake):
     """M1-M3 through the recovery door. `--restart` answers the status question
     only; drift and staleness are still asked."""
     approved(series)
-    write_script(load_episode(series, EP), [clean_beat(text="Moved.")], status="rendering")
+    edit_beats(series, [clean_beat(text="Moved.")])
+    force_status_on_disk(series, "rendering")
     result = render("--restart")
     assert result.exit_code == 1, result.output
     assert "sha256" in result.output
@@ -616,13 +627,13 @@ def test_no_test_launches_the_real_toolchain(series):
     like."""
     # Assembled rather than written whole: a literal here is a literal in a test
     # file, and this test reads test files.
-    mjs = "render" + ".mjs"
+    mjs, pw = "render" + ".mjs", "play" + "wright"
     forbidden = (
         f'"node", "{mjs}"',
         f"'node', '{mjs}'",
-        "import playwright",
-        "from playwright",
-        "chromium.launch",
+        f"import {pw}",
+        f"from {pw}",
+        "chromium" + ".launch",
     )
     for path in Path(__file__).parent.glob("test_*.py"):
         src = path.read_text(encoding="utf-8")
