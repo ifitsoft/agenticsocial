@@ -310,6 +310,49 @@ def shown_markup(v: Any) -> str | None:
     )
 
 
+_DIGIT = re.compile(r"\d")
+
+
+def dumbbell_prints_a_figure(raw: dict) -> str | None:
+    """Which of a dumbbell's own words carries a digit, if any.
+
+    "A dumbbell renders no numbers at all" is asserted in this module, in
+    `engine.js` and in a test, and it is true of `values` and false of the type.
+    `caption`, `footnote`, `kicker`, row `label` and row `note` are all
+    unconstrained text and all reach the stage, so an uncited card could print
+    `Rated 4.2 out of 5` and `+18 pts` with no `src` and no `quote` anywhere in
+    the pipeline. The justification for the exemption was a property the type
+    did not hold.
+
+    The exemption is kept and made CONDITIONAL on the property. Spec §7.1 does
+    not put `dumbbell` in the cited pair, and the AMIE chart the type exists for
+    carries no figure at all — making every dumbbell cited would be a spec
+    change wearing a bugfix. But §7.2's sentence is written about numbers rather
+    than about types: "there is no path to rendering a number that isn't in a
+    source". A dumbbell that prints a digit is on that path.
+
+    Refusing the digit instead was the other option and is worse: "n=159 cases"
+    is a real footnote from a real study, and a rule that bans it pushes the
+    operator into writing a vaguer one. Requiring the source is the rule the
+    spec already has.
+    """
+    fields: list[tuple[str, Any]] = [
+        ("`caption`", raw.get("caption")),
+        ("`footnote`", raw.get("footnote")),
+        ("`kicker`", raw.get("kicker")),
+    ]
+    rows = raw.get("rows")
+    if isinstance(rows, list):
+        for i, row in enumerate(rows):
+            if isinstance(row, dict):
+                fields.append((f"`rows[{i}]` `label`", row.get("label")))
+                fields.append((f"`rows[{i}]` `note`", row.get("note")))
+    for name, value in fields:
+        if isinstance(value, str) and _DIGIT.search(value):
+            return f"{name} reads {value!r}"
+    return None
+
+
 def jump_rows(v: Any) -> str | None:
     """`rows[{label, before, after, shown}]` — spec §7.1 as corrected by D-068.
 
@@ -424,6 +467,14 @@ def _as_displayed(value: float, decimals: int) -> str:
     return str(decimal.Decimal(repr(value)).quantize(step, decimal.ROUND_HALF_UP))
 
 
+# `Number.prototype.toFixed` accepts 0–100 and throws a RangeError outside it,
+# and every JavaScript number at or above 1e21 stringifies as `1e+21` rather
+# than as digits. Both are the engine's limits rather than this module's, which
+# is why they are named here rather than typed into a message.
+MAX_DECIMALS = 100
+EXPONENTIAL_AT = 1e21
+
+
 def kpi_items(v: Any) -> str | None:
     """`items[{value, unit, label, decimals}]` — spec §7.1, plus `prefix`.
 
@@ -475,9 +526,30 @@ def kpi_items(v: Any) -> str | None:
             if name in item and not _is_str(item[name]):
                 return f"[{i}] `{name}` must be a string, got {_type_name(item[name])}"
         decimals = item.get("decimals", 0)
-        if "decimals" in item and (not _is_int(decimals) or decimals < 0):
-            return f"[{i}] `decimals` must be a non-negative integer, got {decimals!r}"
+        # The upper bound is `toFixed`'s own, and it is inclusive. Above it the
+        # engine throws a RangeError while the plan is being walked — a script
+        # that validates and then kills the render, after the operator has
+        # already got as far as `agsoc video render`.
+        if "decimals" in item and (
+            not _is_int(decimals) or decimals < 0 or decimals > MAX_DECIMALS
+        ):
+            return (
+                f"[{i}] `decimals` must be a non-negative integer no greater "
+                f"than {MAX_DECIMALS}, got {decimals!r} — the engine formats "
+                "with `toFixed`, which throws above that and would fail the "
+                "render rather than this check"
+            )
         # Only numbers are formatted; a string value is printed verbatim.
+        if _is_number(val) and abs(val) >= EXPONENTIAL_AT:
+            return (
+                f"[{i}] `value` {val!r} would reach the frame as "
+                f"{float(val):g}"
+                f" — at {EXPONENTIAL_AT:g} and above JavaScript switches to "
+                "exponential notation, so the frame carries a figure written in "
+                "a notation the plan does not. Both display-rounding gates pass "
+                "it, because both ask whether the value survives a round trip "
+                "and `1e+21` does"
+            )
         if _is_number(val) and round(val, decimals) != val:
             return (
                 f"[{i}] `value` {val!r} would reach the frame as "
@@ -606,6 +678,10 @@ BEAT_TYPES: dict[str, dict] = {
         },
         "optional": {},
         "cited": False,
+        # …unless it prints one. The uncited exemption is spec §7.1's, and its
+        # justification is "it renders no numbers"; where that is false the
+        # justification is too. See `dumbbell_prints_a_figure`.
+        "cited_when": dumbbell_prints_a_figure,
         "cross": dumbbell_within_track,
     },
     "quote": {
@@ -705,6 +781,23 @@ def _beat(raw: Any, index: int, where: Any) -> Beat:
                     f"{kind} beat renders numbers, and spec §7.2 allows no path "
                     "to rendering a number that isn't in a source"
                 )
+
+    # The same rule for a type whose exemption is conditional on a property.
+    # Data, not a branch: `cited_when` is absent on every type whose answer does
+    # not depend on what the operator wrote. It reads `raw` rather than the
+    # payload because `kicker` is a shared field and reaches the stage too.
+    cited_when = spec.get("cited_when")
+    if cited_when is not None:
+        figure = cited_when(raw)
+        if figure and not all(_is_filled(raw.get(n)) for n in ("src", "quote")):
+            raise ScriptError(
+                f"{at} {figure}, so this card puts a number on the screen — it "
+                "needs `src` and `quote`. A "
+                f"{kind} is exempt from spec §7.2's citation because it renders "
+                "no numbers; §7.2's rule is written about numbers rather than "
+                "about types, so a card that prints one is on the path it says "
+                "does not exist. Cite it, or say it without the figure"
+            )
 
     payload: dict = {}
     for name, check in spec["required"].items():

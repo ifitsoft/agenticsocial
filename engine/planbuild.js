@@ -66,10 +66,24 @@ function escapeHTML(t) {
 function proseHTML(t) {
   /* [\s\S] not . — YAML folds long strings, so a `**…**` an agent wrote
    * routinely arrives with a newline inside it. Lazy, so `**a** and **b**`
-   * is two bold runs rather than one that swallows the middle. */
+   * is two bold runs rather than one that swallows the middle.
+   *
+   * The accent run may not begin or end on whitespace, and that condition is
+   * not cosmetic: without it any two asterisks in a field are a pair, so
+   * `"o3* and o4* models"` became `o3<em> and o4</em> models` and the frame
+   * read "o3 and o4" — two footnote daggers DELETED and the text between them
+   * turned accent-blue. Deleting an authored character is bytes diverging from
+   * the script, the class D-078 closed, and Phase 5 verifies the script while
+   * the screen shows something else. An unpaired `*` is now left alone, which
+   * is the only honest thing to do with a character nobody marked up.
+   *
+   * `\S` on both ends and a single-character alternative, so `*a*` still
+   * emphasises. The `**` pass keeps its old shape: a bold run that begins on a
+   * space is a real authoring style, and no committed scene has ever lost a
+   * character to it. */
   return escapeHTML(t)
     .replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>')
-    .replace(/\*([\s\S]+?)\*/g, '<em>$1</em>');
+    .replace(/\*(\S|\S[\s\S]*?\S)\*/g, '<em>$1</em>');
 }
 
 /* The prose counterpart of P(): use it for every operator-authored field. */
