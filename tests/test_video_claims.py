@@ -495,11 +495,44 @@ def test_kpis_extracts_the_formatted_value_the_frame_shows_plus_its_label():
                 items=[
                     {"value": 0.75, "prefix": "$", "label": "per 1M input", "decimals": 2},
                     {"value": 0, "label": "seconds of downtime"},
+                    # `0` at two decimals is `0.00` on the frame. Found by
+                    # mutation: a truthiness check on `value` falls through to
+                    # the string branch and still yields "0" for the row above,
+                    # so a bare zero cannot see it. This row can.
+                    {"value": 0, "prefix": "$", "label": "in fees", "decimals": 2},
                 ],
             )
         )
     )[0]
-    assert numbers(claim.text) == ["0.75", "1", "0"]
+    assert numbers(claim.text) == ["0.75", "1", "0", "0.00"]
+
+
+def test_a_kpi_value_is_extracted_as_the_glyphs_the_frame_shows():
+    """precondition: `decimals` makes the displayed string differ from the value.
+
+    `value: 2, decimals: 2` is `2.00` on the frame. Found by mutation: with a
+    single-decimal fixture, extracting `repr(value)` instead passes every other
+    assertion in this file. Recorded as a HANDOFF: Task 2's numeric comparison
+    has to treat `2.00` and `2` as the same figure, or this is itself a
+    false-refusal generator.
+    """
+    claim = C.extract_claims(
+        script_of(beat("kpis", items=[{"value": 2, "label": "x", "decimals": 2}]))
+    )[0]
+    assert numbers(claim.text) == ["2.00"]
+
+
+def test_an_entity_run_never_crosses_a_field_boundary():
+    """precondition: two fields end and begin with capitalised words.
+
+    Fields are separate lines on the card. Joining them with a space invents an
+    entity — `Gemini Flash` — that no source contains and no beat wrote, and an
+    atom nobody can find is a false refusal.
+    """
+    claim = C.extract_claims(
+        script_of(beat("statement", kicker="Gemini", text="Flash is cheap."))
+    )[0]
+    assert entities(claim.text) == ["Gemini", "Flash"]
 
 
 def test_jumpchart_extracts_labels_shown_footnote_and_the_row_values():
@@ -514,8 +547,20 @@ def test_jumpchart_extracts_labels_shown_footnote_and_the_row_values():
         script_of(
             beat(
                 "jumpChart",
-                rows=[{"label": "GPQA", "before": 34.4, "after": 43.6,
-                       "shown": "<s>34.4</s> &rarr; 43.6"}],
+                rows=[
+                    {"label": "GPQA", "before": 34.4, "after": 43.6,
+                     "shown": "<s>34.4</s> &rarr; 43.6"},
+                    # No `shown`: the cell is blank on the card and the only
+                    # trace of these two figures is the bar itself. Found by
+                    # mutation — with only the row above, dropping `before` and
+                    # `after` from extraction passes, because `shown` happens to
+                    # repeat them.
+                    {"label": "AIME", "before": 12.5, "after": 88.0},
+                    # `before: 0` is a benchmark that scored nothing before —
+                    # script.py calls it the most interesting bar on the chart,
+                    # and a truthiness check anywhere on the path drops it.
+                    {"label": "MMLU", "before": 0, "after": 21.0},
+                ],
                 scale=70.0,
                 footnote="Scores as published, on a common 0-70% scale.",
             )
@@ -524,6 +569,8 @@ def test_jumpchart_extracts_labels_shown_footnote_and_the_row_values():
     assert "<s>" not in claim.text and "&rarr;" not in claim.text
     got = numbers(claim.text)
     assert "34.4" in got and "43.6" in got
+    assert "12.5" in got and "88.0" in got
+    assert "0" in got and "21.0" in got
     assert "0-70" not in got  # the footnote's scale range is one token
     assert "70.0" not in got, "`scale` is never printed — engine.js positions with it"
 
@@ -660,6 +707,31 @@ def test_the_record_carries_the_quote_bytes_unfolded():
         script_of(beat("statement", text="x", quote="flagship V4‑Pro model"))
     )
     assert claim.quote == "flagship V4‑Pro model"
+
+
+def test_extraction_cannot_write_at_all(monkeypatch):
+    """precondition: every write path in reach is replaced by a raise.
+
+    The capability, not the habit. The bytes test below can only see writes
+    inside the workspace it built; this one sees any write anywhere, and it is
+    the honest form of "nothing here writes a byte" — R4 is a property of the
+    module, not of one fixture's directory tree.
+    """
+    import builtins
+    from pathlib import Path
+
+    def blocked(*a, **kw):
+        raise AssertionError("claims.py touched the filesystem")
+
+    monkeypatch.setattr(builtins, "open", blocked)
+    monkeypatch.setattr(Path, "write_text", blocked)
+    monkeypatch.setattr(Path, "write_bytes", blocked)
+    monkeypatch.setattr(Path, "open", blocked)
+
+    claims = C.extract_claims(
+        script_of(beat("statement", text="Up 1,100% on V4‑Pro.", quote="up 1,100%"))
+    )
+    assert claims[0].quote == "up 1,100%"
 
 
 def test_extraction_writes_nothing_to_disk(tmp_path):
