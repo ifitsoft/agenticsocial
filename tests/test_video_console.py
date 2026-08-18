@@ -186,6 +186,7 @@ class _Page(HTMLParser):
         self.styles: list[str] = []
         self.marks: list[str] = []
         self.meta: list[dict] = []
+        self.text: list[str] = []
         self._style = False
         self._mark = 0
         self._buf: list[str] = []
@@ -222,6 +223,8 @@ class _Page(HTMLParser):
     def handle_data(self, data):
         if self._style:
             self.styles.append(data)
+        else:
+            self.text.append(data)
         if self._mark:
             self._buf.append(data)
 
@@ -242,6 +245,16 @@ def block(html: str, element_id: str) -> str:
     return match.group(0)
 
 
+def text_of(markup: str) -> str:
+    """What the page actually READS as — tags gone, entities resolved.
+
+    An apostrophe is `&#x27;` in the markup, so a prose assertion written
+    against the source string is asserting on the escaper rather than on the
+    sentence.
+    """
+    return "".join(_Page(markup).text)
+
+
 def csp(html: str) -> str:
     for meta in _Page(html).meta:
         if meta.get("http-equiv", "").lower() == "content-security-policy":
@@ -255,7 +268,7 @@ def csp(html: str) -> str:
 def test_the_command_writes_one_self_contained_html_file(series, tmp_path):
     """precondition: everything else in this file is about a page that exists."""
     checked(series, [clean_beat()])
-    out = tmp_path / "console.html"
+    out = tmp_path / "out" / "console.html"
     html = console(out=out)
     assert out.is_file()
     assert html.lstrip().lower().startswith("<!doctype html>")
@@ -310,8 +323,11 @@ def test_the_source_text_is_escaped_not_interpreted(series, tmp_path):
         sources={"local-ai-zone": hostile},
     )
     html = console(out=tmp_path / "c.html")
-    assert "<script>" not in html
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<script" not in html
+    # The highlight cuts the excerpt in three, so the escaped source arrives in
+    # pieces — every one of them escaped.
+    assert "&lt;script&gt;alert(1)" in html
+    assert "&lt;/script&gt; &amp; &quot;quotes&quot;" in html
 
 
 # --- R2 / M2 / M3: the highlight, in the original bytes, in context ------------------
@@ -410,7 +426,7 @@ def test_a_refuted_claim_never_shows_a_bare_pass(series, tmp_path):
     html = console(out=tmp_path / "c.html")
     claim = block(html, "claim-c-001")
     assert "refuted" in claim
-    assert re.search(r"pass 1[^<]*pass|pass 1</\w+>\s*<[^>]*>pass", claim), (
+    assert re.search(r"pass 1</\w+>(?:\s*<[^>]*>)+pass", claim), (
         "pass 1's verdict is reported, and it is labelled `pass 1`"
     )
     assert not re.search(r'class="[^"]*verdict[^"]*"[^>]*>\s*pass\s*<', claim), (
@@ -692,7 +708,7 @@ def test_a_written_override_is_shown_with_the_name_on_it(series, tmp_path):
         ],
     )
     claim = block(console(out=tmp_path / "c.html"), "claim-c-001")
-    assert "The source's own correction notice gives August 19." in claim
+    assert "The source's own correction notice gives August 19." in text_of(claim)
     assert "Ali Abdukarim" in claim
     assert "overridden" in claim
     assert "NOT verified" in claim
