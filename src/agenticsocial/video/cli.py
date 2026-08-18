@@ -128,7 +128,12 @@ def video_new(
     except OSError as e:
         raise _fail(f"cannot create episode {episode!r}: {e}")
     typer.echo(f"created episode {s.slug}/{ep.id} at {ep.dir}/")
-    typer.echo(f'next: agsoc video ingest {ep.id} --research "<query>"')
+    # `--series` is in the hint because the hint is a command people run. It
+    # was absent, and following it from any series other than `default` failed
+    # with "no series 'default'" — D-109: an author trusts the tool over the doc.
+    typer.echo(
+        f'next: agsoc video ingest {ep.id} --series {s.slug} --research "<query>"'
+    )
 
 
 @video_app.command("list")
@@ -533,6 +538,31 @@ def _print_claim_summary(ledger: dict) -> None:
     typer.echo("")
 
 
+def _echo_runtime(script, check) -> None:
+    """The two runtime lines, printed identically by `review` and by `check`.
+
+    A REPORT in both places, never a refusal: spec §11 puts the gate at
+    `approve`, and `check`'s exit code speaks for the claim ledger alone. It is
+    in `check` because an agent that runs `check`, sees exit 0 and stops has
+    been told nothing about length — and the one committed script.yaml is 82
+    seconds short with a clean check (D-109 #3, #4).
+
+    One function rather than two call sites: two commands printing one fact from
+    two code paths are two facts as soon as one of them changes.
+    """
+    held = sum(b.hold for b in script.beats)
+    typer.echo(
+        f"holds {held:.1f}s × pace {_pace(script.pace)} = "
+        f"runtime {check.total_sec:.1f}s"
+    )
+    verdict = "within tolerance" if check.within else "OUT OF TOLERANCE"
+    typer.secho(
+        f"target {check.target_sec}s ± {check.tolerance_sec}s · "
+        f"{verdict} ({check.delta:+.1f}s)",
+        fg=typer.colors.GREEN if check.within else typer.colors.YELLOW,
+    )
+
+
 @video_app.command("review")
 def video_review(
     episode: str,
@@ -587,17 +617,7 @@ def video_review(
     if verdicts is not None:
         _print_claim_summary(ledger)
 
-    held = sum(b.hold for b in beats)
-    typer.echo(
-        f"holds {held:.1f}s × pace {_pace(script.pace)} = "
-        f"runtime {check.total_sec:.1f}s"
-    )
-    verdict = "within tolerance" if check.within else "OUT OF TOLERANCE"
-    typer.secho(
-        f"target {check.target_sec}s ± {check.tolerance_sec}s · "
-        f"{verdict} ({check.delta:+.1f}s)",
-        fg=typer.colors.GREEN if check.within else typer.colors.YELLOW,
-    )
+    _echo_runtime(script, check)
 
     # Valid beats this phase cannot draw yet. Named, counted, and NOT treated as
     # an operator error: the fix is to implement the renderer, not to edit the
@@ -836,6 +856,11 @@ def video_check(
         ep = load_episode(s, episode)
         ledger = verify_mod.verify_episode(ep)
         path = verify_mod.write_ledger(ep, ledger)
+        # Loaded again, from disk, for the runtime line. `verify_episode` takes
+        # identifiers and loads its own script (D-072); handing its copy out
+        # here would be the caller-built object this command exists not to have.
+        script = load_script(ep)
+        runtime = check_runtime(script, s)
     except (
         SeriesError,
         EpisodeError,
@@ -876,6 +901,7 @@ def video_check(
     _print_entities(records)
 
     typer.echo(f"wrote {path}")
+    _echo_runtime(script, runtime)
     if not records:
         typer.echo("no claims — this script asserts nothing about the world")
         return
