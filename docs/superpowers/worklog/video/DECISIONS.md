@@ -2796,3 +2796,66 @@ by the check the brief demanded instead of an assertion, pinned by a test.
 **That is the argument for enumerating rather than asserting, in one example:**
 the enumeration found a defect that did not exist when the enumeration was
 specified.
+
+## D-114 · phase 7 / task 2 · the override clears a claim, and drift catches the edit that changes no number
+
+`classify()` gained a **fourth state — `verified · attested · overridden ·
+open` — not a second path.** `is_blocking` stays derived from it, so the gate,
+`check`'s summary, `check`'s exit code and `review`'s table all changed together
+because they are one function. Override validity is **re-checked at the gate**,
+because `claims.json` is a file on disk and a gate that trusts the loader clears
+a claim on `{}`.
+
+**Stale overrides warn, never refuse.** The measurement is consulted *before* the
+override, so a claim that now passes reads `verified` and the leftover sentence
+is named STALE. Refusing would make the remedy *"delete the paragraph you
+wrote"* — **inverting the exact cost asymmetry §8.4 is built on**, where writing
+the sentence is the expensive act. Both screens print the override rate (D-040).
+
+**Drift, measured rather than asserted.** Editing `scale: 5 → 25`:
+
+```
+claims.json  byte-identical
+corpus_sha   unchanged
+every verdict unchanged
+stale_reason "current"
+```
+
+**Every existing signal said fine.** Drift caught it and named both digests, the
+approver and the date. That is the case Phase 5 named and could not close, closed.
+
+D-036 resolved: `plan.json`'s whole-file digest became `script_file_sha256` — the
+mp4 `comment=` tag was the one place the two would have been compared. One key
+with two meanings is a bug waiting for someone to compare them.
+
+**Three of the implementer's own eleven mutants survived and were reported as
+survivors.** O2 was a real defect: `_print_overrides` restated `stale_override`'s
+rule inline — *two statements of one rule, on the screen where the last three
+overclaims came from.* Found by sweeping past the brief's table.
+
+## D-115 · phase 7 / task 3 · an approval covers what the approver saw, and design was outside it
+
+Task 2's report named a hole bigger than the one it closed. Leader-verified:
+`plan.py:268` copies `series.design` straight into `plan.json` and it repaints
+every frame; **`approve.py` never mentions it.** Approve, change `accent`,
+render — something the approver never saw, with a valid approval and no drift.
+
+Strictly worse than the `scale` case in three ways:
+
+- `scale` moves one beat; `design` moves **every frame of every episode in the
+  series**.
+- `scale` lives in the file the digest covers; `design` lives in a **file the
+  approval does not read at all**.
+- **A design change is routine.** It is the knob most likely to be turned between
+  approving and rendering, precisely because it feels cosmetic.
+
+The rule this settles, and it is the one to carry into Phase 8: **§10's letter is
+"the script has not changed"; its purpose is "the approver saw this frame."**
+Every input that reaches the frame is in scope, and the ones that arrive from
+another file are the dangerous ones because nothing about editing them feels like
+touching an approved episode.
+
+Phase 8's `render` gate is therefore **three checks, not one** —
+`assert_transition` + `approval_drift` + `stale_reason` — and they stay
+distinguishable so an operator is told *which* thing moved. Folding them together
+would rebuild the second-path shape D-113 just eliminated.
