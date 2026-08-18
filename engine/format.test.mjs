@@ -21,6 +21,7 @@ import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { readFile, writeFile, rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLAN_JS = join(HERE, '.plan.js');
@@ -232,6 +233,62 @@ for (const fmt of ['vertical', 'wide']) {
   await page.close();
 }
 
+/* The other direction, and the one a centred column cannot produce on its own:
+ * a `custom` beat — the escape hatch, and the only builder that can position
+ * its own element — pushed off the TOP. A check that only looks downwards
+ * reports this card as fitting. */
+const TOO_HIGH = [
+  {
+    type: 'custom',
+    /* `position:relative`, not a negative margin: a flex column that centres
+     * its items absorbs the margin into the free space and puts the card back
+     * on screen. A relative offset moves the pixels and not the layout, which
+     * is exactly the shape of the bug — the box says it fits and the words are
+     * somewhere else. */
+    js: "E('div','body',{text:'Pushed clean off the top of the card',"
+      + "css:{position:'relative',top:'-900px'}});",
+    attest: 'One line, positioned by hand. — the test',
+  },
+];
+for (const fmt of ['vertical', 'wide']) {
+  const { page, errors } = await open(fmt, TOO_HIGH);
+  const said = errors.join(' ; ');
+  check(
+    /overflow/i.test(said) && /above/.test(said),
+    `${fmt}: a beat pushed off the TOP is refused too`,
+    said || '(no page error)',
+  );
+  await page.close();
+}
+
+/* R3's negative half, and the one that pins WHEN the measurement is taken.
+ * This card is 18 layout px shy of its safe area — it fits, and it fits in both
+ * formats because the height is computed from the format's own band. Measured
+ * before the entrance animation lands, `fade`'s 26px offset would report it as
+ * overflowing, and a check that refuses a card an operator composed to the edge
+ * is a check that gets turned off (D-040). */
+const nearlyFull = (fmt) => {
+  const f = FORMATS[fmt];
+  const h = Math.round((f.safe_bottom - f.safe_top) / f.scale) - 18;
+  return [
+    {
+      type: 'custom',
+      js: "fade(E('div','body',{text:'Composed right up to the edge of the card',"
+        + "css:{height:'" + h + "px'}}), .1);",
+      attest: 'A card that fills its safe area. — the test',
+    },
+  ];
+};
+for (const fmt of ['vertical', 'wide']) {
+  const { page, errors } = await open(fmt, nearlyFull(fmt));
+  check(
+    errors.length === 0,
+    `${fmt}: a card composed to within 18px of its safe area is NOT refused`,
+    errors.join(' ; '),
+  );
+  await page.close();
+}
+
 /* An unbreakable string wider than the measure — the other axis, and the one a
  * line count cannot see. */
 const TOO_WIDE = [
@@ -298,6 +355,61 @@ for (const fmt of ['vertical', 'wide']) {
     'an unknown type_scale is refused rather than silently defaulted',
     bad || '(no page error)',
   );
+}
+
+/* ---- 5 · through render.mjs, which is what actually shoots a frame -------- */
+/* Everything above drives the page directly. render.mjs is the process the CLI
+ * runs, it owns the viewport, and it is the only place the refusal has to
+ * ARRIVE — spec 9's `--format wide` is a promise about an mp4, not about a
+ * DOM. Two single frames, ~1s each (D-119): no test here renders an episode. */
+{
+  const planPath = join(HERE, '.fmt-test-plan.json');
+  const outDir = join(HERE, 'probe-fmt-test');
+  const runRender = async (plan) => {
+    await writeFile(planPath, JSON.stringify(plan), 'utf8');
+    return new Promise((resolve) => {
+      const p = spawn(process.execPath, [
+        join(HERE, 'render.mjs'), '--plan', planPath, '--at', '1', '--out', outDir,
+      ]);
+      let err = '';
+      p.stderr.on('data', (d) => (err += d));
+      p.stdout.on('data', () => {});
+      p.on('close', (code) => resolve({ code, err }));
+    });
+  };
+
+  const wide = await runRender(planFor('wide', BEATS));
+  check(wide.code === 0, 'render.mjs renders a wide plan', wide.err);
+  /* The PNG's own IHDR, bytes 16..24 — the size of the FILE, not of a page
+     object this test could have measured wrong. No dependency, and no golden
+     pixels: this reads the header, not the image. */
+  const png = await readFile(join(outDir, 'at-1.png')).catch(() => null);
+  const size = png && { w: png.readUInt32BE(16), h: png.readUInt32BE(20) };
+  check(
+    size && size.w === 1920 && size.h === 1080,
+    'render.mjs shoots a 1920x1080 frame for a wide plan (M7, end to end)',
+    JSON.stringify(size),
+  );
+
+  const vert = await runRender(planFor('vertical', BEATS));
+  const png2 = await readFile(join(outDir, 'at-1.png')).catch(() => null);
+  const size2 = png2 && { w: png2.readUInt32BE(16), h: png2.readUInt32BE(20) };
+  check(
+    vert.code === 0 && size2 && size2.w === 1080 && size2.h === 1920,
+    'render.mjs still shoots 1080x1920 for a vertical plan (M8)',
+    JSON.stringify(size2) + vert.err,
+  );
+
+  for (const fmt of ['vertical', 'wide']) {
+    const bad = await runRender(planFor(fmt, TOO_MUCH));
+    check(
+      bad.code !== 0 && /overflow/i.test(bad.err),
+      `${fmt}: render.mjs EXITS on an overflowing beat, before any frame`,
+      `exit ${bad.code}: ${bad.err.trim() || '(silent)'}`,
+    );
+  }
+  await rm(planPath, { force: true });
+  await rm(outDir, { recursive: true, force: true });
 }
 
 await browser.close();

@@ -108,6 +108,29 @@ def test_both_formats_declare_the_whole_context():
     assert FORMATS["vertical"]["measure"] == "narrow"
 
 
+def test_the_declared_numbers_are_the_contract():
+    """The values themselves, not just their shape.
+
+    Every per-format difference is computed from these six numbers — the stage,
+    the band, the measure the type is set to and the size it is set at — and
+    `engine/format.test.mjs` measures a live page against the same table. A
+    scale quietly moved to 1.0 would render the wide format at vertical's type
+    size and break no other assertion in this suite: the plan would still be
+    valid, the timing identical and the frame the right dimensions.
+
+    So a change here is meant to fail this test. plan.py's comment carries the
+    arithmetic behind the two safe areas, including where and why they diverge
+    from §9's own numbers."""
+    assert FORMATS["vertical"] == {
+        "w": 1080, "h": 1920, "safe_top": 400, "safe_bottom": 1580,
+        "measure": "narrow", "scale": 1.0,
+    }
+    assert FORMATS["wide"] == {
+        "w": 1920, "h": 1080, "safe_top": 200, "safe_bottom": 900,
+        "measure": "wide", "scale": 0.62,
+    }
+
+
 def test_the_plan_carries_the_format_it_was_built_for(series, episode):
     """M7. `--format wide` that renders 1080×1920 is the mutant, and the plan is
     the only place the viewport comes from — render.mjs does no arithmetic."""

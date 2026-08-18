@@ -233,11 +233,6 @@ def validate_design(design: dict, where: Any) -> None:
             "would either draw at the default and read as set, or refuse in the "
             "renderer after you had waited out a render."
         )
-    for token in sorted(set(design) & set(RETIRED_DESIGN_TOKENS)):
-        warnings.warn(
-            f"{where}: [design] {token} is ignored — {RETIRED_DESIGN_TOKENS[token]}",
-            stacklevel=2,
-        )
     for token in COLOUR_TOKENS:
         if token not in design:
             continue
@@ -252,6 +247,21 @@ def validate_design(design: dict, where: Any) -> None:
             "silently-accepted one is how a palette drifts. This value becomes "
             "a CSS custom property, and CSS discards an invalid declaration "
             "without an error — the render would come out wrong and say nothing."
+        )
+
+
+def warn_retired_design(design: dict, where: Any) -> None:
+    """Say once, at load, that a retired `[design]` key is doing nothing.
+
+    Deliberately NOT inside `validate_design`, which runs twice per command —
+    once here and again in `build_plan`, which re-validates what it was handed
+    rather than trusting it. A refusal may be raised twice and cost nothing; an
+    advisory printed twice is a screen that reads like a fault.
+    """
+    for token in sorted(set(design) & set(RETIRED_DESIGN_TOKENS)):
+        warnings.warn(
+            f"{where}: [design] {token} is ignored — {RETIRED_DESIGN_TOKENS[token]}",
+            stacklevel=2,
         )
 
 
@@ -397,6 +407,7 @@ def load_series_dir(d, slug: str) -> Series:
         raise SeriesError(f"{path}: [structure] warm_acts must be a list of strings")
 
     validate_design(design, path)
+    warn_retired_design(design, path)
     check_warm_acts(acts, warm_acts, path)
 
     return Series(
