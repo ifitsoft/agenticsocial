@@ -430,6 +430,162 @@ def test_a_claim_number_the_record_carries_but_the_text_does_not_is_a_loud_error
         V.check_claim(claim, "q")
 
 
+# --- Task 4 — a figure this pass cannot read is not a figure it may ignore -------------
+
+
+def test_the_ten_times_fabrication_the_gate_review_verified_clean():
+    """precondition: the source says `95B` and the beat says `950bn`; the two
+    are a factor of ten apart, and the spelling `bn` is one no rule here knew.
+
+    F1, end to end and on the operator's own sentence. `about 950bn active`
+    against `about 95B active` produced NO atom, so nothing was checked and the
+    claim reported `pass` — the exact case §8.2.2's unit-suffix rule exists to
+    prevent, arriving through the spelling the rule does not know.
+    """
+    quote = "roughly 2.4 trillion parameters with about 95B active"
+    result = check(beat("body", text="About 950bn parameters are active.", quote=quote), quote)
+    assert result.verdict == "fail"
+    assert result.atoms_missing == ("950",)
+
+
+def test_a_two_letter_magnitude_is_worth_its_magnitude_not_its_coefficient():
+    """precondition: the quote contains the bare coefficient `950` and nothing
+    of the order of magnitude the beat claims.
+
+    R2's discriminating half. Parsing `950bn` as the number 950 would close F1's
+    headline case by accident — 950 is not 95e9 either — while leaving a beat
+    free to claim `950bn` against a source that wrote "950 units". The suffix is
+    the whole magnitude, exactly as it is for `95B`.
+    """
+    quote = "the fleet reached 950 units this week"
+    assert check(beat("body", text="Some 950bn units shipped.", quote=quote), quote).verdict == "fail"
+
+    spelled = "revenue of about 95 billion for the year"
+    assert check(beat("body", text="Revenue hit 95bn.", quote=spelled), spelled).verdict == "pass"
+
+
+@pytest.mark.parametrize(
+    "rendered,quote",
+    [
+        ("1e9", "roughly 950 million active parameters"),
+        ("3/4", "about two thirds of models shipped"),
+        ("12:30", "the stream opens at 09:00 UTC"),
+        ("1.2.3", "the fix landed in version 1.2.4"),
+        ("٣٠٠", "the fleet reached 300 units"),
+    ],
+    ids=["exponent", "fraction", "clock", "version", "arabic-indic-digits"],
+)
+def test_a_figure_this_pass_cannot_value_fails_when_the_quote_does_not_spell_it(
+    rendered, quote
+):
+    """precondition: the quote genuinely disagrees with the beat, and none of
+    these tokens is digits-and-separators, so today each yields no atom and the
+    claim passes with nothing checked.
+
+    R1. `1.2.3` is the one case the code already refused, and its comment says
+    so; the other four went through the same silence as `950bn`. Note the last
+    row: non-ASCII digits are invisible to `_DIGITS_ONLY`, so a beat rendering
+    `٣٠٠` where the source says something else shipped unchecked.
+    """
+    result = check(beat("body", text=f"It reads {rendered} today.", quote=quote), quote)
+    assert result.verdict == "fail"
+    assert result.atoms_missing == (rendered.casefold(),)
+
+
+def test_the_refusal_names_the_token_it_could_not_read():
+    """precondition: the reason string is what the operator acts on; a refusal
+    that does not name its token is one nobody can fix.
+
+    R1/M8. And the reason must say WHY it is refused — "cannot value it" is a
+    different instruction from "wrong number", because the fix is different:
+    one is a rewrite, the other is a wider quote.
+    """
+    quote = "about two thirds of models shipped"
+    result = check(beat("body", text="Nearly 3/4 of models shipped.", quote=quote), quote)
+    assert "3/4" in result.reason
+    assert "value" in result.reason
+
+
+def test_a_figure_this_pass_cannot_value_is_verified_when_the_quote_spells_it():
+    """precondition: the quote contains the token exactly, and the token is one
+    no arithmetic here can evaluate.
+
+    R1's negative half, and the reason this is a check rather than a blanket
+    refusal. `3/4` is a figure a real beat writes; when the source spells it the
+    same way, byte equality after folding is the STRICTEST comparison available,
+    not a relaxation of one. Refusing it unconditionally would make the field
+    unusable and train the operator to override.
+    """
+    quote = "nearly 3/4 of models shipped in the first half"
+    result = check(beat("body", text="Nearly 3/4 of models shipped.", quote=quote), quote)
+    assert result.verdict == "pass"
+    assert result.atoms_in_quote == ("3/4",)
+
+
+def test_a_year_range_the_quote_carries_is_not_a_refusal():
+    """precondition: `2010-2011` is a range with an internal hyphen, and the
+    quote spells it identically.
+
+    M7 — R3's negative half at the check level. Reading that hyphen as a minus,
+    or refusing every token the arithmetic cannot reach, would turn the
+    commonest way a source writes a period into a false refusal.
+    """
+    quote = "over 2010-2011 the index barely moved"
+    result = check(beat("body", text="Over 2010-2011 it barely moved.", quote=quote), quote)
+    assert result.verdict == "pass"
+
+
+def test_a_figure_that_fell_does_not_verify_against_a_source_saying_it_rose():
+    """precondition: the digits are identical on both sides and only the sign
+    differs, so no digit-level rule can tell them apart.
+
+    F2/M6, priority 3's attack landing: two genuinely different numbers
+    comparing equal. `_bare('-18')` was `'18'`, so a beat could invert the
+    direction of every figure it renders and pass.
+    """
+    quote = "Revenue rose 18% last quarter"
+    result = check(beat("body", text="Revenue fell -18% last quarter.", quote=quote), quote)
+    assert result.verdict == "fail"
+    assert result.atoms_missing == ("-18",)
+
+    agreeing = "Revenue fell -18% last quarter"
+    assert check(beat("body", text="Revenue fell -18%.", quote=agreeing), agreeing).verdict == "pass"
+
+
+def test_a_kpi_unit_carries_its_magnitude_into_the_comparison():
+    """precondition: the digits `98` appear in the quote, so only the unit can
+    make this claim wrong.
+
+    F5. Dropping `unit` from `_kpi_text` survived the whole suite: the atom is
+    `98` either way, and only a source that writes a DIFFERENT magnitude can
+    tell the two implementations apart. `unit: " billion"` against a source
+    saying 98 million is three orders of magnitude of silence.
+    """
+    quote = "the company raised 98 million in the round"
+    result = check(
+        beat("kpis",
+             items=[{"value": 98, "decimals": 0, "prefix": "$",
+                     "unit": " billion", "label": "raised"}],
+             quote=quote),
+        quote,
+    )
+    assert result.verdict == "fail"
+
+
+def test_a_single_full_stop_at_the_edge_of_a_quote_is_not_an_elision():
+    """precondition: the quote ends with a full stop the document does NOT have
+    at that position, so the match hangs on whether the stop is stripped.
+
+    F5. `_EDGE_ELISION` is `\\.{2,}` and its comment says why — "two or more
+    dots, never one … stripping [a full stop] would loosen `verbatim`" — but
+    widening it to `\\.{1,}` survived the suite. A trailing sentence stop is
+    words the source wrote, and dropping it turns `quote` into a prefix match.
+    """
+    document = "prices rose today and nobody blinked"
+    assert V.quote_span("prices rose.", document) is None
+    assert V.quote_span("prices rose...", document) is not None
+
+
 # --- entity presence: advisory, and deliberately not a failure ------------------------
 
 
@@ -872,6 +1028,28 @@ def test_a_changed_corpus_invalidates_a_written_ledger(tmp_path):
                           key="local-ai-zone", fetched_at="2026-08-14", replace=True)
     reason = V.stale_reason(ep, V.read_ledger(ep))
     assert reason is not None and "corpus" in reason
+
+
+def test_a_changed_script_invalidates_a_written_ledger_too(tmp_path):
+    """precondition: only `script.yaml` moves — the corpus bytes are untouched,
+    so `corpus_sha` still matches and the naive answer is `None`.
+
+    F3. `stale_reason`'s own docstring says Task 3's `check` and Phase 7's
+    `approve` "both need this answer and must not each invent their own" — and
+    the script half WAS invented separately, as a display helper in `cli.py`.
+    An `approve` written to the docstring gets `None` and approves a ledger
+    whose every verdict describes a sentence nobody wrote. That is D-059's
+    shape: a gate trusting a check that did not cover what it thought.
+    """
+    series, ep = _ledger_episode(tmp_path)
+    V.write_ledger(ep, V.verify_episode(ep))
+    assert V.stale_reason(ep, V.read_ledger(ep)) is None
+
+    body = ep.script_path.read_text(encoding="utf-8").replace("1,100%.", "900%.")
+    ep.script_path.write_text(body, encoding="utf-8")
+    ep = load_episode(series, ep.id)
+    reason = V.stale_reason(ep, V.read_ledger(ep))
+    assert reason is not None and "script" in reason
 
 
 def test_re_running_an_unchanged_check_rewrites_nothing(tmp_path):

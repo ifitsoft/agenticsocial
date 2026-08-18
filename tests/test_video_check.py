@@ -173,6 +173,43 @@ def test_a_failing_claim_exits_non_zero_and_says_which(series):
     assert "0.11" in result.output
 
 
+def test_the_magnitude_spelling_nothing_knew_reaches_the_screen(series):
+    """precondition: the source says `about 95B active`; the beat says `950bn`,
+    which is ten times more, and `check` printed `pass` for it.
+
+    F1/M9. Every fix in this task has to be reachable from `agsoc video check`
+    on a real episode, not only from a unit test — the gate review reproduced
+    this defect through this command, on the operator's own content, and a
+    silent exemption in `claims.py` is only a defect once it is a green line on
+    this screen.
+    """
+    episode(series, [clean_beat(
+        text="About 950bn parameters are active.",
+        quote="roughly 2.4 trillion parameters with about 95B active",
+    )])
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 1, result.output
+    assert "fail" in result.output
+    assert "950" in result.output
+
+
+def test_a_figure_check_cannot_read_is_named_on_the_screen(series):
+    """precondition: `3/4` is not digits-and-separators, so it produced no atom
+    and the claim reported `pass` with nothing checked at all.
+
+    M8/M9. The operator can act on "I cannot read 3/4 and the quote does not
+    spell it" and is misled by silence; the token has to be on the screen for
+    either sentence to be true.
+    """
+    episode(series, [clean_beat(
+        text="Nearly 3/4 of the fleet moved.",
+        quote="quietly moved from preview to general availability",
+    )])
+    result = run("video", "check", EP, "--series", "the-brief")
+    assert result.exit_code == 1, result.output
+    assert "3/4" in result.output
+
+
 def test_a_clean_episode_exits_zero_and_says_so(series):
     """precondition: R2's negative half. A gate that refuses everything is not a
     gate, and a check nobody can pass is one operators route around."""

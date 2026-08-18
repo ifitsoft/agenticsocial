@@ -279,6 +279,153 @@ def test_atoms_are_deduplicated_in_order():
     assert numbers("12 lessons and 12 more, then 200") == ["12", "200"]
 
 
+# --- §8.2.2, second pass: what happens to a token the rule cannot read ---------------
+#
+# The boundary these tests pin, stated as a sentence with its negative half:
+# once the wrapping punctuation and a leading currency symbol are off, a token
+# that **begins with a digit** is a figure and is checked; a token that begins
+# with a letter is an identifier and is exempt. Every identifier in §8.2.2's own
+# table — `V4-Pro`, `Qwen3.8-Max`, `GPT-5.6`, and the `M1` chip the code already
+# protects — begins with a letter, so the boundary costs D-071 nothing.
+
+
+@pytest.mark.parametrize(
+    "token,expected",
+    [
+        ("950bn", "950"),
+        ("95mn", "95"),
+        ("1.2tn", "1.2"),
+        ("$1.4bn", "1.4"),
+        ("50bps", "50"),
+    ],
+)
+def test_a_two_letter_magnitude_is_parsed_rather_than_disabling_the_check(
+    token, expected
+):
+    """precondition: the one-character suffix strip leaves a letter behind, so
+    every one of these yields NO atom at all today — not a number, not a name.
+
+    R2. `about 950bn active` against a source saying `about 95B active` was
+    verified clean through the real CLI: a 10x fabrication passing, because a
+    token nothing could classify was checked by nothing. The suffix set is a
+    closed list either way; what must never follow from a spelling it does not
+    know is that the figure becomes invisible.
+    """
+    assert C.claim_number(token) == expected
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["1e9", "3/4", "12:30", "0-70", "2010-2011", "1080p", "5th", "٣٠٠", "１"],
+)
+def test_a_numeric_looking_token_the_rule_cannot_value_is_still_a_figure(token):
+    """precondition: none of these is digits-and-separators and none has a
+    capital anywhere, so today each one produces no atom and is checked by
+    nothing.
+
+    R1, and the design rule of this task: *"I cannot read this figure"* and
+    *"this figure is fine"* must never produce the same verdict. The atom is the
+    token itself; §8.2's check then demands the quote spell it exactly, because
+    there is no value to compare.
+    """
+    assert C.claim_number(token) == token.casefold()
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["V4-Pro", "Qwen3.8-Max", "GPT-5.6", "M1", "K9", "iPhone", "x86-64", "H100"],
+)
+def test_an_identifier_that_begins_with_a_letter_is_still_exempt(token):
+    """precondition: R1's negative half, and it is the non-negotiable one.
+
+    D-071's rule was validated twice against real prose. Re-introducing these
+    false refusals would be a worse regression than the hole being closed — a
+    gate that demands the `4` in `V4-Pro` is one an operator overrides without
+    reading, taking the true refusal in the same run with it (D-040).
+    """
+    assert C.claim_number(token) is None
+
+
+@pytest.mark.parametrize(
+    "token,expected",
+    [
+        ("-18", "-18"),
+        ("−18%", "-18"),  # U+2212 MINUS, folded to ASCII like every other dash
+        ("(-18)", "-18"),
+        ("-1.4bn", "-1.4"),
+        ("-$18", "-18"),
+    ],
+)
+def test_a_minus_glued_to_a_figure_is_part_of_the_figure(token, expected):
+    """precondition: `-` is Unicode `Pd` and U+2212 is `Sm`, so both are
+    stripped as decoration today and `_bare('-18')` is `'18'`.
+
+    R3. A beat saying revenue fell 18% verifies against a source saying it rose
+    18% — a reversal of meaning, passing. §8.2.1's safety argument ("no digit is
+    ever folded") is sound and its scope is wrong: the loss happens before
+    folding is consulted.
+    """
+    assert C.claim_number(token) == expected
+
+
+def test_a_hyphen_that_is_punctuation_rather_than_a_sign_does_not_become_one():
+    """precondition: the text contains a hyphen INSIDE a token and a dash
+    standing alone, and neither is a minus.
+
+    R3's negative half. A sign is glued to the digits it signs; anything else is
+    punctuation and folds as it always did. `2010-2011` is a range, not minus
+    two thousand and eleven.
+    """
+    assert numbers("the 18% figure, over 2010-2011, was flat") == ["18", "2010-2011"]
+    assert numbers("revenue - 18% of it - was flat") == ["18"]
+
+
+def test_a_shown_cell_puts_its_own_figure_into_the_beat_text():
+    """precondition: 91.7 is neither `before` nor `after`, so no other collector
+    on this row can produce it.
+
+    F4. D-081's guarantee — the digits inside `shown` are still a claim — had no
+    test that could fail: the covering test asserts that markup is ABSENT (true
+    when nothing is appended) and names only figures `before`/`after` yield
+    anyway, so deleting the `shown` extraction survived all 1524 tests. Textbook
+    D-035: what would that test do if the code did nothing? Pass.
+    """
+    claim = C.extract_claims(
+        script_of(
+            beat(
+                "jumpChart",
+                scale=100,
+                rows=[
+                    {"label": "GPQA", "before": 34.4, "after": 43.6,
+                     "shown": "<s>34.4</s> &rarr; 91.7"}
+                ],
+            )
+        )
+    )[0]
+    assert "91.7" in numbers(claim.text)
+
+
+def test_a_kpi_prefix_and_unit_are_part_of_what_the_frame_shows():
+    """precondition: neither `$` nor ` billion` changes which DIGITS are
+    extracted, so only an assertion on the rendered text can fail.
+
+    F5. Dropping either from `_kpi_text` survived the whole suite. The rule the
+    docstring states is that the extracted figure is the one the frame formats —
+    `prefix + toFixed(decimals) + unit` — and the unit half is load-bearing for
+    the value check: ` billion` is three orders of magnitude.
+    """
+    claim = C.extract_claims(
+        script_of(
+            beat(
+                "kpis",
+                items=[{"value": 98, "decimals": 0, "prefix": "$",
+                        "unit": " billion", "label": "cash"}],
+            )
+        )
+    )[0]
+    assert "$98 billion" in claim.text
+
+
 # --- entities (§8.2 step 3) ---------------------------------------------------------
 
 
@@ -571,7 +718,11 @@ def test_jumpchart_extracts_labels_shown_footnote_and_the_row_values():
     assert "34.4" in got and "43.6" in got
     assert "12.5" in got and "88.0" in got
     assert "0" in got and "21.0" in got
-    assert "0-70" not in got  # the footnote's scale range is one token
+    # The footnote's scale range is one token, and it is a FIGURE: `0-70` is
+    # digits the rule cannot value, so it is checked by exact spelling rather
+    # than exempted (Task 4, R1). This assertion said `not in` until the gate
+    # review found that the same silence covering `0-70` also covered `950bn`.
+    assert "0-70" in got
     assert "70.0" not in got, "`scale` is never printed — engine.js positions with it"
 
 
