@@ -189,6 +189,57 @@ def test_a_quote_split_across_yaml_lines_matches_a_single_spaced_source():
     assert V.quote_span(quote, document) is not None
 
 
+@pytest.mark.parametrize(
+    "quote",
+    ["…available today in the Gemini API",
+     "...available today in the Gemini API",
+     "available today in the Gemini API…",
+     "… available today in the Gemini API …"],
+    ids=["leading-U+2026", "leading-ascii", "trailing", "both-spaced"],
+)
+def test_an_elision_marker_at_the_edge_of_a_quote_is_not_part_of_the_quote(quote):
+    """precondition: the source does not contain the dots.
+
+    Found by running the spec's §7 example, where the `list` beat's quote is
+    written `"…available today in the Gemini API and AI Studio, …"`. §8.2.1
+    folds U+2026 to `...`, and then a literal search demands three full stops
+    the source never wrote — so the canonical example is refused for a quote
+    that is verbatim present. The leading `…` is an editorial mark meaning "the
+    sentence starts earlier", which is the single most common way a human
+    shortens a citation.
+
+    No digit is involved, so this can no more admit a wrong figure than folding
+    can (§8.2.1's own argument).
+    """
+    document = "It is available today in the Gemini API and AI Studio, Antigravity."
+    span = V.quote_span(quote, document)
+    assert span is not None
+    assert document[span[0]:span[1]] == "available today in the Gemini API"
+
+
+def test_an_elision_in_the_MIDDLE_of_a_quote_is_still_matched_literally():
+    """precondition: the two halves are present but separated in the source.
+
+    The negative half, and it is a decision rather than an oversight. Matching
+    an internal `…` would mean matching two fragments in order with anything at
+    all between them, and "verbatim" would stop meaning verbatim — a beat could
+    quote `"prices … fell"` against a source saying prices rose before they
+    fell. Refused, and the operator quotes one clause or cites twice.
+    """
+    document = "Prices rose in July. Six weeks later prices fell."
+    assert V.quote_span("prices rose … prices fell", document) is None
+
+
+def test_a_quote_that_is_nothing_but_an_elision_is_not_found():
+    """precondition: the document contains plenty of text to match against.
+
+    Trimming the marker must not turn into the vacuous pass it would be if the
+    remainder were empty: `""` is inside every document, and a `quote: "…"`
+    would then report `quote_found` with nothing checked behind it.
+    """
+    assert V.quote_span("…", "It is available today in the Gemini API.") is None
+
+
 def test_a_quote_absent_from_the_corpus_reports_the_closest_candidate_span():
     """precondition: a LONG prefix of the quote is present and the tail is not.
 
