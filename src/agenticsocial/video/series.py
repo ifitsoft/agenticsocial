@@ -21,7 +21,7 @@ MAX_NAME_LEN = 64
 #
 # `type_family` and `type_scale` are deliberately absent. They are typography,
 # not colour, and a colour rule applied to the whole [design] table would reject
-# the scaffold's own font stack.
+# the scaffold's own font stack. See TYPE_SCALES and RETIRED_DESIGN_TOKENS.
 COLOUR_TOKENS = (
     "surface",
     "ink",
@@ -40,6 +40,53 @@ HEX_COLOUR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 # a default. `cadence` is deliberately NOT validated: spec §6 marks it advisory
 # and nothing branches on it, so a legitimate "fortnightly" must still load.
 REGISTERS = ("reported", "first-person")
+
+# The three type scales spec §6 documents. Enumerated for the same reason
+# `register` is: a typo must not silently pick a default, and this one now
+# reaches the frame — `engine.js` multiplies the format's scale by it, so the
+# type is set smaller or larger and the measure moves with it.
+TYPE_SCALES = ("default", "compact", "large")
+
+# `[design]` keys the renderer does not read, and why.
+#
+# D-116 found both `type_family` and `type_scale` copied into `plan.json` and
+# ignored by the engine: two knobs an operator would reasonably believe control
+# the typography, that controlled nothing — and, because the approval binds what
+# the plan copies, two false positives in drift detection. Phase 10 resolved the
+# pair the way D-077 (a human decision) split it: `type_scale` is wired,
+# `type_family` is retired.
+#
+# Retired rather than validated, because it is the one design value that CANNOT
+# be checked: whether "SF Pro Display" resolves is a property of the render host,
+# not of the string, so a stack naming a family this machine lacks falls back
+# silently — the same silent-wrong-render class the colour rule exists to close.
+# Making it honest means embedding fonts and validating against the embedded set,
+# which is a feature and not a knob.
+#
+# Retired rather than REFUSED, because it is a line in a file the operator owns.
+# Every series.toml this tool has ever scaffolded contains it; refusing to load
+# over a key that now does nothing would cost them every command in the tool for
+# no gain. It warns, it never reaches the plan, and the approval no longer binds
+# it.
+RETIRED_DESIGN_TOKENS = {
+    "type_family": (
+        "the engine has never read it, and a font stack cannot be validated — "
+        "whether a family resolves is a property of the machine, not of the "
+        "string, so a missing one falls back silently. Delete the line; the "
+        "type is scene.html's, and `type_scale` is the knob that turns"
+    ),
+}
+
+
+def render_design(design: dict) -> dict:
+    """The `[design]` values that reach the frame — what the plan copies and
+    what an approval therefore binds.
+
+    A retired token is dropped HERE, in one function both callers share, rather
+    than in `build_plan` alone: a value that reaches the plan but not the
+    approval (or the reverse) is a drift report about a key nobody can act on.
+    """
+    return {k: v for k, v in design.items() if k not in RETIRED_DESIGN_TOKENS}
 
 SERIES_TEMPLATE = """\
 [series]
@@ -63,8 +110,9 @@ ink_muted   = "#5A6B7C"
 accent      = "#2E6BFF"
 accent_alt  = "#00C2D7"
 accent_warm = "#FF6B4A"           # reserved; see warm_acts
-type_family = "SF Pro Display, Helvetica Neue, system-ui"
 type_scale  = "default"           # default | compact | large
+# type_family is retired: the engine never read it, and a font stack naming a
+# family this machine lacks falls back silently. The type is scene.html's.
 
 [structure]
 warm_acts = []                    # acts permitted to use accent_warm
@@ -176,6 +224,20 @@ def validate_design(design: dict, where: Any) -> None:
     then `str()`s them into the stylesheet. `isinstance(v, str)` also rejects
     `true` for free, which a bare `isinstance(v, (int, str))` would not.
     """
+    scale = design.get("type_scale")
+    if scale is not None and scale not in TYPE_SCALES:
+        raise SeriesError(
+            f"{where}: [design] type_scale must be one of "
+            f"{', '.join(TYPE_SCALES)} — got {scale!r}. It is drawn now: the "
+            "engine multiplies the format's scale by it, so an unknown value "
+            "would either draw at the default and read as set, or refuse in the "
+            "renderer after you had waited out a render."
+        )
+    for token in sorted(set(design) & set(RETIRED_DESIGN_TOKENS)):
+        warnings.warn(
+            f"{where}: [design] {token} is ignored — {RETIRED_DESIGN_TOKENS[token]}",
+            stacklevel=2,
+        )
     for token in COLOUR_TOKENS:
         if token not in design:
             continue

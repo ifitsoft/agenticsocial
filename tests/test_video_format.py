@@ -183,7 +183,7 @@ def test_the_probe_screen_says_the_format_was_not_approved(series, episode, fake
         app, ["video", "probe", "2026-08-14", "--series", "the-brief", "--format", "wide"],
         catch_exceptions=False,
     )
-    flat = " ".join(result.output.split())
+    flat = " ".join(result.output.split()).lower()
     assert "wide" in flat
     assert "chosen at render time" in flat and "not part of the approval" in flat
 
@@ -215,7 +215,7 @@ def test_the_render_screen_says_the_format_was_not_approved(series, episode, mon
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
-    flat = " ".join(result.output.split())
+    flat = " ".join(result.output.split()).lower()
     assert "1920x1080" in flat
     assert "wide" in flat
     assert "chosen at render time" in flat and "not part of the approval" in flat
@@ -224,7 +224,22 @@ def test_the_render_screen_says_the_format_was_not_approved(series, episode, mon
 # --- 3 · type_family and type_scale (D-116, D-077) -----------------------------------
 
 
-def test_type_family_reaches_neither_the_plan_nor_the_approval(series, episode):
+def _declares_type_family(series):
+    """An operator's series.toml, scaffolded before the key was retired. Every
+    one this tool has ever written has the line in it, including the three real
+    episodes' series on the author's machine."""
+    toml = series.dir / "series.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8").replace(
+            'type_scale  = "default"',
+            'type_family = "SF Pro Display, Helvetica Neue, system-ui"\n'
+            'type_scale  = "default"',
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_type_family_reaches_neither_the_plan_nor_the_approval(ws, series, episode):
     """M10. It was copied into `plan.json` and the engine ignored it: a knob an
     operator would believe controls the typography that controls nothing — and,
     because the approval binds what the plan copies, a false positive in drift.
@@ -232,7 +247,9 @@ def test_type_family_reaches_neither_the_plan_nor_the_approval(series, episode):
     Retired (D-077): a font stack naming a family the render host lacks falls
     back silently, and unlike a colour it cannot be validated, because whether
     `SF Pro Display` resolves is a property of the machine, not of the string."""
-    assert "type_family" in series.design, "the scaffold still writes it — this is the point"
+    _declares_type_family(series)
+    series = load_series(ws, "the-brief")
+    assert "type_family" in series.design, "the operator's file still has the line"
     plan = build_plan(series, episode)
     assert "type_family" not in plan["design"]
     assert "type_family" not in json.dumps(plan_mod.series_inputs(series))
@@ -261,6 +278,7 @@ def test_a_series_that_still_declares_type_family_keeps_loading(ws, series, recw
     """The negative half. It is a retired key in a file the operator owns, and
     refusing to load their series over a line that now does nothing would cost
     them every command in the tool. Warned, ignored, and left where it is."""
+    _declares_type_family(series)
     s = load_series(ws, "the-brief")
     assert s.design["type_family"]
     assert any("type_family" in str(w.message) for w in recwarn)

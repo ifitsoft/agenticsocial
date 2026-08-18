@@ -41,7 +41,7 @@ from .script import (
     load_script_with_digest,
     validate_acts,
 )
-from .series import validate_design
+from .series import render_design, validate_design
 
 FPS = 30
 # The renderable gate, named for the callers that already import it. It is
@@ -316,7 +316,12 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
         "pace": pace,
         "total_sec": beats_out[-1]["end"],
         "total_frames": beats_out[-1]["end_frame"],
-        "design": dict(series.design),
+        # What the RENDERER reads, not the whole table: `type_family` is
+        # retired (D-077/D-116), and a key in front of the engine that the
+        # engine ignores is a knob an operator believes in — plus, since the
+        # approval binds what the plan copies, a drift report about a value
+        # that reaches no frame.
+        "design": render_design(series.design),
         "beats": beats_out,
     }
 
@@ -370,7 +375,12 @@ _SERIES_HELPERS = ("act_labels",)
 # plan is given the RESOLVED labels, so rewording a label is drift and changing
 # an act's `beats` budget — which reaches no frame — is not.
 _SERIES_RESOLVERS = {
-    "design": lambda s: dict(s.design),
+    # `render_design`, the same function `build_plan` copies through, so the
+    # approval binds exactly what reaches the frame — no more (a retired token
+    # would be drift nobody can act on) and no less (a token added to `[design]`
+    # tomorrow is still covered without an edit anywhere, because neither this
+    # nor `render_design` enumerates the keys it keeps).
+    "design": lambda s: render_design(s.design),
     "acts": act_labels,
 }
 
