@@ -312,6 +312,17 @@ def test_a_missing_episode_is_a_clean_error(fake, series):
     assert "2026-01-01" in result.output
 
 
+def test_a_probe_does_not_need_ffmpeg(series, monkeypatch):
+    """The positive half of "a probe never encodes". An operator with no ffmpeg
+    installed can still look at the frames — demanding it up front would refuse
+    a working command over a tool it does not run."""
+    f = FakeRun()
+    monkeypatch.setattr(R.subprocess, "run", f)
+    monkeypatch.setattr(R.shutil, "which", lambda n: None if n == "ffmpeg" else "/x/" + n)
+    episode(series)
+    assert probe().exit_code == 0
+
+
 def test_a_missing_node_is_a_clean_error(fake, series, monkeypatch):
     """ffmpeg is NOT required: a probe never encodes. Naming ffmpeg here would
     send an operator to install something this command does not use."""

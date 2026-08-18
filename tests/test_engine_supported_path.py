@@ -67,6 +67,8 @@ def test_the_renderer_refuses_to_run_without_a_plan(mjs, code):
     `node render.mjs` rendered *something*; the replacement must say what is
     missing and name the command that supplies it."""
     assert "--plan" in code
+    assert "if (!planPath)" in code, "nothing refuses a bare invocation"
+    assert "process.exit(2)" in code
     assert "agsoc video render" in mjs  # the header names the supported path
 
 
