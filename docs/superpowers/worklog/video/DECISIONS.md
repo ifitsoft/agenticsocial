@@ -1956,3 +1956,58 @@ directions costed: exempting years is not free, because a stale date presented a
 current is a real failure mode §8.3 names. Recorded here because the finding is
 worth more than whichever answer it gets — *the rule was validated against real
 prose twice, and produced a new question both times.*
+
+## D-093 · phase 4 / gate · the documented exemption was the hole
+
+The blind gate review found `jumpChart.rows[].shown` executes arbitrary
+JavaScript. Leader-reproduced before acting: a plain `jumpChart` — no `custom`,
+no `attest` — carrying `shown: '<img src=x onerror="…">'` runs the handler, and
+
+```
+load 1, frame t=1.0 : THE BRIEF|T1787015967789
+load 2, frame t=1.0 : THE BRIEF|T1787015970251
+*** NOT REPRODUCIBLE: same t, same plan, different frame ***
+```
+
+**`__seek(t)` purity — the invariant this project has never had to re-fix —
+broken from a `script.yaml` field.**
+
+**Why it hid, and this is the transferable part.** `shown` was the one field
+*documented* as an innerHTML override (D-078), and being documented is what made
+it invisible. Three independent controls each skipped it for a different reason:
+
+- the `NONDETERMINISTIC` lint only ever inspects `custom.js`;
+- `attest` (D-088) is required on `custom` and nothing else, so a `cited: True`
+  type carried executable content with no attestation at all;
+- `beat_summary` shows the approver the row label, not `shown` — so no human was
+  reading it either.
+
+**A documented exception is not a reviewed one.** Each control was written
+against the *type* that was known to execute rather than against the *capability*
+of reaching innerHTML, and `shown` had the capability without the label. The
+check that generalises: enumerate the fields that reach a dangerous sink, and
+verify each control covers the enumeration — not the one case that prompted it.
+Task 5's report is required to redo that enumeration from the code, on the
+assumption it was never done properly.
+
+**What the blind gate bought.** Every vector in `network.test.mjs` is driven from
+a `custom` beat, because `custom` is what Task 4 was thinking about. That is
+exactly why this surface was invisible to a test suite that otherwise scores
+21/21. A reviewer who had read the Task 3 and Task 4 reports would have inherited
+their frame — that `custom` is the execution surface — and looked where they
+looked. **Blind review earned its cost here.**
+
+**One correction, in the CSP's favour.** The review reported exfiltration
+succeeding. It does not: measured, `server hits: []` and
+`Content-Security-Policy refused … (connect-src)`. **Task 4's policy blocked a
+vector that did not exist when it was written** — the strongest evidence in this
+record for a boundary placed by capability rather than by threat model. The
+network half was closed by something written for a different reason; the
+execution half is Task 5.
+
+**Fix shape: a closed vocabulary, not a blocklist.** D-080 settled this once for
+prose — a `script.yaml` is authored by an agent against a fetched source, so its
+markup surface must be closed. An `on*` blocklist is D-088's `window['Ma'+'th']`
+again: a lint sold as a boundary. Attribute-free tags plus named entities, since
+every event handler is an attribute, and `<s>34.4</s> &rarr; 43.6` in
+`2026-08-14.js` is the whole real requirement.
