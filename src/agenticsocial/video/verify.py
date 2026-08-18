@@ -51,17 +51,16 @@ import hashlib
 import json
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
 
 from ..workspace import atomic_write
 from . import claims as claims_mod
 from . import corpus as corpus_mod
 from . import script as script_mod
-from .claims import UNIT_SUFFIXES, Atom, Claim, claim_number, fold
+from .claims import UNIT_SUFFIXES, Claim, claim_number, fold
 from .models import Episode
 
 # Two helpers reached across the module boundary rather than re-spelled here.
