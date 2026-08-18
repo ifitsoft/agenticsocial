@@ -714,6 +714,27 @@ def test_a_claim_cleared_on_a_persons_word_is_also_adjudicated(series, tmp_path)
     assert "Draws the price ladder from the two figures above." in adj
 
 
+def test_a_claim_that_is_not_open_is_not_told_how_to_fix_itself(series, tmp_path):
+    """precondition: found by opening the page. `_next_step` answers "what do
+    you do about this claim" for a claim the gate REFUSES — `check` only ever
+    calls it on a blocking record. Called on an attested `custom` beat it says
+    "write `attest:` on the beat", on the one screen showing the attestation
+    that is already there. A remedy for a problem that does not exist is how
+    the remedies stop being read."""
+    checked(series, [custom_beat()])
+    adj = block(console(out=tmp_path / "c.html"), "adjudicate-c-001")
+    assert "Draws the price ladder" in adj
+    assert "write `attest:`" not in text_of(adj)
+
+
+def test_an_open_claim_is_told_what_to_do_about_it(series, tmp_path):
+    """precondition: the negative half — the remedy is the point of screen D
+    for a claim that IS open."""
+    checked(series, [fabricated_beat()])
+    adj = block(console(out=tmp_path / "c.html"), "adjudicate-c-001")
+    assert "fix `quote:`" in text_of(adj)
+
+
 def test_the_override_is_shown_as_a_statement_with_the_diff_it_will_make(
     series, tmp_path
 ):

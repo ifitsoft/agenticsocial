@@ -196,6 +196,9 @@ MUTANTS = [
      "        html = console_mod.build(s, ep)",
      "        try:\n            html = console_mod.build(s, ep)\n"
      "        except Exception:\n            html = \"<!doctype html>\\n<html></html>\""),
+    ("S17", "the fix line is printed on claims that are not open", K,
+     "            if verify_mod.is_blocking(record)\n            else \"\",",
+     "            if True\n            else \"\","),
     ("S16", "the runtime is reported without the target", K,
      "f\"runtime {check.total_sec:.1f}s · target {check.target_sec}s ± \"",
      "f\"runtime {check.total_sec:.1f}s · \""),

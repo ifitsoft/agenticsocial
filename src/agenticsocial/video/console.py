@@ -412,7 +412,16 @@ def adjudication_card(episode: Episode, record: dict, documents: dict) -> str:
             _pass2_block(record),
             _attest_block(record, classify(record)),
             _override_block(record),
-            _row("why it is here", esc(_next_step(record)), cls="fix"),
+            # Only for a claim the gate REFUSES. `_next_step` answers "what do
+            # you do about this claim", and `check` calls it on blocking records
+            # alone; on an attested `custom` beat it says "write `attest:` on
+            # the beat" — on the screen already showing the attestation that is
+            # there. Found by opening the page. A remedy printed over a problem
+            # that does not exist is how the remedies stop being read, which is
+            # §8.4's own argument about written sentences.
+            _row("why it is here", esc(_next_step(record)), cls="fix")
+            if verify_mod.is_blocking(record)
+            else "",
             _override_diff(episode, record),
             "</article>",
         ]
