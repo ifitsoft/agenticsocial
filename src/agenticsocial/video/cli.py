@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import tempfile
 import textwrap
 from pathlib import Path
 from typing import Optional
@@ -9,7 +10,7 @@ from typing import Optional
 import typer
 
 from ..models import Status, TransitionError
-from ..workspace import Workspace, WorkspaceError
+from ..workspace import Workspace, WorkspaceError, atomic_write
 from . import approve as approve_mod
 from . import claims as claims_mod
 from . import corpus as corpus_mod
@@ -1775,6 +1776,110 @@ def _echo_rendered(series: str, episode: str, result) -> None:
             "the one that differs between machines. Nobody has looked at this "
             f"video: `agsoc video probe {episode} --series {series}` puts one "
             "frame per beat on disk in seconds",
+        )
+    )
+
+
+# --- `agsoc video console` ------------------------------------------------------
+#
+# Spec §12's screens C and D, as one offline HTML file. The one step where a
+# graphical surface genuinely beats a terminal is adjudicating claims against
+# source text with the supporting quote highlighted in place, and a terminal
+# cannot highlight a span inside a paragraph of the operator's own source.
+#
+# The console module imports this one — `beat_summary`, `_next_step`, `_counts`
+# — rather than the reverse: the page is built ON these screens, so one remedy
+# sentence and one counts line serve both, and the console cannot send an
+# operator somewhere `check` would not. The import below is therefore local to
+# the command, and that is the only reason it is not at the top of the file.
+
+
+@video_app.command("console")
+def video_console(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", help="where to write the HTML (default: a temp directory)"
+    ),
+) -> None:
+    """Write the review console: the claims, the source, and the quote in place.
+
+    A READ-ONLY screen. It cannot approve anything and it writes nothing into
+    the episode — not the ledger, not the script, not a derived file. §8.4's
+    gate is `agsoc video approve`; it takes identifiers and loads from disk
+    (D-072) because in v1 a draft was published through a second path around a
+    gate (D-059), and a second way to approve is exactly the defect Phase 7
+    spent three tasks eliminating. This page prints the command.
+
+    The file lands OUTSIDE `workspace/` by default and any `--out` inside it is
+    refused. It is derived — regenerate it in a second — and `workspace/` holds
+    the operator's authored content, which nothing derived should be mixed into.
+    """
+    from . import console as console_mod
+
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    try:
+        s = load_series(ws, series)
+        ep = load_episode(s, episode)
+    except (SeriesError, EpisodeError) as e:
+        raise _fail(str(e))
+
+    target = (
+        Path(tempfile.gettempdir()) / "agsoc-console" / f"{s.slug}-{ep.id}.html"
+        if out is None
+        else Path(out)
+    )
+    # Resolved before the comparison and before anything is built: a relative
+    # path, a symlink or a `..` that lands back inside the workspace is the same
+    # write, and a refusal that can be spelled around is not one.
+    resolved = target.resolve()
+    root = ws.root.resolve()
+    if resolved == root or root in resolved.parents:
+        raise _fail(
+            f"{resolved} is inside the workspace. The console is derived and "
+            "read-only; `workspace/` holds the content itself, and this command "
+            "writes nothing there — least of all into an episode directory, "
+            "where it would be a second writer beside `check` (D-059, D-113). "
+            "Pass a path outside it, or none at all."
+        )
+
+    try:
+        html = console_mod.build(s, ep)
+    except (
+        SeriesError,
+        EpisodeError,
+        ScriptError,
+        PlanError,
+        claims_mod.ClaimsError,
+        corpus_mod.CorpusError,
+        verify_mod.VerifyError,
+        console_mod.ConsoleError,
+    ) as e:
+        # Nothing is written on this path. A console built from a file nobody
+        # parsed is worse than no console: it would be a confident picture of
+        # an episode that does not load.
+        raise _fail(str(e))
+
+    try:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(resolved, html)
+    except OSError as e:
+        raise _fail(f"cannot write the console: {e}")
+
+    typer.secho(f"{s.slug}/{ep.id} · review console", fg=typer.colors.GREEN)
+    typer.echo(f"      {'wrote':<{LABEL_WIDTH}}{resolved}")
+    # NOT wrapped: `_detail` folds at ROW_WIDTH, and a URL folded across two
+    # lines is one an operator cannot copy — the single thing this line is for.
+    typer.echo(f"      {'open':<{LABEL_WIDTH}}file://{resolved}")
+    typer.echo(
+        _detail(
+            "note",
+            "read-only. It writes nothing into the episode, makes no network "
+            "request, and cannot approve anything — the gate is `agsoc video "
+            f"approve {ep.id} --series {s.slug} --by \"<name>\"`, which "
+            "re-reads every file before it decides",
         )
     )
 
