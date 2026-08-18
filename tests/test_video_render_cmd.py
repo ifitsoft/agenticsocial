@@ -346,6 +346,17 @@ def test_each_refusal_names_the_file_the_operator_must_open(series, fake):
     assert "sha256" not in screens["ledger"]
 
 
+def _fix_line(screen: str) -> str:
+    """The `fix` block of a refusal screen, as one squashed line.
+
+    Read off the rendered screen rather than off the source, because the thing
+    that has to differ is what the operator reads, and `_detail` wraps it.
+    """
+    marker = f"\n      {'fix':<9}"
+    assert marker in screen, f"no fix line on this screen:\n{screen}"
+    return " ".join(screen.split(marker, 1)[1].split())
+
+
 def test_each_refusal_offers_its_own_fix(series, fake):
     """M4, the half the first version of this file missed.
 
@@ -354,10 +365,23 @@ def test_each_refusal_offers_its_own_fix(series, fake):
     `why` line comes from `approval_drift` and `stale_reason` and those were
     always going to differ. What collapsed was the FIX line, which is the half
     an operator acts on, and it was pointing every refusal at `--restart`.
+
+    And the FIX lines are compared to EACH OTHER, not searched for a phrase.
+    The phrase version of this test also survived: it asserted "put the change
+    back" was in the drift screen, and that sentence is `approval_drift`'s own
+    wording — it arrives on the `why` line whatever the `fix` line says, so the
+    drift and ledger remedies could be made identical with this test green.
+    Measured, as a mutant, before this version was written.
     """
     screens = _three_refusals(series)
-    assert "put the change back" in screens["drift"]
-    assert "agsoc video check" in screens["ledger"]
+    # The status refusal is one sentence and carries its remedy inline; the two
+    # that print a `fix` block are the pair that can collapse into each other.
+    fixes = {k: _fix_line(screens[k]) for k in ("drift", "ledger")}
+    assert fixes["drift"] != fixes["ledger"], fixes
+    assert "put the change back" in fixes["drift"]
+    assert "agsoc video check" in fixes["ledger"]
+    assert "agsoc video approve" in screens["status"]
+    assert "agsoc video approve" not in screens["drift"] + screens["ledger"]
     for other in ("drift", "ledger", "status"):
         assert "--restart" not in screens[other], other
 
