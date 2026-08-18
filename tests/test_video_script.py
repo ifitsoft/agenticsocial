@@ -1106,10 +1106,15 @@ def test_a_wrongly_typed_shared_field_is_refused(series, field, bad):
     assert field in str(e.value)
 
 
-@pytest.mark.parametrize("field", ["act", "kicker", "src", "quote", "claim_override"])
+@pytest.mark.parametrize("field", ["act", "kicker", "src", "quote"])
 def test_an_empty_shared_string_field_is_accepted(series, field):
     """precondition: R2 negative + M4. These are decorative or advisory; `""`
-    is a legitimate value and only an `is not None` check accepts it."""
+    is a legitimate value and only an `is not None` check accepts it.
+
+    `claim_override` was in this list and is not any more: D-103 made it §8.4's
+    mapping, where an empty value is precisely the checkbox the field exists to
+    prevent. Its own cases are in `tests/test_video_check.py`.
+    """
     beat = dict(VALID["statement"])
     beat[field] = ""
     script = _load(series, [beat])

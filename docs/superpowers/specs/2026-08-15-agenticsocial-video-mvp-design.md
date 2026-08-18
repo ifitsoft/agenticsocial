@@ -390,10 +390,32 @@ Pure Python. No network, no LLM, milliseconds. Runs on every claim.
    **comparison folding** (§8.2.1). Records the character span in the *original*
    text, which the UI uses to highlight.
 2. **Numeric containment.** Every **claim number** (§8.2.2) the beat will
-   *render* must appear within `quote`. Comparison is on normalised digit
-   sequences (strip `$`, `,`, spaces; `0.75` matches `$0.75` and `75 cents` does
-   **not**). This is the check that makes fabricated figures structurally
-   impossible.
+   *render* must be present in `quote` **by value, not by digit sequence.**
+
+   This paragraph previously specified "normalised digit sequences". That was
+   wrong, and it was wrong on this document's own worked example. Measured
+   against the §7 `kpis` beat and its quote:
+
+   ```
+   quote: "priced at $0.75 per million input tokens and $3.75 per million output"
+     1M    -> digits '1'      present? NO   (the source spells the magnitude)
+     2.00  -> digits '2.00'   present? NO   (display formatting reaches the compare)
+     0.75  -> digits '0.75'   present? yes
+   ```
+
+   And the rule's own purpose inverts: **`95B` against a source writing "95
+   billion" fails**, which is exactly the case §8.2.2's unit-suffix rule was
+   added to protect.
+
+   **The comparison is therefore numeric.** Parse candidate numbers out of the
+   folded quote using the same §8.2.2 rule; expand magnitude suffixes (`K M B T`)
+   and spelled magnitudes (thousand, million, billion, trillion) on **both**
+   sides; compare values, so trailing zeros and thousands separators cannot
+   cause a refusal.
+
+   This **strengthens** the guarantee rather than relaxing it: `95B` = 95e9 ≠
+   9e9 = `9B`, a distinction a substring test cannot make at all. `0.75` matches
+   `$0.75`; `75 cents` still does **not**.
 
 #### 8.2.1 Comparison folding — required, and why it is safe
 

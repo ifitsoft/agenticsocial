@@ -805,7 +805,9 @@ def test_claim_override_does_not_leak_into_the_plan(series):
     _script(
         ep,
         "beats:\n  - type: body\n    hold: 3.0\n    text: t\n"
-        "    claim_override: not a claim\n",
+        "    claim_override:\n"
+        "      reason: Framed as expectation, not fact.\n"
+        "      by: Ali Abdukarim\n",
     )
     b = build_plan(series, load_episode(series, "2026-08-14"))["beats"][0]
     assert "claim_override" not in b

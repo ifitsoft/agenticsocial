@@ -2126,3 +2126,310 @@ Also closed en route: ANSI escapes in `shown` cannot spoof the review screen —
 terminal.
 
 **Verdict: Phase 4 merges.**
+
+## D-096 · phase 5 / task 1 · extraction is tied to the catalogue, not to a list
+
+`claims.py`'s `COLLECTORS` is keyed by the **checker function object** from
+`script.BEAT_TYPES`, read at call time. Consequences: a new field declared
+`"tagline": text` is extracted the day it is added; a field with an unfamiliar
+checker raises `ClaimsError`; a new type is refused until someone classifies it.
+**The failure mode is a loud refusal, not a silent gap** — which is the right
+direction for a component whose job is to notice.
+
+A test also reads `engine/planbuild.js`, collects all 27 `b.`/`r.`/`it.` property
+reads, and asserts each is either claimed or listed in `IGNORED_FIELDS` **with a
+written reason**. That closes the divergence the brief flagged as this task's
+highest risk: Python and `planbuild.js` independently answering "what does a beat
+render", with figures shipping unchecked while `check` reports green.
+
+Stated honestly in the report, and worth carrying: it does **not** catch a field
+both files know about that Python classifies *wrongly*, nor text the builders
+render from non-property sources (dumbbell axis words, `META`).
+
+**Two of the implementer's own mutants survived the first run and were real
+gaps** — both falsy: a kpi `value: 0` at `decimals: 2`, and a `jumpChart
+before: 0`. The brief's standing "include falsy values" rule caught them because
+the sweep was run, not because the rule was read.
+
+## D-097 · phase 5 / task 1 · D-092 decided: years and ordinals stay claim numbers
+
+No exemption. The reasoning, which I accept: a stale date presented as current is
+a §8.3 failure mode, and **the year is the only part of it a mechanical pass can
+see**. Any "is this a year?" test is a range check that would also exempt
+`2026 GPUs`. Measured cost on the real brief: near zero.
+
+The extractor produces 18 claim numbers from the operator's brief, matching the
+leader's independent count, with every product name and URL on the identifier
+side — `V4‑Pro`, `Qwen3.8‑Max`, `GPT‑5.6` all exempt, `3.7` in `Gemini 3.7 Flash`
+still checked. **D-071's rules survive contact with real prose.**
+
+## D-098 · phase 5 / task 2 · string containment is the wrong comparison, proven on the spec's own example
+
+The implementer reported that **the spec's §7 example `kpis` beat fails this
+extractor.** Leader-verified against the spec's own quote:
+
+```
+quote: "priced at $0.75 per million input tokens and $3.75 per million output"
+  1M    -> claim '1'      literally in quote? False
+  2.00  -> claim '2.00'   literally in quote? False
+  0.75  -> claim '0.75'   literally in quote? True
+```
+
+Three distinct false-refusal generators, on the canonical example, all following
+correctly from settled rules:
+
+1. **`1M` versus "per million".** The beat writes a magnitude in digits; the
+   source spells it. No digit to match.
+2. **`2.00` versus `2`.** kpi atoms are the **formatted glyphs**, because §7.2's
+   whole point is that what the frame displays is what gets verified. Display
+   formatting therefore reaches the comparison.
+3. And the rule's original purpose inverts: **`95B` against a source writing
+   "95 billion" fails**, which is precisely the case the unit-suffix rule was
+   added to protect.
+
+§8.2 says comparison is "on normalised digit sequences". **That is the defect.**
+A digit-sequence comparison cannot see that `1M`, `1 million` and `1,000,000` are
+one number, and this is not a corner case — it is the spec's own worked example
+and the operator's real brief.
+
+**Task 2 compares values, not strings.** Parse candidates out of the folded quote
+with the same claim-number rule, expand magnitude suffixes and spelled magnitude
+words (`K M B T` / thousand, million, billion, trillion) on **both** sides, and
+compare numerically. `95B` = 95e9 ≠ 9e9 = `9B`, so the guarantee the rule exists
+for is strengthened, not weakened — a value comparison distinguishes magnitudes a
+string comparison cannot.
+
+**Why this is the phase's most important decision.** D-040's failure mode is a
+checker so strict that operators override reflexively until the gate is theatre.
+Here the strictness is not judgement — it is a comparison operator that cannot
+represent the thing being compared. **Track the override rate from day one; a
+high rate means the checker is wrong, not the operator**, and this is what that
+looks like before anyone has overridden anything.
+
+## D-099 · phase 5 / task 2 · the sentence is true, and it caught its own author
+
+Pass 1 works. Leader-verified on the four cases D-098 was written for:
+
+```
+95B vs "95 billion" : True      0.75 vs "75 cents" : False
+9B  vs "95 billion" : False     1,000,000 vs "1M"  : True
+```
+
+1471 tests, 37/37 mutants. But the result worth recording is Step 6.
+
+**On the first real run, the checker caught two fabricated numbers, and they were
+the implementer's own.** They built a before/after price chart from the
+operator's brief and invented the "before" figures — the brief never publishes
+DeepSeek's old prices. Their report says it plainly: *a chart I hadn't noticed
+I'd fabricated.*
+
+That is the entire product thesis demonstrated on its first contact with real
+content, and demonstrated in the only way that counts: **against the person who
+built the checker, on work they believed was fine.** Not a synthetic fixture, not
+a planted bug. A number invented in good faith by someone assembling a chart from
+a source that did not contain it — which is exactly how this fails in the real
+world, and exactly what no amount of careful authoring prevents.
+
+Spec §7 example: 2/5 refused, both the beat rather than the checker (an uncited
+cold open, and a kicker whose citation did not cover its own framing). With those
+citations written, 0/5. Real brief: 1/8, and the 1 is true.
+
+**M1 and M2 are one source edit.** Substring matching is simultaneously the
+false-refusal mutant and the false-acceptance one — the cleanest possible
+statement of why D-098 strengthened the check rather than relaxing it.
+
+## D-100 · phase 5 / task 2 · a mutation harness that gets faster can start lying
+
+The first sweep reported two survivors that were not. With the suite down to
+0.17s, consecutive mutants land inside a single mtime second and CPython reuses a
+stale `.pyc` — so the harness tested the *unmutated* module and reported the
+mutant as surviving.
+
+**A false survivor is the benign direction; the same mechanism produces false
+kills**, which would silently inflate every mutation score this project reports —
+and mutation testing is this project's primary quality metric. Fix:
+`PYTHONDONTWRITEBYTECODE=1` in the sweep.
+
+This is D-035 in a new place: the *harness* stopped being able to observe the
+thing it was measuring, and it started happening only because the suite got fast.
+**Speed changed the correctness of the measurement.**
+
+## D-101 · phase 5 / task 2 · an ellipsis in a quote is how humans shorten citations
+
+§8.2.1 folds U+2026 to `...`, and literal search then demanded three full stops no
+source ever wrote. The spec's own `list` beat quotes
+`"…available today in the Gemini API…"` — **a guaranteed refusal on the commonest
+way a person shortens a citation.**
+
+Trimmed at the **edges only**. An internal `…` stays literal, deliberately: a
+wildcard there would let a beat quote `"prices … fell"` against a source saying
+prices rose *before* they fell. **Edge elision is abbreviation; internal elision
+is editing.** The distinction is the whole safety argument and it is why this is
+not a general wildcard.
+
+## D-102 · phase 5 / task 2 · entity presence is recorded, not gated — with the numbers to justify it
+
+§8.2 step 3 is deliberately **not** implemented as a gate, and the report says so
+rather than shipping a check that looks stricter than it is.
+
+Measured on the real brief: 20 entity atoms, **7 unfindable (35%)**. Gating them
+would refuse **5 of 8 beats (62%)** instead of 1 of 8. **Not one of the seven is a
+real entity error** — five are Task 1's glued multi-entity runs, one is `2.4T`
+read as a name, one is `USD`.
+
+D-040's failure mode, arithmetically: a 62% refusal rate on correct work trains an
+operator to override everything, including the true refusal that is sitting right
+there in the same run. **A check that cannot distinguish its own tokeniser's
+errors from the author's must not hold the gate**, and the honest move is to
+record it for the human rather than dress it up as verification. Revisit when
+entity extraction is better than an orthographic rule; it is Phase 9's territory.
+
+## D-103 · SPEC · `claim_override` is a mapping in §8.4 and a string in the code
+
+`script.py` validates every shared field with `free_text`, so **§8.4's own YAML
+example is refused at load.** The mapping is the right shape and it is
+load-bearing: `reason` plus `by` is what makes an override *a written sentence
+with your name on it* rather than a flag. Task 3 fixes the code to match the
+spec, before Phase 7's gate reads it.
+
+## D-104 · phase 5 / task 3 · the sentence is true and an operator can act on it
+
+`agsoc video check` and the extended `review` close Phase 5. 1524 tests, 33/33
+mutants. Leader-run against the real episode, with a figure changed from `1.32`
+to `2.47` to force a refusal:
+
+```
+ !  c-004   beat  3  kpis       fail
+      why      the quote does not contain 2.47 by value
+      beat     New V4-Pro pricing $2.47 per 1M input tokens $3.96 per 1M output tokens
+      quote    “announced new pricing starting August 16 at about $1.32 / $3.96 per 1M tokens”
+      src      sources/_pasted.txt
+      fix      correct the figure, widen `quote:` so it covers it, or write a `claim_override`
+               (reason + by) in script.yaml
+```
+
+**The `fix` line is what makes this a gate rather than a wall.** D-040's failure
+mode is a checker that refuses without teaching, until overriding is the only
+thing an operator has learned to do. This one names three remedies and ranks them
+with the honest one first.
+
+`review` now prints the `quote` under every beat — Phase 3's named gap. An
+operator can finally see *what the source says*, not merely that a citation
+exists. That is the difference between "this beat is cited" and "this beat is
+true", and it is the screen the whole product exists to produce.
+
+Also of note: **six of the implementer's own mutants survived their first run,
+and five were on the screen itself** — the "what do I do" line, the quote in the
+failure block, review's summary, and an overridden claim printing `pass` on the
+table while the gate correctly refused. That last one matters: **the exit code is
+read by a machine, the table by the person who signs.** A display defect is a
+verification defect when the display is the deliverable.
+
+## D-105 · process · a piped exit code is not the command's exit code
+
+`cmd | head` reports `head`'s status. This has now produced a false reading
+**twice in one phase, for two different actors**: a QA sweep piped node output
+through `tail` and had to re-run every apparent survivor, and I read `EXIT=0` off
+a failing `check` and nearly filed a shipped gate as broken. Unpiped, it is 1 on
+failure and 0 on clean — correct.
+
+It belongs with D-031, D-091 and D-094 as the same underlying error: **measuring
+something adjacent to the property and reporting it as the property.** The tell is
+identical every time — the comfortable answer arrives first and nothing about the
+output looks wrong.
+
+Standing rule, now in the briefs: use `$PIPESTATUS` or an unpiped run before
+reporting any exit-code finding, and never pipe the command whose status you are
+about to quote.
+
+## D-106 · phase 5 / task 4 · the extractor failed open, and the fix is a boundary you can measure
+
+The blind gate found two ways to display a fabricated number and pass. Both
+leader-reproduced before dispatch:
+
+```
+atoms('about 950bn active') -> ()        # no atom at all -> nothing checked -> pass
+_bare('-18') -> '18'                     # "-18" matches "rose 18%"
+```
+
+F1's shape is the important part. §8.2.2 strips exactly one trailing suffix
+character, so `950bn` failed the digits-only test, was classified an identifier,
+was *also* rejected as a name, and **produced no atom whatsoever.** Verified end
+to end on the operator's own episode: `95B` → `950bn`, source unchanged, verdict
+`pass`. A 10× fabrication, clean. **Both defects are one decision made wrongly in
+two places: a token the rule cannot parse was treated as "not a claim" rather
+than "cannot be checked."** Failing open, in the component whose entire job is to
+notice.
+
+**The new boundary is a measurement, not an argument:** a token beginning with a
+digit is a figure and gets checked; one beginning with a letter is an identifier
+and is exempt. Every identifier in §8.2.2's table, the `M1` chip, and every
+product name in the operator's brief begins with a letter. The decisive property
+is that **the old rule could answer "neither a number nor a name" — and neither
+means no atom, which means no check. The new one cannot produce that answer.**
+
+Verified through the real `check_claim` path:
+
+```
+'about 95 bn active' vs 'roughly 95 million active' -> fail
+'about 95 bn active' vs 'roughly 95 billion active' -> pass
+'about 950bn active' vs 'about 95B active'          -> fail
+'revenue fell -18%'  vs 'revenue rose 18%'          -> fail
+```
+
+1573 tests, **17/17 non-equivalent mutants**, and **zero false refusals on real
+content** — 10 → 10 figures on the committed episode, 18 → 18 on the operator's
+brief, not one token changing side. The cost is not zero in principle (`5th`,
+`1080p`, `95-billion` are now checked by spelling); it is zero in the corpus we
+have, which is the honest way to state it.
+
+### The deviation, ruled on and accepted
+
+R1 said an unparseable token must *refuse*. The implementer made it **checked by
+exact spelling in the quote** — which refuses when absent and verifies when the
+source spells it the same way. Accepted: byte equality after folding is *stricter*
+than the numeric comparison (which reads `1M` and `1,000,000` as one claim), it
+cannot admit a wrong figure, and unconditional refusal is a false-refusal
+generator **no correct quote can ever clear** — D-040's exact shape. The brief was
+wrong and the deviation was flagged rather than taken silently, which is the
+behaviour the ground rules exist to produce.
+
+### One space from the one the gate found
+
+`95 bn` writes the magnitude as its own token, so the suffix strip never saw it —
+the atom was a bare `95`, matching a source saying "95 million". **Three orders of
+magnitude, passing, through code this task had just hardened.** Found by the
+implementer looking further than the brief asked, and fixed test-first.
+
+The lesson generalises past this bug: **the gate found `bn` because it looked,
+and there was another one space away.** When a defect is a spelling the rule does
+not know, the correct assumption is that more spellings exist.
+
+## D-107 · carried to Phase 9 · a beat that spells its figures in words is unchecked
+
+`"Ninety-five billion parameters"` against a source saying "nine billion" passes
+with **zero atoms**. §8.2.2 is a rule about digits, end to end.
+
+Recorded rather than patched. It is not a bug in the rule — it is the rule's
+domain — and word-number parsing belongs with the adversarial pass, which reads
+meaning rather than tokens. **Phase 9 work, and Phase 9's brief must carry it**,
+because it is the last route by which a figure reaches the screen with nothing
+having checked it.
+
+## D-108 · phase 5 / gate · the residual risk has moved from implementation to specification
+
+The gate's own summary of its mutation run is the most useful sentence in it:
+33/38 killed, and **every code defect it found is one no mutant reaches, because
+the defect is in what the rule *is* rather than whether it runs.**
+
+That is a real threshold. For five phases, mutation testing found nearly every
+defect. In Phase 5 it found none of the four that mattered — F1, F2, the `95 bn`
+spacing, and D-107 are all rule-scope errors, invisible to any mutant because the
+code does exactly what it says.
+
+**Consequence for how later phases are reviewed:** mutation score is necessary and
+no longer sufficient. The questions that found these were *"what does this rule
+not know how to say?"* and *"what happens to input the rule cannot classify?"* —
+and the second one is the general form, because **a classifier with a third
+answer will eventually take it.** Phase 9's review effort should go there, not
+into more mutants.
