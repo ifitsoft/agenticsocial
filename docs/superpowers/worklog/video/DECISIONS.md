@@ -3417,3 +3417,57 @@ survive the transposition is anything composed *for* the shape.
 
 And not implemented: `render <ep>` rendering every enabled format, `[formats]
 enabled` being read by anything but the list screen, and `preview --format`.
+
+## D-128 · phase 11 · coverage moves to the series, and the migration is proved rather than asserted
+
+`agsoc coverage check | add | list | episode | migrate`. `engine/coverage.mjs`
+and its tests are deleted; `engine/coverage.json` survives as the migration
+source and as the **real-ledger fixture the Python tests run against** — D-119's
+shape again: *the command goes, the data survives.*
+
+**Migration proof, on real data:** 0 → 18 stories, 2 episodes moved, every story
+byte-identical, no entry dropped. Step 6 against the migrated ledger returns
+**exactly D-112's numbers** — `gemini-3.7` → 3, `gemini` → 4, `v4-pro` and
+`deepseek` → no match. *The answers did not change when the ledger moved*, which
+is the only useful definition of a successful migration. Nothing says "safe".
+
+1980 tests, **36/36 mutants** with the harness committed.
+
+### The three decisions, all argued
+
+- **A story is one asserting beat** — its on-screen text, the entities
+  `claims.py` already extracted, and the source it cited. **Derived, not typed**,
+  so the coverage ledger and the claim ledger cannot drift, and the ledger holds
+  the exact product strings an author will later type into `check`.
+- **The operator writes it, not the pipeline.** `add` is deliberately **not** a
+  side effect of `render`: an automatic add records what was *rendered*, so a
+  discarded render would suppress a story the series never told — **a silent
+  drop, which is worse than a duplicate.** A test pins `render.py` against ever
+  doing it.
+- **Cross-series hits are pointers, never counts.** Counting them would rebuild
+  the suppression this phase exists to remove.
+
+### The instructive mutant, and it is D-118's shape a third time
+
+`add` has two guards — status, and the render record — and the test asserted only
+the word "render". **Either guard could be deleted while the other covered for
+it.** An assertion that passes because *something* in the output matched is the
+same failure as a summary that agrees with the wrong table.
+
+### The gap this phase opens, named by the implementer
+
+**`check` cannot distinguish "not covered" from "covered but never recorded",**
+and nothing nags after a render that an episode is unrecorded. Every episode
+rendered without an `add` can be re-told as new — including the operator's three
+real episodes, which are not in the ledger.
+
+That is the honest cost of putting the operator in charge of the ledger, and it
+is recorded rather than smoothed over.
+
+### One deviation, argued and accepted
+
+The migrated `coverage.json` was **kept, not restored**. Restoring it would leave
+18 stories of history reachable only from a file the pipeline no longer reads —
+*which is exactly the state where the next episode re-tells a story as new.* The
+backup path and a one-line revert are in the report. Correct call: the safe-looking
+option was the one that loses the guarantee.
