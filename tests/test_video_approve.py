@@ -876,7 +876,11 @@ def test_the_approve_screen_does_not_call_an_overridden_episode_verified(series)
     assert result.exit_code == 0, result.output
     assert "2 of 2 verified" not in result.output
     assert "1 of 2 verified" in result.output
-    assert "override" in result.output
+    assert "cleared by override, not verified" in result.output
+    # The sentence and the name, on the screen of the person signing for them.
+    assert "c-002" in result.output
+    assert "Framed as expectation" in result.output
+    assert BY in result.output
 
 
 def test_an_overridden_claim_does_not_block(series):
@@ -931,6 +935,8 @@ def test_an_override_on_a_claim_that_passes_anyway_is_flagged_stale(series):
         "attested": 0,
         "overridden": 0,
     }
+    # And the record does not credit the bypass with a claim it did not carry.
+    assert "overrides" not in approval_on_disk(series)
 
 
 def test_a_stale_override_is_not_reported_on_a_claim_it_clears(series):
@@ -1308,3 +1314,63 @@ def test_the_plan_and_the_approval_do_not_share_a_key_name(series):
     assert plan["script_file_sha256"] == whole_file
     assert approval_on_disk(series)["script_sha256"] == beats_sha256(ep)
     assert plan["script_file_sha256"] != approval_on_disk(series)["script_sha256"]
+
+
+# --- what the sweep found ---------------------------------------------------------
+
+
+def test_drift_uses_the_approval_on_disk_not_the_one_in_hand(series):
+    """O4, a survivor my first drift test could not reach.
+
+    The object I held was loaded AFTER the approval, so its snapshot and the
+    file agreed and the mutant that reads `episode.meta` passed. The case that
+    separates them is a RE-approval: an object holding the old signature must
+    not report drift against a file that has since been signed again. A caller
+    answering a question about the file from a snapshot of what the file used
+    to say is D-059's shape, and it does not stop being that shape when the
+    snapshot is the more alarming of the two answers.
+    """
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    held = load_episode(series, EP)          # snapshot: the FIRST approval
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["status"] = "in_review"
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    check()
+    assert approve().exit_code == 0, "precondition: signed again"
+
+    assert approve_mod.approval_drift(held) is None
+
+
+def test_a_digest_that_agrees_on_a_prefix_is_not_the_same_digest(series):
+    """O8. A comparison that reads the first few characters is a comparison
+    that passes on 1 in 4 billion scripts and looks right in every test written
+    with real digests — so this one is written with a digest that differs
+    nowhere else."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    real = meta["approval"]["script_sha256"]
+    meta["approval"]["script_sha256"] = real[:-1] + ("0" if real[-1] != "0" else "1")
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    assert drift(series) is not None
+
+
+def test_the_stale_predicate_is_the_one_the_screen_uses(series):
+    """O2. `verify.stale_override` answered the question and the screen asked
+    it again in its own words — a survivor that was not a behaviour defect but
+    the setup for one, which is what a sweep is for."""
+    passing = {"mechanical": {"verdict": "pass"}, "override": dict(OVERRIDE)}
+    cleared = {"mechanical": {"verdict": "fail"}, "override": dict(OVERRIDE)}
+    assert V.stale_override(passing) == OVERRIDE
+    assert V.stale_override(cleared) is None
+    assert V.stale_override({"mechanical": {"verdict": "pass"}}) is None
+    assert "(STALE" in video_cli._applied(passing)
+    assert "cleared this claim" in video_cli._applied(cleared)

@@ -330,7 +330,7 @@ def _applied(record: dict) -> str:
     An override printed without this reads the same whether it did the work or
     nothing at all, and the second case is the one an operator has to see.
     """
-    if classify(record) == "overridden":
+    if stale_override(record) is None:
         return "(cleared this claim — §8.4, NOT verified)"
     return "(STALE — this claim clears without it)"
 
@@ -900,7 +900,11 @@ def _print_overrides(records: list[dict]) -> None:
         written, _ = override_state(record)
         if written is None:
             continue
-        (applied if classify(record) == "overridden" else stale).append(
+        # `stale_override` is the predicate, not a second reading of the same
+        # rule: which group a written sentence lands in is one answer, and the
+        # sweep found this line restating it. Two statements of one rule is the
+        # D-036 pattern, on the screen where it decides what an operator reads.
+        (stale if stale_override(record) is not None else applied).append(
             (record, written)
         )
     if not applied and not stale:
