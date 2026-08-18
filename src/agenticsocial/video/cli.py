@@ -304,6 +304,19 @@ classify = verify_mod.classify
 # list is spelled out (D-059).
 adversarial_state = verify_mod.adversarial_state
 
+# The one word every screen prints about a claim. SAME object, for the reason
+# above and for one more: `_counts`, `_claim_cell` and the summary's head line
+# used to answer this question in three places, and two of the three were left
+# reading pass 1 when the third was converted — a screen that looks updated and
+# is not (D-106, D-110, D-112, D-118, D-122's finding).
+binding_verdict = verify_mod.binding_verdict
+
+# The order the counts line prints in: pass 1's four verdicts, then §8.4's two
+# pass-2 refusals, then anything a ledger holds that neither pass named — last,
+# and never dropped, because a count that omits a claim is the reassurance
+# D-112 was about.
+COUNT_ORDER = list(verify_mod.VERDICTS) + ["refuted", "unsupported"]
+
 
 def _verdict(record: dict) -> str:
     return str((record.get("mechanical") or {}).get("verdict") or "?")
@@ -551,9 +564,7 @@ def _claim_cell(record: dict) -> str:
     the gate refuses. The measurement is not lost: it is on the claim's line in
     the summary below, and in `check`'s row, which prints both.
     """
-    state, _ = adversarial_state(record)
-    binding = _verdict(record) if state in ("unjudged", "supported") else state
-    return binding + ("*" if _written(record) else "")
+    return binding_verdict(record) + ("*" if _written(record) else "")
 
 
 def _print_claim_summary(ledger: dict) -> None:
@@ -572,9 +583,16 @@ def _print_claim_summary(ledger: dict) -> None:
         written, fault = override_state(record)
         if not is_blocking(record) and not written and not fault:
             continue
+        # The BINDING verdict, then pass 1's, labelled as pass 1's. A line whose
+        # entire job is *this claim is open* ended with the word `pass`, because
+        # it was built from the measurement — and the measurement is still worth
+        # printing, as long as it is reported rather than claimed.
+        binding = binding_verdict(record)
+        measured = _verdict(record)
         head = (
             f"{'!' if is_blocking(record) else '*'} {record.get('id')} · "
-            f"beat {record.get('beat_index')} · {_verdict(record)}"
+            f"beat {record.get('beat_index')} · {binding}"
+            + ("" if binding == measured else f" · pass 1 {measured}")
         )
         # No "— no reason recorded" filler: a passing claim that carries an
         # override has nothing to explain, and inventing a clause there reads
@@ -876,13 +894,23 @@ def _cleared_summary(records: list[dict]) -> str:
 
 
 def _counts(records: list[dict]) -> str:
-    order = list(verify_mod.VERDICTS)
+    """The counts line on both screens — over the verdict that BINDS.
+
+    It said `24 pass` on an episode with a claim pass 2 had refused, four lines
+    above a table cell reading `unsupported`, because it tallied the
+    measurement. That is the fifth instance of a number that does not say what
+    it counted, and the second in one phase; the arithmetic now comes from
+    `binding_verdict`, the function the cell under it uses.
+    """
     tally: dict[str, int] = {}
     for record in records:
-        tally[_verdict(record)] = tally.get(_verdict(record), 0) + 1
+        word = binding_verdict(record)
+        tally[word] = tally.get(word, 0) + 1
     return " · ".join(
-        f"{tally[v]} {v}"
-        for v in sorted(tally, key=lambda v: (order.index(v) if v in order else 99, v))
+        f"{tally[w]} {w}"
+        for w in sorted(
+            tally, key=lambda w: (COUNT_ORDER.index(w) if w in COUNT_ORDER else 99, w)
+        )
     )
 
 

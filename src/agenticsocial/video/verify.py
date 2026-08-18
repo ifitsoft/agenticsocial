@@ -941,6 +941,32 @@ def adversarial_clears(record: dict) -> bool:
     return adversarial_state(record)[0] in ("unjudged", "supported")
 
 
+def binding_verdict(record: dict) -> str:
+    """The ONE word this pipeline says about a claim: pass 1's, unless pass 2 refuses.
+
+    Every screen that prints a verdict — `review`'s table cell, its counts line
+    and the head line of each open claim, and `check`'s counts — reads it here,
+    so a summary cannot disagree with the table under it. That disagreement has
+    now been shipped five times (D-106, D-110, D-112, D-118, and D-122's
+    finding), and it is not a thing to fix again by keeping two code paths in
+    step: the count and the cell are one function, or they are two facts.
+
+    **Pass 2 wins only where it refuses.** `supported` reads as `pass`, because
+    the measurement is the stronger of the two statements and a screen printing
+    a judgement over a measurement is an overclaim in the other direction. The
+    three non-verdicts — `stale`, `expired`, `malformed` — print as themselves:
+    a judgement nobody can read is an unanswered question, not a restored pass.
+
+    Pass 1's word is not lost. `check`'s rows print it beside `pass 2 <state>`,
+    and `review`'s open-claim lines label it `pass 1 <verdict>` — reported,
+    which is what this function is here to distinguish from claimed.
+    """
+    state, _ = adversarial_state(record)
+    if state in ("unjudged", "supported"):
+        return str((record.get("mechanical") or {}).get("verdict") or "?")
+    return state
+
+
 def pass2_tally(records: list[dict]) -> dict:
     """What pass 2 covered, for a screen and for the approval record.
 

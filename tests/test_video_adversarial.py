@@ -438,8 +438,9 @@ def test_reviews_table_shows_the_verdict_that_binds_not_the_one_that_passed(seri
     row = next(line for line in result.output.splitlines() if "statement" in line)
     assert "refuted" in row
     assert "pass" not in row
-    # And the measurement is not lost — it is on the claim's own line below.
-    assert "pass" in next(
+    # And the measurement is not lost — it is on the claim's own line below,
+    # LABELLED as pass 1's. A bare `pass` there is the fifth overclaim (Task 3).
+    assert "pass 1 pass" in next(
         line for line in result.output.splitlines() if line.strip().startswith("! c-001")
     )
 
