@@ -746,6 +746,117 @@ def verify_episode(episode: Episode) -> dict:
     }
 
 
+def classify(record: dict) -> str:
+    """`verified` · `attested` · `overridden` · `open` — one answer per claim.
+
+    This is the single place §8.4's list is spelled out. `check`'s summary,
+    `review`'s table and `approve`'s gate all derive from it, because two paths
+    to one answer is the D-059 shape: the bypass that published a draft was a
+    gate and a second writer that disagreed about the same episode.
+
+    **It fails closed.** Anything this function does not recognise — a verdict
+    from a phase that does not exist yet, a hand-edited ledger, a record with no
+    `mechanical` block at all — is `open`. The predicate used to name the
+    blocking verdicts (`fail`, `no_source`) and answer "not blocking" for
+    everything else, so `verdict: supported` would have approved with nothing
+    checked. That is D-106's failure exactly: a value the rule cannot read
+    treated as *nothing to check* rather than *cannot be checked*.
+
+    **The measurement is consulted before the override.** A claim that passes
+    on its own is `verified` whether or not someone wrote a sentence about it,
+    so nobody ever has to delete an override to make a passing claim read as
+    passing — and the override that is left over is reported as stale rather
+    than silently doing nothing (`stale_override`).
+
+    Written over the ledger RECORD, not over `Mechanical`, because the record is
+    what survives to the gate. A `manual` claim whose `attest` was lost between
+    the check and the file is unattested to everyone who reads the file.
+    """
+    mechanical = record.get("mechanical") or {}
+    verdict = mechanical.get("verdict")
+    if verdict == "pass":
+        return "verified"
+    if verdict == "manual" and str(mechanical.get("attest") or "").strip():
+        return "attested"
+    if override_state(record)[0] is not None:
+        return "overridden"
+    return "open"
+
+
+# --- §8.4's override ---------------------------------------------------------------
+
+
+def override_state(record: dict) -> tuple[dict | None, str | None]:
+    """(the override §8.4 honours, why a written one is not honoured).
+
+    `(None, None)` means none was written, which is the normal case and the
+    silent one — a screen that mentions overrides on every clean run is a
+    screen whose mention gets tuned out.
+
+    **The validity rule is `script.claim_override`, called rather than
+    restated.** Two copies of "a written sentence with your name on it" drift
+    the first time either is tuned, and the drifted copy is the checkbox §8.4
+    says this must never be — the D-036 pattern, in the one place it would cost
+    a claim.
+
+    **Re-validated here even though the loader already refused it.**
+    `claims.json` is a file on disk. A gate that trusts an earlier pass to have
+    refused clears a claim on `{}` the moment anyone hand-edits the artifact, so
+    this fails closed like everything else `classify` reads.
+    """
+    value = record.get("override")
+    if value is None:
+        return None, None
+    fault = script_mod.claim_override(value)
+    return (None, fault) if fault else (value, None)
+
+
+def stale_override(record: dict) -> dict | None:
+    """A written override on a claim that clears without it, or None.
+
+    Not a refusal: the remedy for one is *delete the paragraph you wrote*, and a
+    gate that demands that inverts §8.4's cost asymmetry. It is a warning
+    because a sentence that bypasses nothing is how the sentences stop being
+    read — and the next real one is read with them.
+    """
+    applied, _ = override_state(record)
+    return applied if applied is not None and classify(record) != "overridden" else None
+
+
+def claim_tally(records: list[dict]) -> dict[str, int]:
+    """One count per state, and every claim in exactly one bucket.
+
+    The gate's own arithmetic, so a summary cannot round toward reassurance by
+    dropping a claim from the denominator (D-112). `total` minus the three named
+    states is the number that is open, and it is not stored: a fourth stored
+    count is a fourth thing that can be wrong on its own.
+    """
+    kinds = [classify(record) for record in records]
+    return {
+        "total": len(records),
+        "verified": kinds.count("verified"),
+        "attested": kinds.count("attested"),
+        "overridden": kinds.count("overridden"),
+    }
+
+
+def is_blocking(record: dict) -> bool:
+    """Would §8.4 refuse this claim? Derived from `classify`, never restated."""
+    return classify(record) == "open"
+
+
+def claim_records(ledger: dict | None) -> list[dict]:
+    """The ledger's claim records, defensively — a ledger is a file on disk."""
+    if not isinstance(ledger, dict):
+        return []
+    return [r for r in (ledger.get("claims") or []) if isinstance(r, dict)]
+
+
+def open_claims(records: list[dict]) -> list[dict]:
+    """Every claim §8.4 refuses on. `approve` gates on exactly this list."""
+    return [r for r in records if is_blocking(r)]
+
+
 def ledger_path(episode: Episode) -> Path:
     return episode.dir / CLAIMS_NAME
 

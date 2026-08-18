@@ -412,13 +412,19 @@ def test_the_override_rides_into_the_ledger_as_a_mapping(series):
 
 def test_an_overridden_claim_is_never_reported_as_a_pass(series):
     """precondition: M11. The verdict is what was measured; the override is what
-    a human decided about it. A display that collapses the two hides both."""
+    a human decided about it. A display that collapses the two hides both.
+
+    Phase 7 Task 2 applied the override, so this claim no longer BLOCKS — and
+    that is exactly when the display matters most: the exit code now says
+    "approvable" and only these lines say why.
+    """
     episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
     result = run("video", "check", EP, "--series", "the-brief")
     assert "fail" in result.output
     assert "Ali Abdukarim" in result.output
     assert "Framed as expectation" in result.output
-    assert result.exit_code == 1, result.output
+    assert "not verified" in result.output.lower()
+    assert result.exit_code == 0, result.output
 
 
 # --- R3 / M5, M6 — `review` shows the quote ------------------------------------------

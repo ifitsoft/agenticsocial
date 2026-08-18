@@ -247,7 +247,7 @@ def test_top_level_keys_are_exactly_the_documented_ones_in_order(series):
         # travels next to the slug it belongs to rather than at the end.
         "series_name",
         "byline",
-        "script_sha256",
+        "script_file_sha256",
         "format",
         "fps",
         "pace",
@@ -381,20 +381,24 @@ def test_fractional_frames_are_resolved_in_python(series):
 # --- identity: the plan is bound to the exact script it came from -------------
 
 
-def test_plan_carries_the_script_sha256(series):
+def test_plan_carries_the_script_file_sha256(series):
+    """Named `script_file_sha256` since Phase 7 Task 2: this is the WHOLE FILE,
+    metadata document included, and the approval's `script_sha256` is the beats
+    document alone. One key with two meanings in two files is the D-036 pattern
+    waiting for someone to compare them."""
     ep = create_episode(series, "2026-08-14")
     _script(ep, THREE)
     expected = hashlib.sha256(ep.script_path.read_bytes()).hexdigest()
     plan = build_plan(series, load_episode(series, "2026-08-14"))
-    assert plan["script_sha256"] == expected
+    assert plan["script_file_sha256"] == expected
 
 
 def test_editing_the_script_changes_the_hash(series):
     ep = create_episode(series, "2026-08-14")
     _script(ep, THREE)
-    first = build_plan(series, load_episode(series, "2026-08-14"))["script_sha256"]
+    first = build_plan(series, load_episode(series, "2026-08-14"))["script_file_sha256"]
     _script(ep, THREE.replace("That is the whole story.", "Something else."))
-    second = build_plan(series, load_episode(series, "2026-08-14"))["script_sha256"]
+    second = build_plan(series, load_episode(series, "2026-08-14"))["script_file_sha256"]
     assert first != second
 
 
@@ -410,7 +414,7 @@ def test_metadata_and_beats_come_from_the_same_read(series, monkeypatch):
     _script(ep, THREE, pace=2.0)          # disk now disagrees with the stale object
     plan = build_plan(series, loaded)
     assert plan["pace"] == 2.0            # disk wins; one read, one truth
-    assert plan["script_sha256"] == hashlib.sha256(
+    assert plan["script_file_sha256"] == hashlib.sha256(
         ep.script_path.read_bytes()
     ).hexdigest()
 

@@ -50,6 +50,32 @@ JavaScript. An unattested one blocks.
   keeps `approve` a gate rather than a pipeline. **This is the task's one real
   design decision — argue it, do not pick quietly.**
 
+
+## Ride-along: the summary line in front of this gate overclaims
+
+`agsoc video check` prints, in green:
+
+```
+the-brief/2026-08-17 · 7 claims · 6 pass · 1 manual
+7 claims verified, none open
+```
+
+**It counts as "verified" a claim the same screen calls *"attested by hand — no
+machine checked these"*.** I read that output myself without noticing, which is
+the point — the sentence is reassuring and scans as a summary of the table above
+it.
+
+This is the third overclaim found in two phases (D-106, D-110, D-112), and it
+sits directly in front of the gate you are building, which consumes exactly these
+verdicts. **Fix it here, so the gate and its summary agree by construction rather
+than by coincidence.** A `manual` is not "verified"; it is *attested*, and an
+unattested one is open.
+
+While you are there: **check whether the count and the gate can ever disagree at
+all.** If `check`'s summary and `approve`'s decision are computed independently,
+that is the D-059 shape again — two paths to one answer, one of them ungated.
+Derive them from a single function or say why you cannot.
+
 ## Rules, each with its negative half
 
 - **R1** `approve` takes identifiers and loads from disk. **Negative:** there is
@@ -82,6 +108,8 @@ JavaScript. An unattested one blocks.
 | M10 | status written without `assert_transition` | R4, D-059 |
 | M11 | `draft → approved` permitted | R4 negative |
 | M12 | refusal names no claim | R2 |
+| M13 | `check`'s summary calls a `manual` claim verified | the ride-along |
+| M14 | `check`'s count and `approve`'s decision computed independently | D-059 shape |
 
 ## Ground rules
 

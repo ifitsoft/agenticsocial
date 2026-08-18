@@ -1,0 +1,1836 @@
+"""`agsoc video approve` — the gate. Spec §8.4, §10.
+
+Every test here exists because a weaker `approve` passes without it. The table
+is in the Phase 7 Task 1 brief; the mutant number is named in each docstring.
+
+Three habits this file keeps, each because the matching mutant is a one-line
+source edit:
+
+  * **Exit code AND output AND `result.exception`** (D-035). `CliRunner`
+    converts a traceback into exit code 1 with empty output, which is
+    byte-identical to a clean refusal from the test's point of view.
+  * **Every refusal also asserts the status ON DISK did not move.** D-059 was a
+    gate that refused and a second writer that moved the status anyway; a test
+    that only reads the exit code cannot see that.
+  * **Every negative test is paired with its positive half.** A gate that
+    refuses everything kills M2-M4 and is useless.
+"""
+import ast
+import hashlib
+import inspect
+import json
+from pathlib import Path
+
+import pytest
+import yaml
+from typer.testing import CliRunner
+
+from agenticsocial.cli import app
+from agenticsocial.models import Status
+from agenticsocial.video import approve as approve_mod
+from agenticsocial.video import cli as video_cli
+from agenticsocial.video import corpus
+from agenticsocial.video import verify as V
+from agenticsocial.video.episode import load_episode, read_script
+from agenticsocial.video.series import scaffold_series
+from agenticsocial.workspace import Workspace
+
+runner = CliRunner()
+
+
+def run(*args):
+    """Invoke the CLI, and refuse to let a crash read as a clean refusal (D-035)."""
+    result = runner.invoke(app, list(args), catch_exceptions=False)
+    assert result.exception is None or isinstance(result.exception, SystemExit), (
+        f"a crash reached the runner: {result.exception!r}"
+    )
+    return result
+
+
+@pytest.fixture()
+def ws(tmp_path, monkeypatch):
+    root = tmp_path / "workspace"
+    monkeypatch.setenv("AGSOC_WORKSPACE", str(root))
+    return Workspace.init(root)
+
+
+@pytest.fixture()
+def series(ws):
+    return scaffold_series(ws, "the-brief", name="The Brief")
+
+
+EP = "2026-08-17"
+BY = "Ali Abdukarim"
+
+SOURCE = (
+    "DeepSeek's 1.6T MoE flagship quietly moved from preview to general "
+    "availability this week, then announced new pricing starting August 16 at "
+    "about $1.32 / $3.96 per 1M tokens (in/out). Alibaba's Qwen3.8-Max, at "
+    "roughly 2.4 trillion parameters with about 95B active, is the largest "
+    "open-weight release so far."
+)
+
+
+def write_script(ep, beats, status="in_review"):
+    # The id is QUOTED: `episode: 2026-08-17` unquoted is a YAML date.
+    body = yaml.safe_dump({"beats": list(beats)}, sort_keys=False, allow_unicode=True)
+    ep.script_path.write_text(
+        f"---\nepisode: '{ep.id}'\nseries: the-brief\nstatus: {status}\n---\n{body}",
+        encoding="utf-8",
+    )
+
+
+def episode(series, beats, sources=None, ep_id=EP, status="in_review"):
+    from agenticsocial.video.episode import create_episode
+
+    ep = create_episode(series, ep_id)
+    for key, text in (sources or {"local-ai-zone": SOURCE}).items():
+        corpus.write_document(
+            ep, text, url=f"https://{key}.example/x", key=key, fetched_at="2026-08-17"
+        )
+    write_script(ep, beats, status=status)
+    return load_episode(series, ep_id)
+
+
+def clean_beat(**over):
+    beat = {
+        "type": "statement",
+        "hold": 3.0,
+        "text": "DeepSeek's flagship is a 1.6T MoE model.",
+        "src": "local-ai-zone",
+        "quote": "DeepSeek's 1.6T MoE flagship quietly moved from preview",
+    }
+    beat.update(over)
+    return beat
+
+
+def fabricated_beat(**over):
+    """A figure invented in good faith, absent from the source — a `fail`."""
+    beat = {
+        "type": "statement",
+        "hold": 3.0,
+        "text": "DeepSeek's old price was $0.11 per 1M tokens.",
+        "src": "local-ai-zone",
+        "quote": "announced new pricing starting August 16",
+    }
+    beat.update(over)
+    return beat
+
+
+def custom_beat(**over):
+    beat = {
+        "type": "custom",
+        "hold": 3.0,
+        "js": "c.fillRect(0,0,10,10)",
+        "attest": "Draws the price ladder from the two figures above.",
+    }
+    beat.update(over)
+    return beat
+
+
+def check(series_slug="the-brief", ep_id=EP):
+    return run("video", "check", ep_id, "--series", series_slug)
+
+
+def approve(*extra, ep_id=EP, by=BY):
+    return run("video", "approve", ep_id, "--series", "the-brief", "--by", by, *extra)
+
+
+def status_on_disk(series, ep_id=EP):
+    """Read the status back from the FILE, never from a loaded object."""
+    meta, _, _ = read_script(series.episodes_dir / ep_id / "script.yaml")
+    return meta.get("status")
+
+
+def approval_on_disk(series, ep_id=EP):
+    meta, _, _ = read_script(series.episodes_dir / ep_id / "script.yaml")
+    return meta.get("approval")
+
+
+def ledger_path(series, ep_id=EP):
+    return series.episodes_dir / ep_id / "claims.json"
+
+
+def read_ledger_file(series, ep_id=EP):
+    return json.loads(ledger_path(series, ep_id).read_text(encoding="utf-8"))
+
+
+def write_ledger_file(series, ledger, ep_id=EP):
+    ledger_path(series, ep_id).write_text(
+        json.dumps(ledger, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
+# --- R1: the gate takes identifiers -----------------------------------------------
+
+
+def test_approve_takes_identifiers_not_objects():
+    """M1. D-072: there must be no argument a caller can shape to change the
+    verdict — no `Script`, no ledger, no pre-loaded `Episode` or `Series`."""
+    params = inspect.signature(approve_mod.approve_episode, eval_str=True).parameters
+    assert list(params) == ["ws", "series_slug", "ep_id", "by", "now"]
+    for name in ("series_slug", "ep_id", "by"):
+        assert params[name].annotation is str
+    forbidden = {"script", "ledger", "claims", "episode", "series", "records"}
+    assert forbidden.isdisjoint(params)
+
+
+def test_the_command_offers_no_way_to_supply_the_script_or_the_ledger():
+    """M1's CLI half — an option is an argument a caller can shape."""
+    result = run("video", "approve", "--help")
+    assert result.exit_code == 0
+    for flag in ("--script", "--ledger", "--claims", "--force", "--skip"):
+        assert flag not in result.output
+
+
+def test_approve_reads_the_ledger_on_disk_not_one_the_caller_computed(series):
+    """M1, behavioural. Doctoring `claims.json` to `fail` refuses even though a
+    fresh check of the same script passes — the file is the authority."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    ledger = read_ledger_file(series)
+    ledger["claims"][0]["mechanical"]["verdict"] = "fail"
+    write_ledger_file(series, ledger)
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-001" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+# --- R2: open claims refuse, and only open claims ---------------------------------
+
+
+def test_a_fail_claim_refuses_and_names_it(series):
+    """M2 and M12. A refusal that names no claim is one nobody can act on."""
+    episode(series, [clean_beat(), fabricated_beat()])
+    assert check().exit_code == 1
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-002" in result.output
+    assert "fail" in result.output
+    assert status_on_disk(series) == "in_review"
+    assert approval_on_disk(series) is None
+
+
+def test_a_no_source_claim_refuses_and_names_it(series):
+    """M3. `no_source` is not a pass: nothing was checked at all."""
+    episode(series, [{"type": "body", "hold": 3.0, "text": "Prices moved a lot."}])
+    assert check().exit_code == 1
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-001" in result.output
+    assert "no_source" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def test_an_unattested_manual_refuses_and_names_it(series):
+    """M4. `script.py` refuses an empty `attest` at load, so the unattested
+    ledger record is written by hand — which is also the case that matters: the
+    gate reads the FILE, and an attestation lost between check and file is
+    unattested to everyone who reads the file."""
+    episode(series, [clean_beat(), custom_beat()])
+    assert check().exit_code == 0
+    ledger = read_ledger_file(series)
+    manual = [r for r in ledger["claims"] if r["mechanical"]["verdict"] == "manual"]
+    assert len(manual) == 1
+    manual[0]["mechanical"]["attest"] = "   "
+    write_ledger_file(series, ledger)
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-002" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def test_an_attested_manual_approves(series):
+    """M5, R2's negative half. D-088: an attested `custom` beat passes on a
+    human's signed sentence. If it blocked, `custom` would be unusable."""
+    episode(series, [clean_beat(), custom_beat()])
+    assert check().exit_code == 0
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert status_on_disk(series) == "approved"
+
+
+def test_an_entity_miss_does_not_block(series):
+    """M6, D-102. 35% of entity atoms on the real brief are unfindable and not
+    one was a real error; gating them refuses 62% of correct beats."""
+    episode(
+        series,
+        [
+            clean_beat(
+                text="Anthropic's flagship moved to general availability.",
+                quote="quietly moved from preview to general availability",
+            )
+        ],
+    )
+    assert check().exit_code == 0
+    record = read_ledger_file(series)["claims"][0]
+    assert record["mechanical"]["entities_missing"], "precondition: a miss is recorded"
+    assert record["mechanical"]["verdict"] == "pass"
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert status_on_disk(series) == "approved"
+
+
+def test_an_unknown_verdict_fails_closed(series):
+    """Own sweep. `is_blocking` used to answer "not blocking" for any verdict it
+    did not recognise — the D-106 shape: a value the rule cannot read treated as
+    "nothing to check" rather than "cannot be checked"."""
+    assert V.is_blocking({"mechanical": {"verdict": "ok"}}) is True
+    assert V.is_blocking({"mechanical": {}}) is True
+    assert V.is_blocking({}) is True
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    ledger = read_ledger_file(series)
+    ledger["claims"][0]["mechanical"]["verdict"] = "supported"  # a Phase 9 verdict
+    write_ledger_file(series, ledger)
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert status_on_disk(series) == "in_review"
+
+
+# --- R3: the ledger must describe THIS script ------------------------------------
+
+
+def test_an_absent_ledger_refuses_and_says_what_to_run(series):
+    """M8. Approving with no check at all is the defect in its purest form."""
+    episode(series, [clean_beat()])
+    assert not ledger_path(series).exists()
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "check" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def test_a_stale_ledger_refuses_distinguishably_from_an_open_claim(series):
+    """M7 and R3. The script moved under the ledger: every verdict still lines
+    up by `beat_index` and is now about a sentence nobody wrote."""
+    ep = episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    write_script(
+        ep,
+        [clean_beat(text="DeepSeek's flagship is a 1.6T mixture-of-experts model.")],
+    )
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "changed" in result.output
+    assert "check" in result.output
+    assert "open claim" not in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def test_a_stale_corpus_refuses(series):
+    """M7's other half — the bytes the claim was checked AGAINST moved."""
+    ep = episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    corpus.write_document(
+        ep,
+        SOURCE.replace("1.6T", "1.9T"),
+        url="https://local-ai-zone.example/x",
+        key="local-ai-zone",
+        fetched_at="2026-08-17",
+        replace=True,
+    )
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "corpus" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def test_a_current_clean_ledger_approves(series):
+    """R3's negative half, and the whole point of the command."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert "approved" in result.output
+    assert status_on_disk(series) == "approved"
+
+
+# --- R4: what an approval records, and the transition it makes --------------------
+
+
+def test_approval_records_the_approver_and_the_digest(series):
+    """R4. The record is a visible diff in the file you commit — the same
+    property §8.4 demands of an override."""
+    episode(series, [clean_beat()])
+    check()
+    result = approve()
+    assert result.exit_code == 0, result.output
+    record = approval_on_disk(series)
+    assert record["by"] == BY
+    assert record["at"]
+    assert len(record["script_sha256"]) == 64
+    ledger = read_ledger_file(series)
+    assert record["corpus_sha"] == ledger["corpus_sha"]
+    assert record["claims_checked_at"] == ledger["checked_at"]
+
+
+def test_script_sha256_is_over_the_beats_document_not_the_whole_file(series):
+    """M9 — "recorded over the wrong bytes".
+
+    The whole file carries the status and the approval record itself, so a
+    whole-file digest is either self-invalidating or invalidated by the
+    pipeline's own next transition (`approved → rendering` rewrites the status).
+    The beats document is the thing the viewer sees, and it is re-emitted
+    verbatim by every status write.
+    """
+    ep = episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0
+    recorded = approval_on_disk(series)["script_sha256"]
+
+    _, beats_text, _ = read_script(ep.script_path)
+    assert recorded == hashlib.sha256(beats_text.encode("utf-8")).hexdigest()
+    assert recorded != hashlib.sha256(ep.script_path.read_bytes()).hexdigest()
+
+
+def test_the_recorded_digest_still_matches_after_the_approval_write(series):
+    """M9. An approval whose own write invalidates its digest binds nothing."""
+    episode(series, [clean_beat()])
+    check()
+    approve()
+    recorded = approval_on_disk(series)["script_sha256"]
+    assert approve_mod.beats_sha256(load_episode(series, EP)) == recorded
+
+
+def test_editing_the_beats_changes_the_digest(series):
+    """M9's negative half: a digest that never moves detects no drift."""
+    ep = episode(series, [clean_beat()])
+    check()
+    approve()
+    before = approval_on_disk(series)["script_sha256"]
+    write_script(ep, [clean_beat(hold=4.0)], status="approved")
+    assert approve_mod.beats_sha256(load_episode(series, EP)) != before
+
+
+def test_approving_does_not_invalidate_the_check_it_approved(series):
+    """The write must be invisible to `stale_reason`, or the episode is stale
+    the instant it is approved and Phase 8 refuses to render anything ever."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0
+    ep = load_episode(series, EP)
+    assert V.stale_reason(ep, V.read_ledger(ep)) is None
+    again = check()
+    assert again.exit_code == 0, again.output
+
+
+def test_approving_preserves_the_beats_bytes_exactly(series):
+    """D-026/D-031: the approval write must not reflow or re-encode the beats.
+    CRLF is the case that has bitten this project before."""
+    ep = episode(series, [clean_beat()])
+    raw = ep.script_path.read_bytes()
+    ep.script_path.write_bytes(raw.replace(b"\n", b"\r\n"))
+    check()
+    _, before, _ = read_script(ep.script_path)
+    assert approve().exit_code == 0, "precondition: the episode is approvable"
+    _, after, _ = read_script(ep.script_path)
+    assert after == before
+    assert "\r\n" in after
+
+
+def test_approving_from_draft_refuses(series):
+    """M11, R4's negative half. §10 has no `draft → approved` edge: the agent
+    writes `in_review` and stops, and that hand-off is what `approve` gates."""
+    episode(series, [clean_beat()], status="draft")
+    assert check().exit_code == 0
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "draft" in result.output
+    assert status_on_disk(series) == "draft"
+    assert approval_on_disk(series) is None
+
+
+def test_approving_twice_refuses(series):
+    """M11's sibling: `approved → approved` is not an edge either, so a second
+    approval cannot silently restamp a digest over an edited script."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "approved" in result.output
+
+
+def test_the_approver_must_be_named(series):
+    """The decision, pinned: identity is asserted by a human, never inferred.
+    A blank `--by` is a signature nobody wrote."""
+    episode(series, [clean_beat()])
+    check()
+    result = approve(by="   ")
+    assert result.exit_code == 1, result.output
+    assert "--by" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def test_by_is_required(series):
+    """Omitting it must not fall back to the series byline or the OS user."""
+    episode(series, [clean_beat()])
+    check()
+    result = runner.invoke(
+        app, ["video", "approve", EP, "--series", "the-brief"], catch_exceptions=False
+    )
+    assert result.exit_code != 0
+    assert status_on_disk(series) == "in_review"
+
+
+def test_the_byline_is_not_used_as_the_approver(series):
+    """The series `byline` is a display credit on the frame, not an
+    accountability record — and it is empty in the real workspace."""
+    toml = series.dir / "series.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8").replace('byline = ""', 'byline = "The Brief"'),
+        encoding="utf-8",
+    )
+    episode(series, [clean_beat()])
+    check()
+    approve(by="Someone Else")
+    assert approval_on_disk(series)["by"] == "Someone Else"
+
+
+# --- R5: there is no second status writer -----------------------------------------
+
+
+SRC = Path(__file__).resolve().parent.parent / "src" / "agenticsocial"
+
+
+def _status_writers() -> set[str]:
+    """Every `<mapping>["status"] = ...` in `src/`, as `module:function`."""
+    found = set()
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+
+        def walk(node, where):
+            for child in ast.iter_child_nodes(node):
+                name = where
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    name = child.name
+                if isinstance(child, ast.Assign):
+                    for target in child.targets:
+                        if (
+                            isinstance(target, ast.Subscript)
+                            and isinstance(target.slice, ast.Constant)
+                            and target.slice.value == "status"
+                        ):
+                            found.add(
+                                f"{path.relative_to(SRC).as_posix()}:{name}"
+                            )
+                walk(child, name)
+
+        walk(tree, "<module>")
+    return found
+
+
+def test_only_two_functions_write_a_status_key(series):
+    """R5, mechanised. D-059's root cause was a SECOND, ungated status writer —
+    found only because someone enumerated them. This is that enumeration, run on
+    every commit instead of once in a report.
+
+    `workspace.save_variant` is on the list and is not a hole: it writes back
+    the status it read from disk, precisely so it cannot stamp a forged one.
+    """
+    assert _status_writers() == {
+        "workspace.py:save_variant",
+        "workspace.py:set_status",
+        "video/episode.py:set_status",
+    }
+
+
+def test_the_gate_does_not_write_the_script_itself(series):
+    """R5. `approve.py` must reach disk only through `episode.set_status`, which
+    re-reads the status it gates on. A convenience write here is D-059."""
+    source = (SRC / "video" / "approve.py").read_text(encoding="utf-8")
+    assert "atomic_write" not in source
+    assert '"status"' not in source
+    assert "set_status" in source
+
+
+def test_the_video_cli_never_writes_a_status_outside_the_gate(series):
+    """R5. Every `set_status` call in the video CLI belongs to `approve`."""
+    source = (SRC / "video" / "cli.py").read_text(encoding="utf-8")
+    assert "set_status" not in source
+
+
+# --- the ride-along: `check`'s summary and the gate must agree --------------------
+
+
+def test_check_does_not_call_a_manual_claim_verified(series):
+    """M13, D-112. The green line counted as "verified" a claim the same screen
+    calls "attested by hand — no machine checked these"."""
+    episode(series, [clean_beat(), custom_beat()])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "2 claims verified" not in result.output
+    assert "1 verified" in result.output
+    assert "attested" in result.output
+    assert "none open" in result.output
+
+
+def test_check_still_says_verified_when_everything_was_machine_checked(series):
+    """M13's negative half — the honest line must survive the fix."""
+    episode(series, [clean_beat()])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "1 claim verified" in result.output
+
+
+def test_the_summary_and_the_gate_share_one_predicate(series):
+    """M14. Two paths to one answer, one of them ungated, is the D-059 shape."""
+    assert video_cli.is_blocking is V.is_blocking
+
+
+@pytest.mark.parametrize(
+    "record,expected",
+    [
+        ({"mechanical": {"verdict": "pass"}}, "verified"),
+        ({"mechanical": {"verdict": "manual", "attest": "it draws x"}}, "attested"),
+        ({"mechanical": {"verdict": "manual", "attest": " "}}, "open"),
+        ({"mechanical": {"verdict": "fail"}}, "open"),
+        ({"mechanical": {"verdict": "no_source"}}, "open"),
+        ({"mechanical": {"verdict": "refuted"}}, "open"),
+        ({"mechanical": {"verdict": "pass"}, "override": {"by": "x"}}, "verified"),
+    ],
+)
+def test_classify_and_is_blocking_cannot_disagree(record, expected):
+    """M14. One record, one classification, and `is_blocking` is derived from
+    it rather than restating the list of verdicts a second time."""
+    assert V.classify(record) == expected
+    assert V.is_blocking(record) is (expected == "open")
+
+
+def test_every_claim_is_counted_exactly_once(series):
+    """M14. Verified + attested + open == total, so no summary can round toward
+    reassurance by dropping a claim from the denominator (D-112)."""
+    episode(series, [clean_beat(), fabricated_beat(), custom_beat()])
+    check()
+    records = read_ledger_file(series)["claims"]
+    counts = [V.classify(r) for r in records]
+    assert len(counts) == 3
+    assert counts.count("verified") + counts.count("attested") + counts.count(
+        "open"
+    ) == len(records)
+    assert sorted(counts) == ["attested", "open", "verified"]
+
+
+# --- refusals an operator can act on ----------------------------------------------
+
+
+def test_the_refusal_says_what_to_do_about_the_claim(series):
+    """M12 / D-040: a checker that refuses without teaching trains an operator
+    to override everything."""
+    episode(series, [fabricated_beat()])
+    assert check().exit_code == 1
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "fix" in result.output
+    assert "quote" in result.output
+
+
+def test_an_unknown_episode_fails_cleanly(series):
+    result = approve(ep_id="nope")
+    assert result.exit_code == 1, result.output
+    assert "nope" in result.output
+
+
+def test_an_unknown_series_fails_cleanly(ws):
+    result = run("video", "approve", EP, "--series", "ghost", "--by", BY)
+    assert result.exit_code == 1, result.output
+    assert "ghost" in result.output
+
+
+def test_an_episode_that_asserts_nothing_says_so(series):
+    """A script of only exempt beats produces an empty ledger. `check` exits 0
+    on it, so `approve` must too — but the screen has to say that the gate
+    checked nothing, or "approved" reads as "verified"."""
+    episode(
+        series,
+        [
+            {"type": "title", "hold": 3.0, "text": "The Brief", "kicker": "Aug 17"},
+            {"type": "signoff", "hold": 3.0, "text": "See you tomorrow"},
+        ],
+    )
+    assert check().exit_code == 0
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert "asserts nothing" in result.output
+    assert status_on_disk(series) == "approved"
+
+
+def test_approve_never_moves_a_status_it_did_not_gate(series):
+    """D-059's closing question, as a test: after every refusal in this file the
+    status is untouched — this one checks the ledger is untouched too, so a
+    refused approval cannot leave a half-written record behind."""
+    episode(series, [fabricated_beat()])
+    check()
+    before = ledger_path(series).read_bytes()
+    assert approve().exit_code == 1
+    assert ledger_path(series).read_bytes() == before
+    assert status_on_disk(series) == "in_review"
+    assert Status(status_on_disk(series)) is Status.IN_REVIEW
+
+
+def test_the_extra_record_cannot_smuggle_a_status(series):
+    """R5. `set_status` gained a second parameter in this task, and a parameter
+    that reaches the metadata document is a status writer unless the write order
+    forbids it: merge the record FIRST, then set the status from `target`.
+
+    Reversed, `approve` — or anything else with a dict — writes any status it
+    likes through the one function this project trusts. That is D-059 rebuilt
+    inside the fix for D-059.
+    """
+    from agenticsocial.video.episode import set_status
+
+    episode(series, [clean_beat()], status="draft")
+    ep = load_episode(series, EP)
+    set_status(ep, Status.IN_REVIEW, {"status": "published", "note": "kept"})
+    assert status_on_disk(series) == "in_review"
+    meta, _, _ = read_script(ep.script_path)
+    assert meta["note"] == "kept"
+
+
+def test_approve_does_not_resolve_a_partial_episode_id(series):
+    """The gate names its subject exactly. `resolve_episode`'s substring match
+    is right for `review`, which shows you what it found; here the thing it
+    might find is an approval of an episode nobody named."""
+    episode(series, [clean_beat()])
+    check()
+    result = approve(ep_id="2026-08-1")
+    assert result.exit_code == 1, result.output
+    assert status_on_disk(series) == "in_review"
+
+
+# --- Part A: §8.4's override, applied ---------------------------------------------
+#
+# Task 1 recorded an override and consumed nothing. `check` told the operator
+# *"`approve` is what reads an override"* while `approve` read no such thing —
+# a promise, not a description. These tests are what makes the sentence true.
+#
+# The asymmetry §8.4 states is the whole design: *passing verification is
+# automatic; bypassing it costs you a written sentence with your name on it.*
+# So every test here has two halves — the sentence clears its claim, and
+# anything less than a sentence with a name on it clears nothing.
+
+OVERRIDE = {
+    "reason": "Framed as expectation, not fact; 'widely expected' is my read of "
+    "three sourced analyst quotes, not a claim the article makes.",
+    "by": BY,
+}
+
+
+def test_an_override_clears_the_claim_it_names(series):
+    """R1. The whole of Part A: a `fail` plus a written sentence approves.
+
+    Task 1's `test_an_override_does_not_clear_a_fail_in_this_task` is the
+    negative this replaces — it pinned the scope of that task, not a property.
+    """
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    assert check().exit_code == 0, "the override clears the claim on check too"
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert status_on_disk(series) == "approved"
+
+
+def test_an_override_clears_exactly_the_claim_it_names(series):
+    """M1. An override on one claim must not clear the claim beside it — the
+    two beats are the same type, the same source and the same shape of failure,
+    so an implementation that clears "the beat" or "a failing claim" passes on
+    everything except which id it names."""
+    episode(
+        series,
+        [
+            fabricated_beat(),
+            fabricated_beat(
+                text="DeepSeek's old price was $0.12 per 1M tokens.",
+                claim_override=dict(OVERRIDE),
+            ),
+        ],
+    )
+    assert check().exit_code == 1
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-001" in result.output
+    assert "c-002" not in result.output, "the overridden claim was re-opened"
+    assert status_on_disk(series) == "in_review"
+
+
+def test_an_override_does_not_clear_the_episode(series):
+    """M2. One written sentence buys one claim. The unattested `custom` beat is
+    a different KIND of open claim, so an override that clears the episode —
+    or that clears "everything after it" — shows up here and nowhere else."""
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE)), custom_beat()])
+    assert check().exit_code == 0, "precondition: both claims clear"
+    # `script.py` refuses a blank `attest` at load, so the unattested manual is
+    # made in the LEDGER — which is the artifact the gate reads anyway, and an
+    # attestation lost between the check and the file is lost to every reader.
+    ledger = read_ledger_file(series)
+    ledger["claims"][1]["mechanical"]["attest"] = "   "
+    write_ledger_file(series, ledger)
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-002" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"reason": "   ", "by": BY},
+        {"reason": "it is fine", "by": ""},
+        {"reason": "it is fine"},
+        {"by": BY},
+        "it is fine, trust me",
+        {"reason": "it is fine", "by": BY, "approved": True},
+        {},
+        [],
+    ],
+    ids=[
+        "blank-reason",
+        "blank-by",
+        "no-by",
+        "no-reason",
+        "bare-string",
+        "unknown-key",
+        "empty-mapping",
+        "not-a-mapping",
+    ],
+)
+def test_an_override_that_is_not_a_sentence_with_a_name_clears_nothing(series, bad):
+    """M3, at the gate rather than at the loader.
+
+    `script.py` refuses these at load (D-103), but `claims.json` is a file on
+    disk and the gate reads the LEDGER. A gate that trusts the loader to have
+    already refused is a gate that clears a claim on `{}` the moment anyone
+    hand-edits the artifact — and `approved: true` sitting beside a reason
+    nobody reads is the checkbox §8.4 says this must never be.
+    """
+    episode(series, [fabricated_beat()])
+    assert check().exit_code == 1
+    ledger = read_ledger_file(series)
+    ledger["claims"][0]["override"] = bad
+    write_ledger_file(series, ledger)
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "c-001" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def _screen(result) -> str:
+    """The output, minus the `wrote <path>` line — pytest's tmp directories are
+    named after the test, so a test about the word "override" writes it into
+    every path it prints. Lowercased, because these assertions are about words
+    a human reads, not about capitalisation."""
+    return "\n".join(
+        line for line in result.output.splitlines() if not line.startswith("wrote ")
+    ).lower()
+
+
+def test_an_absent_override_is_normal_and_silent(series):
+    """M3's negative half. Overrides are rare; a screen that mentions them on
+    every clean run is a screen whose mention gets tuned out."""
+    episode(series, [clean_beat()])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "override" not in _screen(result), result.output
+    approved = approve()
+    assert approved.exit_code == 0, approved.output
+    assert "override" not in _screen(approved), approved.output
+
+
+def test_an_overridden_claim_is_not_verified(series):
+    """M4. It is its own state. "Cleared by a person" and "checked by a machine"
+    are the two things this project exists to keep apart (D-088's argument, one
+    door along), and a summary that collapses them is D-112's overclaim."""
+    record = {"mechanical": {"verdict": "fail"}, "override": dict(OVERRIDE)}
+    assert V.classify(record) == "overridden"
+    assert V.is_blocking(record) is False
+
+
+def test_the_approval_record_counts_an_override_separately(series):
+    """M4 in the artifact. The committed diff must not say "1 of 1 verified"
+    about a claim a machine refused."""
+    episode(series, [clean_beat(), fabricated_beat(claim_override=dict(OVERRIDE))])
+    assert check().exit_code == 0
+    assert approve().exit_code == 0, "precondition"
+    counted = approval_on_disk(series)["claims"]
+    assert counted == {"total": 2, "verified": 1, "attested": 0, "overridden": 1}
+
+
+def test_the_approval_names_every_claim_it_cleared_by_override(series):
+    """§8.4's accountability, carried into the record a human commits. A count
+    says how many sentences were spent; only the ids and the names say which
+    claims are standing on a person rather than on a source."""
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    overrides = approval_on_disk(series)["overrides"]
+    assert overrides == [{"id": "c-001", "by": BY, "reason": OVERRIDE["reason"]}]
+
+
+def test_the_approve_screen_does_not_call_an_overridden_episode_verified(series):
+    """M4 on the screen — and the screen is the deliverable (D-104). The exit
+    code is read by a machine; this line is read by the person who signed."""
+    episode(series, [clean_beat(), fabricated_beat(claim_override=dict(OVERRIDE))])
+    check()
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert "2 of 2 verified" not in result.output
+    assert "1 of 2 verified" in result.output
+    assert "cleared by override, not verified" in result.output
+    # The sentence and the name, on the screen of the person signing for them.
+    assert "c-002" in result.output
+    assert "Framed as expectation" in result.output
+    assert BY in result.output
+
+
+def test_an_overridden_claim_does_not_block(series):
+    """M5, R3's negative half. A state that is distinguishable everywhere and
+    still refuses is not an override, it is a slower refusal."""
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "not verified" in _screen(result)
+    assert "fail" in result.output, "the measurement is still on the screen"
+
+
+def test_the_override_rate_is_on_the_screen(series):
+    """M11 / D-040. A high override rate means the checker is wrong, not the
+    operator — and nobody can notice a rate that is never printed. It is on
+    BOTH screens because `check` is where the operator decides to write one and
+    `approve` is where they sign for it."""
+    episode(series, [clean_beat(), fabricated_beat(claim_override=dict(OVERRIDE))])
+    checked = check()
+    assert checked.exit_code == 0, checked.output
+    assert "override rate" in checked.output
+    assert "1 of 2" in checked.output
+    approved = approve()
+    assert approved.exit_code == 0, approved.output
+    assert "override rate" in approved.output
+
+
+def test_the_override_rate_is_not_printed_when_there_are_none(series):
+    """M11's negative half — `override rate 0%` on every clean run is noise,
+    and noise is what the rate has to cut through when it matters."""
+    episode(series, [clean_beat()])
+    assert "override rate" not in check().output
+
+
+def test_an_override_on_a_claim_that_passes_anyway_is_flagged_stale(series):
+    """The decision this task had to make, pinned. A stale override is a
+    written sentence about a problem that no longer exists; leaving it silent is
+    how the sentence stops meaning anything. It WARNS and does not refuse —
+    refusing would make the remedy "delete the paragraph you wrote", which
+    inverts §8.4's cost asymmetry."""
+    episode(series, [clean_beat(claim_override=dict(OVERRIDE))])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "stale" in _screen(result)
+    assert "c-001" in result.output
+    approved = approve()
+    assert approved.exit_code == 0, approved.output
+    assert status_on_disk(series) == "approved"
+    assert approval_on_disk(series)["claims"] == {
+        "total": 1,
+        "verified": 1,
+        "attested": 0,
+        "overridden": 0,
+    }
+    # And the record does not credit the bypass with a claim it did not carry.
+    assert "overrides" not in approval_on_disk(series)
+
+
+def test_a_stale_override_is_not_reported_on_a_claim_it_clears(series):
+    """The negative half of the stale warning: an override that is doing its
+    job must not be nagged about, or the warning is one more line to skip."""
+    episode(series, [fabricated_beat(claim_override=dict(OVERRIDE))])
+    result = check()
+    assert result.exit_code == 0, result.output
+    assert "stale" not in _screen(result)
+
+
+def test_an_override_clears_an_unattested_manual_claim(series):
+    """A `custom` beat with no `attest` but a written override: the override is
+    strictly MORE than an attestation — a sentence plus a name — so refusing it
+    would mean the weaker artifact clears and the stronger one does not."""
+    episode(series, [custom_beat(claim_override=dict(OVERRIDE))])
+    assert check().exit_code == 0
+    ledger = read_ledger_file(series)
+    ledger["claims"][0]["mechanical"]["attest"] = "   "
+    write_ledger_file(series, ledger)
+    assert approve().exit_code == 0
+    assert approval_on_disk(series)["claims"] == {
+        "total": 1,
+        "verified": 0,
+        "attested": 0,
+        "overridden": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    "record,expected",
+    [
+        ({"mechanical": {"verdict": "pass"}, "override": dict(OVERRIDE)}, "verified"),
+        (
+            {
+                "mechanical": {"verdict": "manual", "attest": "it draws x"},
+                "override": dict(OVERRIDE),
+            },
+            "attested",
+        ),
+        ({"mechanical": {"verdict": "fail"}, "override": dict(OVERRIDE)}, "overridden"),
+        ({"mechanical": {"verdict": "no_source"}, "override": dict(OVERRIDE)}, "overridden"),
+        ({"mechanical": {"verdict": "refuted"}, "override": dict(OVERRIDE)}, "overridden"),
+        ({"mechanical": {}, "override": dict(OVERRIDE)}, "overridden"),
+        ({"mechanical": {"verdict": "fail"}, "override": {"by": BY}}, "open"),
+        ({"mechanical": {"verdict": "fail"}, "override": None}, "open"),
+    ],
+    ids=[
+        "pass-wins",
+        "attested-wins",
+        "fail",
+        "no_source",
+        "unknown-phase-9-verdict",
+        "no-mechanical-block",
+        "malformed",
+        "absent",
+    ],
+)
+def test_classify_answers_the_override_too(record, expected):
+    """M6/M10. One record, one answer, four states — and the MEASUREMENT wins
+    where it is clean, so an override never has to be deleted to make a passing
+    claim read as passing."""
+    assert V.classify(record) == expected
+    assert V.is_blocking(record) is (expected == "open")
+
+
+def test_the_gate_and_every_screen_share_one_classify():
+    """M10. Not "they agree" — the same object. A wrapper is where two answers
+    to one question drift apart (D-059)."""
+    assert video_cli.classify is V.classify
+    assert video_cli.is_blocking is V.is_blocking
+
+
+def test_only_verify_reads_a_claims_override():
+    """M10, mechanised. Any module that reads `record["override"]` for itself
+    is a second place §8.4's rule is spelled out, and the first time the two
+    disagree is the first time a checkbox clears a claim.
+
+    Enumerated over the AST rather than by grep, so that a docstring, a comment
+    or the display LABEL `override` does not count — only an actual read of the
+    field: `record["override"]`, `record.get("override")` and friends.
+    """
+    import agenticsocial.video as pkg
+
+    def reads_the_field(node) -> bool:
+        if isinstance(node, ast.Subscript):
+            index = node.slice
+            return isinstance(index, ast.Constant) and index.value == "override"
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"get", "pop", "setdefault"}
+            and node.args
+        ):
+            first = node.args[0]
+            return isinstance(first, ast.Constant) and first.value == "override"
+        return False
+
+    root = Path(pkg.__file__).parent
+    offenders = {}
+    for path in sorted(root.glob("*.py")):
+        if path.name == "verify.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found = [node for node in ast.walk(tree) if reads_the_field(node)]
+        if found:
+            offenders[path.name] = len(found)
+    assert offenders == {}, offenders
+
+
+# --- Part B: drift, and the edit only the digest can see ----------------------------
+#
+# §10, and it is deliberately stricter than the text pipeline: *a render is
+# expensive and a video is harder to retract.*
+#
+#   > `approve` records `script_sha256`, and `render` refuses if the script has
+#   > changed since approval, naming the drift.
+#
+# `render` is Phase 8. The refusal is built here, as a check with its own tests,
+# and Phase 8 wires the command into it — a stubbed command would be a second
+# place the rule lives before the rule has a caller.
+
+
+def jump_beat(**over):
+    """A chart whose bars are drawn from `before`/`after` against `scale`.
+
+    `scale` is the field this half of the task exists for: it is not a claim
+    (`claims.COLLECTORS` maps `positive_number` to `None`, deliberately — it
+    reaches no sentence), so editing it changes every bar on the frame while
+    every claim still verifies and no number anywhere is wrong.
+    """
+    beat = {
+        "type": "jumpChart",
+        "hold": 4.0,
+        "rows": [{"label": "V4-Pro", "before": 1.32, "after": 3.96}],
+        "scale": 5,
+        "footnote": "per 1M tokens",
+        "src": "local-ai-zone",
+        "quote": "about $1.32 / $3.96 per 1M tokens",
+    }
+    beat.update(over)
+    return beat
+
+
+def edit_script(series, transform, ep_id=EP):
+    """Rewrite the beats document the way an operator would: load, change one
+    thing, write it back. The metadata document — status, approval — is left
+    exactly as it was, which is the state drift detection exists to find."""
+    path = series.episodes_dir / ep_id / "script.yaml"
+    meta_text, beats_text, _ = read_script(path)
+    beats = yaml.safe_load(beats_text)
+    transform(beats)
+    head = yaml.safe_dump(meta_text, sort_keys=False, allow_unicode=True).strip()
+    body = yaml.safe_dump(beats, sort_keys=False, allow_unicode=True)
+    path.write_text(f"---\n{head}\n---\n{body}", encoding="utf-8")
+
+
+def drift(series, ep_id=EP):
+    return approve_mod.approval_drift(load_episode(series, ep_id))
+
+
+def test_an_approval_binds_the_bytes_it_approved(series):
+    """R4's precondition. An approval that reports drift against the very bytes
+    it just signed is an alarm nobody can turn off, and an alarm nobody can turn
+    off is one everybody turns off."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0
+    assert drift(series) is None
+
+
+def test_editing_the_script_after_approval_is_detected(series):
+    """M6. The one thing §10 asks for."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    assert drift(series) is not None
+
+
+def test_the_drift_names_itself(series):
+    """M7. "Changed" is a true statement and a useless one. The message has to
+    carry what moved, what was signed, what is there now, and who signed it —
+    an operator reading it should not have to open the file to learn which of
+    the two answers is the one they meant."""
+    episode(series, [clean_beat()])
+    check()
+    record = None
+    assert approve().exit_code == 0, "precondition"
+    record = approval_on_disk(series)
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    message = drift(series)
+    assert "beats" in message
+    assert record["script_sha256"] in message, "the digest that was signed"
+    assert BY in message and record["at"] in message, "who signed it, and when"
+    from agenticsocial.video.episode import beats_sha256
+
+    assert beats_sha256(load_episode(series, EP)) in message, "what is there now"
+
+
+def test_editing_only_a_charts_scale_is_caught(series):
+    """M8 / R5 — the case Phase 5 named, and the reason the digest exists.
+
+    `scale` shifts every bar on the frame. It is in no claim, so every claim
+    still verifies; it is in no source, so `corpus_sha` is unchanged; it is not
+    a number anyone typed wrong, so no numeric check can object. `stale_reason`
+    — both halves of it, corpus AND claims — answers "this ledger is current",
+    correctly.
+
+    Only the digest can see it. If this test is the one that fails, the
+    approval has stopped meaning "these bytes" and started meaning "these
+    sentences", and the difference is a chart the approver never saw.
+    """
+    episode(series, [jump_beat()])
+    assert check().exit_code == 0, "precondition: the chart's figures verify"
+    assert approve().exit_code == 0, "precondition"
+    before = read_ledger_file(series)
+
+    edit_script(series, lambda b: b["beats"][0].update(scale=25))
+
+    ep = load_episode(series, EP)
+    assert check().exit_code == 0, "the claims still verify — nothing is wrong"
+    after = read_ledger_file(series)
+    assert after["claims"] == before["claims"], "not one verdict moved"
+    assert after["corpus_sha"] == before["corpus_sha"], "the corpus never moved"
+    assert verify_mod_stale(ep) is None, "the ledger is current, and it is"
+    assert drift(series) is not None, "and the frame is not the one that was signed"
+
+
+def verify_mod_stale(ep):
+    return V.stale_reason(ep, V.read_ledger(ep))
+
+
+def test_a_status_change_is_not_drift(series):
+    """M9. The reason the digest covers the beats document and not the file.
+
+    `approved → rendering` rewrites `status` in the metadata document. Under a
+    whole-file digest, Phase 8's own first move would invalidate the approval it
+    is acting on, and `failed → rendering` would report drift that never
+    happened — an alarm that fires on the pipeline's own churn.
+    """
+    from agenticsocial.video.episode import set_status
+
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    set_status(load_episode(series, EP), Status.RENDERING)
+    assert status_on_disk(series) == "rendering"
+    assert drift(series) is None
+
+
+def test_drift_names_a_pace_change_the_digest_cannot_cover(series):
+    """`pace` lives in the metadata document, so it is OUTSIDE the digest by
+    construction — and it multiplies every hold, which is the whole runtime of
+    the video. `approve` records it beside the digest rather than pretending the
+    hash covered it, and this is the half that reads it back."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["pace"] = 1.4
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    message = drift(series)
+    assert "pace" in message
+    assert "1.4" in message
+
+
+def test_an_episode_with_no_approval_fails_closed(series):
+    """The check answers "do these bytes carry a signature", so "no signature at
+    all" is an answer it must give rather than a case it must be asked about
+    separately. D-106's shape, pre-empted: a caller that reads `None` as "fine"
+    renders an episode nobody ever approved."""
+    episode(series, [clean_beat()])
+    message = drift(series)
+    assert message is not None
+    assert "approval" in message
+
+
+def test_drift_is_read_from_disk_not_from_the_object_it_was_handed(series):
+    """D-072, in the form this check needs. A caller holding an `Episode` loaded
+    before the edit must not be able to make the drift disappear by handing it
+    over — that is exactly the shape of the bypass that published a draft."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    stale_object = load_episode(series, EP)
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    assert approve_mod.approval_drift(stale_object) is not None
+
+
+def test_re_approving_after_an_intentional_edit_clears_the_drift(series):
+    """M12, R4's negative half. Drift is not a trap you cannot escape: the way
+    out is the way in — edit, mark `in_review`, check, approve — and the new
+    approval binds the new bytes."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    first = approval_on_disk(series)["script_sha256"]
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    assert drift(series) is not None, "precondition: it drifted"
+
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["status"] = "in_review"
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+
+    assert check().exit_code == 0
+    assert approve().exit_code == 0
+    assert approval_on_disk(series)["script_sha256"] != first
+    assert drift(series) is None
+
+
+def test_a_script_with_no_beats_document_is_drift_not_a_traceback(series):
+    """Fails closed on a file it cannot hash. `render` must get an answer it can
+    refuse on, not an exception it might catch as "no drift"."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, _, _ = read_script(path)
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n", encoding="utf-8")
+    assert drift(series) is not None
+
+
+def test_check_says_when_an_approval_no_longer_describes_the_script(series):
+    """M7 at the only place an operator can see it before Phase 8. An approval
+    that stopped being true is otherwise visible to nothing until the render —
+    which is the expensive step §10 wrote this rule to protect."""
+    episode(series, [jump_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    edit_script(series, lambda b: b["beats"][0].update(scale=25))
+    checked = check()
+    assert "approval" in checked.output.lower()
+    assert "changed" in checked.output.lower()
+    reviewed = run("video", "review", EP, "--series", "the-brief")
+    assert "changed" in reviewed.output.lower()
+
+
+def test_no_drift_banner_on_an_episode_that_has_not_drifted(series):
+    """The negative half. A banner on every approved episode is a banner nobody
+    reads by the time one of them is true; a banner on every DRAFT is worse,
+    because "not approved yet" is the normal state of a fresh script."""
+    episode(series, [clean_beat()])
+    first = check()
+    assert "approval" not in first.output.lower(), first.output
+    assert approve().exit_code == 0
+    second = check()
+    assert "no longer" not in second.output.lower(), second.output
+
+
+def test_the_plan_and_the_approval_do_not_share_a_key_name(series):
+    """D-036, named by Task 1 and fixed here. `plan.json` carried
+    `script_sha256` over the WHOLE FILE while the approval carries it over the
+    BEATS — one key, two meanings, in two files someone will eventually compare.
+
+    The approval's name is the one that stays: §10 names the field for the
+    approval, and it is the one an operator reads. `plan.json`'s becomes
+    `script_file_sha256`, which is what it has always measured.
+    """
+    from agenticsocial.video.episode import beats_sha256
+    from agenticsocial.video.plan import build_plan
+
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    ep = load_episode(series, EP)
+    plan = build_plan(series, ep)
+    assert "script_sha256" not in plan
+    whole_file = hashlib.sha256(ep.script_path.read_bytes()).hexdigest()
+    assert plan["script_file_sha256"] == whole_file
+    assert approval_on_disk(series)["script_sha256"] == beats_sha256(ep)
+    assert plan["script_file_sha256"] != approval_on_disk(series)["script_sha256"]
+
+
+# --- what the sweep found ---------------------------------------------------------
+
+
+def test_drift_uses_the_approval_on_disk_not_the_one_in_hand(series):
+    """O4, a survivor my first drift test could not reach.
+
+    The object I held was loaded AFTER the approval, so its snapshot and the
+    file agreed and the mutant that reads `episode.meta` passed. The case that
+    separates them is a RE-approval: an object holding the old signature must
+    not report drift against a file that has since been signed again. A caller
+    answering a question about the file from a snapshot of what the file used
+    to say is D-059's shape, and it does not stop being that shape when the
+    snapshot is the more alarming of the two answers.
+    """
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    held = load_episode(series, EP)          # snapshot: the FIRST approval
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["status"] = "in_review"
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    check()
+    assert approve().exit_code == 0, "precondition: signed again"
+
+    assert approve_mod.approval_drift(held) is None
+
+
+def test_a_digest_that_agrees_on_a_prefix_is_not_the_same_digest(series):
+    """O8. A comparison that reads the first few characters is a comparison
+    that passes on 1 in 4 billion scripts and looks right in every test written
+    with real digests — so this one is written with a digest that differs
+    nowhere else."""
+    episode(series, [clean_beat()])
+    check()
+    assert approve().exit_code == 0, "precondition"
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    real = meta["approval"]["script_sha256"]
+    meta["approval"]["script_sha256"] = real[:-1] + ("0" if real[-1] != "0" else "1")
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    assert drift(series) is not None
+
+
+def test_the_stale_predicate_is_the_one_the_screen_uses(series):
+    """O2. `verify.stale_override` answered the question and the screen asked
+    it again in its own words — a survivor that was not a behaviour defect but
+    the setup for one, which is what a sweep is for."""
+    passing = {"mechanical": {"verdict": "pass"}, "override": dict(OVERRIDE)}
+    cleared = {"mechanical": {"verdict": "fail"}, "override": dict(OVERRIDE)}
+    assert V.stale_override(passing) == OVERRIDE
+    assert V.stale_override(cleared) is None
+    assert V.stale_override({"mechanical": {"verdict": "pass"}}) is None
+    assert "(STALE" in video_cli._applied(passing)
+    assert "cleared this claim" in video_cli._applied(cleared)
+
+
+# --- Part C: the frame, not just the script ------------------------------------------
+#
+# `series.toml`'s `[design]` block goes straight into `plan.json`
+# (`plan.build_plan` — `"design": dict(series.design)`) and repaints every frame
+# of every episode in the series. Before this task `approve.py` never mentioned
+# it: approve an episode, change `accent`, render, and you have shipped
+# something the approver never saw, with a valid approval and no drift.
+#
+# Strictly worse than the `scale` case Part B closed. `scale` affects one beat
+# and lives in the file the digest covers; `design` affects every frame and
+# lives in a file the approval did not read at all — and turning that knob is
+# the most routine thing an operator does between approving and rendering,
+# because it feels cosmetic.
+#
+# The covered set is DERIVED from what `plan.py` copies (`plan.series_inputs`),
+# not from a list written by hand here, so a design token added tomorrow is
+# covered without anyone remembering. Where it cannot be derived, it refuses
+# loudly (D-096) rather than leaving a silent gap.
+
+from agenticsocial.video import plan as plan_mod  # noqa: E402
+
+
+def series_toml(series):
+    return series.dir / "series.toml"
+
+
+def edit_series_toml(series, old, new):
+    """Change one line of `series.toml` the way an operator would."""
+    path = series_toml(series)
+    text = path.read_text(encoding="utf-8")
+    assert old in text, f"{old!r} is not in series.toml — the fixture moved"
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def add_to_design(series, line):
+    """Append a key to the `[design]` table — a token nobody has heard of yet."""
+    path = series_toml(series)
+    text = path.read_text(encoding="utf-8")
+    marker = "[structure]"
+    assert marker in text
+    path.write_text(text.replace(marker, f"{line}\n\n{marker}", 1), encoding="utf-8")
+
+
+ACCENT = 'accent      = "#2E6BFF"'
+
+
+def approved_episode(series, beats=None):
+    episode(series, beats or [clean_beat()])
+    assert check().exit_code == 0, "precondition: the claims verify"
+    assert approve().exit_code == 0, "precondition: it approves"
+
+
+# --- R1: a design change that reaches the frame is detected and named -------------
+
+
+def test_changing_an_accent_after_approval_is_drift(series):
+    """M1. The hole this task exists to close: the approval must cover what the
+    frame will look like, and `accent` is painted on every frame of it."""
+    approved_episode(series)
+    assert drift(series) is None, "precondition: the approval binds what it signed"
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    assert drift(series) is not None
+
+
+def test_the_design_drift_names_the_value_that_moved(series):
+    """M1's naming half. "Something in series.toml changed" is true and useless:
+    the operator has to be told WHICH token, what it was when they signed, and
+    what it is now — the same standard `test_the_drift_names_itself` sets for
+    the beats digest."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    message = drift(series)
+    assert "series.toml" in message
+    assert "accent" in message
+    assert "#2E6BFF" in message, "what was signed"
+    assert "#12A150" in message, "what is on disk now"
+    assert BY in message and approval_on_disk(series)["at"] in message
+    assert "type_family" not in message, (
+        "naming every token is not naming the change — a message that prints "
+        "both tables and leaves the operator to diff them has told them "
+        "nothing they could not have got by opening the file"
+    )
+
+
+def test_changing_the_series_name_after_approval_is_drift(series):
+    """`series.name` is drawn at 150px on the title and signoff cards —
+    `plan.py` copies it into `series_name`. Same file, same hole, same answer."""
+    approved_episode(series)
+    edit_series_toml(series, 'name       = "The Brief"', 'name       = "The Bulletin"')
+    message = drift(series)
+    assert message is not None
+    assert "The Bulletin" in message
+
+
+def test_changing_an_act_label_after_approval_is_drift(series):
+    """Act labels are resolved by `act_labels` and drawn as the chip on every
+    beat. The plan receives the LABELS, not the act tables, so that is what the
+    approval covers."""
+    path = series_toml(series)
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + '\n[[structure.acts]]\nid = "01"\nlabel = "01 — Top of the show"\nbeats = 6\n',
+        encoding="utf-8",
+    )
+    approved_episode(series)
+    edit_series_toml(series, "01 — Top of the show", "01 — The lede")
+    message = drift(series)
+    assert message is not None
+    assert "01 — The lede" in message
+
+
+# --- R1 negative: an advisory field never reaches a frame -------------------------
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ('cadence    = "daily"', 'cadence    = "weekly"'),
+        ("target_sec = 120", "target_sec = 90"),
+        ("tolerance_sec = 8", "tolerance_sec = 20"),
+        ('enabled = ["vertical", "wide"]', 'enabled = ["vertical"]'),
+        ("warm_acts = []", 'warm_acts = ["01"]'),
+        ('register   = "reported"', 'register   = "first-person"'),
+    ],
+)
+def test_an_edit_that_reaches_no_frame_is_not_drift(series, old, new):
+    """M2. A drift check that cries on any `series.toml` edit is D-040's own
+    failure mode: an alarm that fires on routine work is one an operator learns
+    to ignore by the time it is true. None of these values is copied into
+    `plan.json`."""
+    approved_episode(series)
+    edit_series_toml(series, old, new)
+    assert drift(series) is None
+
+
+def test_a_comment_or_reordering_in_series_toml_is_not_drift(series):
+    """The covered set is VALUES, not the bytes of series.toml. Hashing the file
+    would make a comment an approval-invalidating event."""
+    approved_episode(series)
+    path = series_toml(series)
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\n# a note to myself\n", encoding="utf-8"
+    )
+    assert drift(series) is None
+
+
+# --- R2: the covered set is derived from what plan.py copies ----------------------
+
+
+def test_a_design_token_nobody_has_heard_of_yet_is_covered(series):
+    """M3, and it is the point of the whole task. `plan.py` copies the `[design]`
+    table WHOLE (`dict(series.design)`), so a token added tomorrow reaches every
+    frame the day it is added. A covered set written by hand here would not know
+    about it; a derived one cannot not know."""
+    add_to_design(series, 'halo        = "#FF0000"')
+    approved_episode(series)
+    assert drift(series) is None, "precondition"
+    edit_series_toml(series, 'halo        = "#FF0000"', 'halo        = "#00FF00"')
+    message = drift(series)
+    assert message is not None, "an unknown token still repaints the frame"
+    assert "halo" in message
+
+
+def test_deleting_a_design_token_after_approval_is_drift(series):
+    """A token that disappears falls back to whatever the stylesheet does
+    without it — a different frame, arrived at by subtraction. A comparison
+    that only walks the keys present in both files cannot see it."""
+    add_to_design(series, 'halo        = "#FF0000"')
+    approved_episode(series)
+    edit_series_toml(series, 'halo        = "#FF0000"\n', "")
+    message = drift(series)
+    assert message is not None
+    assert "halo" in message
+
+
+def test_the_covered_set_is_read_out_of_plan_pys_own_source(series):
+    """M3's mechanical half. `series_inputs` must not name the attributes it
+    covers: it must ask `build_plan` what `build_plan` reads."""
+    reads = plan_mod.series_reads()
+    assert reads == frozenset({"slug", "name", "byline", "design", "acts", "dir"}), (
+        "build_plan's reads of `series` moved — every one of them must be "
+        "classified in SERIES_ATTR_COVERAGE or the approval refuses"
+    )
+    covered = plan_mod.series_inputs(load_series_for(series))
+    assert set(covered) == {"name", "byline", "design", "acts"}
+
+
+def load_series_for(series):
+    from agenticsocial.video.series import load_series
+
+    ws = Workspace.locate()
+    return load_series(ws, series.slug)
+
+
+def test_the_plan_and_the_approval_carry_the_same_design(series):
+    """One source, not two. If `plan.json` and the approval record could
+    disagree about what the design is, the approval would be a signature on a
+    document nobody rendered (D-036)."""
+    approved_episode(series)
+    plan = plan_mod.build_plan(load_series_for(series), load_episode(series, EP))
+    signed = approval_on_disk(series)["series_inputs"]
+    assert plan["design"] == signed["design"]
+    assert plan["series_name"] == signed["name"]
+    assert plan["byline"] == signed["byline"]
+
+
+def test_the_approval_record_carries_what_the_approver_saw(series):
+    """The values, not just a digest: the record in the diff a human commits
+    says what the palette WAS, which is what makes the drift message able to
+    name the change rather than merely assert one."""
+    approved_episode(series)
+    signed = approval_on_disk(series)["series_inputs"]
+    assert signed["design"]["accent"] == "#2E6BFF"
+    assert signed["name"] == "The Brief"
+
+
+# --- R2 negative: what cannot be derived is REFUSED, never skipped ----------------
+
+
+def test_an_unclassified_series_read_refuses_the_approval(series, monkeypatch):
+    """M4, D-096's shape. The day someone adds `series.tagline` to `build_plan`,
+    the approval cannot know whether it reaches a frame. The wrong answer is to
+    skip it; the right one is to refuse loudly and make a person classify it."""
+    monkeypatch.setattr(
+        plan_mod,
+        "SERIES_ATTR_COVERAGE",
+        {k: v for k, v in plan_mod.SERIES_ATTR_COVERAGE.items() if k != "design"},
+    )
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "design" in result.output
+    assert status_on_disk(series) == "in_review", "nothing moved"
+
+
+def test_an_unclassified_series_read_is_a_planerror_not_a_silent_gap(series, monkeypatch):
+    monkeypatch.setattr(
+        plan_mod,
+        "SERIES_ATTR_COVERAGE",
+        {k: v for k, v in plan_mod.SERIES_ATTR_COVERAGE.items() if k != "acts"},
+    )
+    with pytest.raises(plan_mod.PlanError) as e:
+        plan_mod.series_inputs(load_series_for(series))
+    assert "acts" in str(e.value)
+
+
+def test_a_design_value_that_cannot_be_compared_refuses(series):
+    """A TOML date in `[design]` is a value `validate_design` does not police
+    and JSON cannot carry. Fail closed: an approval that silently drops a value
+    it could not hash covers less than it says it does."""
+    add_to_design(series, "since       = 2026-08-17")
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = approve()
+    assert result.exit_code == 1, result.output
+    assert "since" in result.output
+    assert status_on_disk(series) == "in_review"
+
+
+def _plan_that_aliases_series(series, episode):
+    s = series
+    return {"design": s.design}
+
+
+def _plan_that_hands_series_whole(series, episode):
+    return {"design": _some_helper(series)}
+
+
+def _plan_that_reads_plainly(series, episode):
+    return {"design": series.design, "name": series.name}
+
+
+def test_series_is_never_aliased_or_handed_whole_inside_build_plan():
+    """The derivation reads `series.<attr>` out of the AST. Two things defeat
+    it — binding `series` to another name, and passing it whole to a helper that
+    reads it — so both are refused rather than left as a hole the derivation
+    cannot see. This is what makes "derived from plan.py" a guarantee rather
+    than a habit."""
+    assert plan_mod.series_reads_of(_plan_that_reads_plainly) == frozenset(
+        {"design", "name"}
+    )
+    for evasion in (_plan_that_aliases_series, _plan_that_hands_series_whole):
+        with pytest.raises(plan_mod.PlanError) as e:
+            plan_mod.series_reads_of(evasion)
+        assert "series" in str(e.value)
+
+
+# --- R3: three questions, three answers -------------------------------------------
+
+
+def test_design_drift_is_not_reported_as_script_drift(series):
+    """M5. The beats document is untouched and its digest still matches. A
+    message that says the script changed sends the operator to the wrong file."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    message = drift(series)
+    assert "beats document has changed" not in message
+    from agenticsocial.video.episode import beats_sha256
+
+    assert approval_on_disk(series)["script_sha256"] == beats_sha256(
+        load_episode(series, EP)
+    ), "the script really did not move"
+
+
+def test_both_a_script_and_a_design_change_are_named_together(series):
+    """R3. Two things moved; the operator is told both, not the first one."""
+    approved_episode(series)
+    edit_script(series, lambda b: b["beats"][0].update(hold=9.0))
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    message = drift(series)
+    assert "beats document has changed" in message
+    assert "accent" in message
+
+
+def test_design_drift_does_not_answer_the_corpus_question(series):
+    """M6. `stale_reason` owns "is this check still about this corpus"; drift
+    owns "is this approval still about these bytes and this design". Folding
+    them together rebuilds the two-paths-to-one-answer shape (D-059)."""
+    approved_episode(series)
+    ep = load_episode(series, EP)
+    assert verify_mod_stale(ep) is None and drift(series) is None, "precondition"
+
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    assert drift(series) is not None, "drift saw the design"
+    assert verify_mod_stale(load_episode(series, EP)) is None, (
+        "and it did not make the ledger stale — a different question"
+    )
+
+
+def test_a_stale_corpus_is_still_its_own_answer_after_a_design_change(series):
+    """M6's other half: the corpus answer must not be swallowed by the design
+    one. Both are true at once and both are said."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    corpus.write_document(
+        load_episode(series, EP),
+        SOURCE + " A sentence nobody checked against.",
+        url="https://local-ai-zone.example/x",
+        key="local-ai-zone",
+        fetched_at="2026-08-18",
+        replace=True,
+    )
+    ep = load_episode(series, EP)
+    assert verify_mod_stale(ep) is not None, "the ledger is stale, and says so"
+    assert drift(series) is not None, "and the design moved, and says so"
+
+
+# --- R4: an intentional design change can be re-approved ---------------------------
+
+
+def test_re_approving_after_a_design_change_clears_the_drift(series):
+    """M7. Drift is not a trap. Change the palette on purpose, look at it, mark
+    the episode `in_review`, check, approve — and the new approval binds the new
+    palette."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    assert drift(series) is not None, "precondition: it drifted"
+
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["status"] = "in_review"
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+
+    assert check().exit_code == 0
+    assert approve().exit_code == 0
+    assert approval_on_disk(series)["series_inputs"]["design"]["accent"] == "#12A150"
+    assert drift(series) is None
+
+
+# --- Task 1's standing rule: the file, not the object ------------------------------
+
+
+def test_design_drift_is_read_from_disk_not_from_the_object_it_was_handed(series):
+    """M8. A caller holding a `Series`/`Episode` loaded before the edit must not
+    be able to make the answer disappear by handing over a stale snapshot —
+    `approval_drift` takes an episode and loads `series.toml` itself."""
+    approved_episode(series)
+    stale_object = load_episode(series, EP)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    assert approve_mod.approval_drift(stale_object) is not None
+
+
+def test_a_re_approved_design_clears_drift_for_a_stale_object_too(series):
+    """M8's other direction — O4's lesson. An object held across a re-approval
+    must report NO drift, which a check reading `episode.meta` cannot do."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    held = load_episode(series, EP)
+    assert approve_mod.approval_drift(held) is not None, "precondition"
+
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    meta["status"] = "in_review"
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    check()
+    assert approve().exit_code == 0
+    assert approve_mod.approval_drift(held) is None
+
+
+# --- fail closed -------------------------------------------------------------------
+
+
+def test_an_approval_that_records_no_design_is_drift(series):
+    """An approval written before this task covers a script and says nothing
+    about the frame. Reading that as "no drift" is exactly the silent gap the
+    task closes, so it fails closed and asks for a fresh signature."""
+    approved_episode(series)
+    path = series.episodes_dir / EP / "script.yaml"
+    meta, beats_text, _ = read_script(path)
+    del meta["approval"]["series_inputs"]
+    head = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True).strip()
+    path.write_text(f"---\n{head}\n---\n{beats_text}", encoding="utf-8")
+    message = drift(series)
+    assert message is not None
+    assert "series.toml" in message
+
+
+def test_an_unreadable_series_toml_is_drift_not_a_traceback(series):
+    """`render` must get an answer it can refuse on, not an exception it might
+    catch as "no drift"."""
+    approved_episode(series)
+    series_toml(series).write_text("this is not = = toml", encoding="utf-8")
+    assert drift(series) is not None
+
+
+def test_a_missing_series_toml_is_drift_not_a_traceback(series):
+    approved_episode(series)
+    series_toml(series).unlink()
+    assert drift(series) is not None
+
+
+# --- the screens -------------------------------------------------------------------
+
+
+def test_the_approve_screen_says_the_design_is_covered(series):
+    """The approver is signing the palette. A record that covers it silently is
+    a guarantee nobody knows they have — and nobody knows they lost."""
+    episode(series, [clean_beat()])
+    check()
+    result = approve()
+    assert result.exit_code == 0, result.output
+    assert "series.toml" in result.output
+    assert "design" in result.output
+
+
+def test_check_names_a_design_change_on_the_banner(series):
+    """`check` and `review` already print drift, from one function. A design
+    change must arrive there without a second banner and without a second
+    verdict path."""
+    approved_episode(series)
+    edit_series_toml(series, ACCENT, 'accent      = "#12A150"')
+    result = check()
+    assert result.exit_code == 0
+    assert "no longer describes it" in result.output
+    assert "accent" in result.output

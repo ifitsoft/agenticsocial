@@ -7,7 +7,9 @@ from typing import Optional
 
 import typer
 
+from ..models import TransitionError
 from ..workspace import Workspace, WorkspaceError
+from . import approve as approve_mod
 from . import claims as claims_mod
 from . import corpus as corpus_mod
 from . import ingest as ingest_mod
@@ -287,23 +289,13 @@ def _join(parts) -> str:
 # will read — rather than over anything either command happens to hold.
 
 
-def is_blocking(record: dict) -> bool:
-    """Would §8.4 refuse this claim? `fail`, `no_source`, or an unattested `manual`.
-
-    An override does NOT clear it. §8.4 puts the override in front of `approve`,
-    not in front of the measurement: `check` reports what was measured, and a
-    check that went quiet because someone wrote a sentence would be reporting
-    the sentence. Phase 7 is what consumes `override`; this is not that gate.
-
-    Written over the ledger record, not over `Mechanical`, because the record is
-    what survives to the gate. A `manual` claim whose `attest` was lost between
-    the check and the file is unattested to everyone who reads the file.
-    """
-    mechanical = record.get("mechanical") or {}
-    verdict = mechanical.get("verdict")
-    if verdict == "manual":
-        return not str(mechanical.get("attest") or "").strip()
-    return verdict in ("fail", "no_source")
+# The predicate itself now lives in `verify`, next to the ledger it reads and
+# where `approve` can reach it without importing the CLI. It is re-exported here
+# — as the SAME object, not a wrapper — because `check`'s screen and `approve`'s
+# gate answering the same question from two code paths is D-059's shape, and
+# because a wrapper is where the two would drift apart.
+is_blocking = verify_mod.is_blocking
+classify = verify_mod.classify
 
 
 def _verdict(record: dict) -> str:
@@ -314,9 +306,48 @@ def _reason(record: dict) -> str:
     return str((record.get("mechanical") or {}).get("reason") or "")
 
 
-def _override(record: dict) -> dict | None:
-    value = record.get("override")
-    return value if isinstance(value, dict) else None
+# §8.4's override, read through `verify` and never from the field. The display
+# and the gate disagreeing about whether a sentence counts is the same defect as
+# the summary and the gate disagreeing about a verdict (D-059), one door along —
+# so this is the SAME object, not a wrapper, exactly like `is_blocking` above.
+override_state = verify_mod.override_state
+stale_override = verify_mod.stale_override
+
+
+def _written(record: dict) -> bool:
+    """Was an override written here at all — honoured or not? The table's `*`."""
+    return override_state(record) != (None, None)
+
+
+def _sentence(written: dict) -> str:
+    """§8.4's override as one line: the sentence, then the name on it."""
+    return f"“{written.get('reason')}” — {written.get('by')}"
+
+
+def _applied(record: dict) -> str:
+    """Did this written sentence actually clear its claim? Say so on the line.
+
+    An override printed without this reads the same whether it did the work or
+    nothing at all, and the second case is the one an operator has to see.
+    """
+    if stale_override(record) is None:
+        return "(cleared this claim — §8.4, NOT verified)"
+    return "(STALE — this claim clears without it)"
+
+
+def _override_rate(overridden: int, total: int) -> str:
+    """D-040's health signal, built once and printed on both screens.
+
+    "A high rate means the checker is wrong, not the operator." Nobody can
+    notice a rate that is never printed — and it is omitted entirely at zero,
+    because `override rate 0%` on every clean run is the noise this line has to
+    cut through the one time it matters.
+    """
+    percent = round(100 * overridden / total) if total else 0
+    return (
+        f"rate {overridden} of {_plural(total, 'claim')} ({percent}%) — D-040: a "
+        "high rate means the checker is wrong, not the operator"
+    )
 
 
 def _kpi(item: dict) -> str:
@@ -502,7 +533,7 @@ def _ledger_state(episode):
     for record in ledger.get("claims") or []:
         if isinstance(record, dict) and isinstance(record.get("beat_index"), int):
             verdicts[record["beat_index"]] = _verdict(record) + (
-                "*" if _override(record) else ""
+                "*" if _written(record) else ""
             )
     return ledger, None, False, verdicts
 
@@ -520,8 +551,8 @@ def _print_claim_summary(ledger: dict) -> None:
     checked = _one_line(ledger.get("checked_at", "?"))
     typer.echo(f"claims  {_counts(records)}   (checked {checked})")
     for record in records:
-        override = _override(record)
-        if not is_blocking(record) and not override:
+        written, fault = override_state(record)
+        if not is_blocking(record) and not written and not fault:
             continue
         head = (
             f"{'!' if is_blocking(record) else '*'} {record.get('id')} · "
@@ -535,15 +566,39 @@ def _print_claim_summary(ledger: dict) -> None:
             "  " + _clip(_one_line(head + why), ROW_WIDTH - 2),
             fg=typer.colors.RED if is_blocking(record) else None,
         )
-        if override:
-            typer.echo(
-                _detail(
-                    "override",
-                    f"“{override.get('reason')}” — {override.get('by')} "
-                    "(recorded; `approve` is what reads it)",
-                )
-            )
+        if written:
+            typer.echo(_detail("override", f"{_sentence(written)} {_applied(record)}"))
+        elif fault:
+            typer.echo(_detail("override", f"clears nothing — it {fault}"))
     typer.echo("")
+
+
+def _echo_drift(ep) -> None:
+    """Say when an approval no longer describes the script on disk (§10).
+
+    `render` is Phase 8 and it is the command that will REFUSE; this prints the
+    same answer, from the same function, where an operator can already see it.
+    Without it an approval that stopped being true is visible to nothing until
+    the render — the expensive, hard-to-retract step §10 wrote the rule to
+    protect.
+
+    Silent unless there is an approval to contradict: "not approved yet" is the
+    normal state of a fresh script, and a banner on every draft is a banner
+    nobody reads by the time one of them is true. One function, two call sites,
+    for the reason `_echo_runtime` gives.
+    """
+    if approve_mod.approval_record(ep) is None:
+        return
+    drift = approve_mod.approval_drift(ep)
+    if not drift:
+        return
+    typer.secho(
+        textwrap.fill(
+            f"the approval on this episode no longer describes it — {drift}",
+            width=ROW_WIDTH,
+        ),
+        fg=typer.colors.RED,
+    )
 
 
 def _echo_runtime(script, check) -> None:
@@ -618,6 +673,7 @@ def video_review(
             textwrap.fill(_one_line(ledger_note), width=ROW_WIDTH),
             fg=typer.colors.YELLOW if warn else None,
         )
+    _echo_drift(ep)
     typer.echo("")
     for line in _review_table(beats, verdicts):
         typer.echo(line)
@@ -725,12 +781,37 @@ def _near_miss(document: str | None, record: dict) -> str:
 
 def _claim_row(record: dict) -> str:
     mark = "!" if is_blocking(record) else " "
-    star = "*" if _override(record) else " "
+    star = "*" if _written(record) else " "
     return (
         f" {mark}{star} {record.get('id', '?'):<7} beat {record.get('beat_index'):>2}  "
         f"{_clip(str(record.get('beat_type', '?')), TYPE_WIDTH):<{TYPE_WIDTH}}  "
         f"{_verdict(record)}"
     )
+
+
+def _cleared_summary(records: list[dict]) -> str:
+    """The line printed when nothing is open — and it must not overclaim.
+
+    It used to say "7 claims verified, none open" on a screen that also said
+    *"attested by hand — no machine checked these"* about one of the seven
+    (D-112, the third overclaim in two phases). A `manual` is not verified; it
+    is attested, and the difference is the whole of D-088.
+
+    Counted through `classify`, the same function `approve` gates on, so the
+    denominator cannot drift from the decision. Every claim lands in exactly one
+    of the three buckets, which is what stops a summary rounding toward
+    reassurance by quietly dropping one.
+    """
+    tally = verify_mod.claim_tally(records)
+    parts = [f"{tally['verified']} verified"]
+    if tally["attested"]:
+        parts.append(f"{tally['attested']} attested by hand, NOT verified (D-088)")
+    if tally["overridden"]:
+        parts.append(f"{tally['overridden']} cleared by override, NOT verified (§8.4)")
+    if len(parts) == 1:
+        return f"{_plural(tally['verified'], 'claim')} verified, none open"
+    parts.append(f"{_plural(tally['total'], 'claim')}, none open")
+    return " · ".join(parts)
 
 
 def _counts(records: list[dict]) -> str:
@@ -761,18 +842,14 @@ def _print_detail(ep, record: dict, documents: dict) -> None:
     attest = (record.get("mechanical") or {}).get("attest")
     if attest:
         typer.echo(_detail("attest", attest))
-    override = _override(record)
-    if override:
-        typer.echo(
-            _detail("override", f"“{override.get('reason')}” — {override.get('by')}")
-        )
-        typer.echo(
-            _detail(
-                "",
-                "recorded, not applied: `check` reports the measurement. "
-                "`approve` is what reads an override",
-            )
-        )
+    written, fault = override_state(record)
+    if fault:
+        # The one override screen that has to shout. A malformed override is a
+        # sentence its author believes cleared a claim, and the claim is still
+        # open — so it is printed WITH the refusal, never in the quiet block.
+        typer.echo(_detail("override", f"clears nothing — it {fault}"))
+    elif written:
+        typer.echo(_detail("override", _sentence(written)))
     typer.echo(_detail("fix", _next_step(record)))
     typer.echo("")
 
@@ -800,6 +877,81 @@ def _print_attestations(records: list[dict]) -> None:
                 indent=4,
             )
         )
+    typer.echo("")
+
+
+def _print_overrides(records: list[dict]) -> None:
+    """§8.4's overrides, in three groups, because they mean three things.
+
+    An override that CLEARED a claim is the sentence the approver is signing,
+    and it belongs on the same screen as the attestations for the same reason
+    (D-088): the one screen before approval must show what the approval rests
+    on. An override on a claim that passes anyway is STALE — a written sentence
+    about a problem that no longer exists, and leaving it silent is how the
+    sentences stop being read. An override that clears NOTHING is a claim its
+    author believes is handled and the gate still refuses; that one is printed
+    with the refusal itself, and only counted here.
+
+    The rate closes the block (D-040): the number that says the checker is
+    wrong rather than the operator.
+    """
+    applied, stale = [], []
+    for record in records:
+        written, _ = override_state(record)
+        if written is None:
+            continue
+        # `stale_override` is the predicate, not a second reading of the same
+        # rule: which group a written sentence lands in is one answer, and the
+        # sweep found this line restating it. Two statements of one rule is the
+        # D-036 pattern, on the screen where it decides what an operator reads.
+        (stale if stale_override(record) is not None else applied).append(
+            (record, written)
+        )
+    if not applied and not stale:
+        return
+    if applied:
+        typer.echo(
+            textwrap.fill(
+                "cleared by override — §8.4, NOT verified by anything. You are "
+                "approving the sentence and the name on it:",
+                width=ROW_WIDTH,
+                initial_indent="  ",
+                subsequent_indent="  ",
+            )
+        )
+        for record, written in applied:
+            typer.echo(
+                _detail(
+                    str(record.get("id", "?")),
+                    f"{_verdict(record)} — {_sentence(written)}",
+                    indent=4,
+                )
+            )
+        typer.echo("")
+    if stale:
+        typer.echo(
+            textwrap.fill(
+                "STALE overrides — these claims clear without them. Delete "
+                "them: a sentence that bypasses nothing is how the next real "
+                "one stops being read:",
+                width=ROW_WIDTH,
+                initial_indent="  ",
+                subsequent_indent="  ",
+            )
+        )
+        for record, written in stale:
+            typer.echo(
+                _detail(str(record.get("id", "?")), _sentence(written), indent=4)
+            )
+        typer.echo("")
+    typer.echo(
+        textwrap.fill(
+            f"override {_override_rate(len(applied), len(records))}",
+            width=ROW_WIDTH,
+            initial_indent="  ",
+            subsequent_indent="  ",
+        )
+    )
     typer.echo("")
 
 
@@ -893,6 +1045,11 @@ def video_check(
 
     head = f"{s.slug}/{ep.id} · {_plural(len(records), 'claim')}"
     typer.echo(f"{head} · {_counts(records)}" if records else head)
+    # At the TOP, with `review`'s stale-ledger banner, and not down with the
+    # runtime report: the last line of this screen is a summary of the claims,
+    # and a green "none open" printed under a red drift warning is the last
+    # thing read (D-112's shape). A banner above the table is read first.
+    _echo_drift(ep)
     typer.echo("")
     for record in records:
         line = _claim_row(record).rstrip()
@@ -906,6 +1063,7 @@ def video_check(
     for record in blocked:
         _print_detail(ep, record, documents)
     _print_attestations(records)
+    _print_overrides(records)
     _print_entities(records)
 
     typer.echo(f"wrote {path}")
@@ -918,9 +1076,161 @@ def video_check(
             f"{len(blocked)} of {_plural(len(records), 'claim')} not verified — "
             "this episode is not approvable until they clear"
         )
-    typer.secho(
-        f"{_plural(len(records), 'claim')} verified, none open",
-        fg=typer.colors.GREEN,
+    typer.secho(_cleared_summary(records), fg=typer.colors.GREEN)
+
+
+def _print_open_claims(records: list[dict]) -> None:
+    """Name every claim that refused, and say what to do about each.
+
+    D-040: a checker that refuses without teaching trains an operator to
+    override everything, including the true refusal sitting in the same run.
+    """
+    for record in records:
+        typer.secho(_claim_row(record).rstrip(), fg=typer.colors.RED)
+        if _reason(record):
+            typer.echo(_detail("why", _reason(record)))
+        typer.echo(_detail("fix", _next_step(record)))
+
+
+@video_app.command("approve")
+def video_approve(
+    episode: str,
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    by: str = typer.Option(
+        ...,
+        "--by",
+        help="who is approving — recorded in script.yaml, required",
+    ),
+) -> None:
+    """THE GATE (§8.4). Move an episode `in_review → approved`.
+
+    Refuses while any claim is `fail`, `no_source` or an unattested `manual`,
+    and refuses on a stale or absent `claims.json` — approving against a ledger
+    that no longer describes the script is the same defect as never checking.
+
+    Takes IDENTIFIERS and loads what it gates (D-072). It does not re-run
+    `check`: the ledger on disk is the artifact of record and the screen a human
+    read before signing, and computing a second set of verdicts in here would be
+    two paths to one answer with only one of them on the screen.
+
+    `--by` is required and is never inferred. The series `byline` is a display
+    credit on the frame, not an account of who spent this gate, and an OS
+    username is whoever's laptop the command ran on.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    approver = _text(by, "The approver")
+    try:
+        record = approve_mod.approve_episode(ws, series, episode, by=approver)
+    except approve_mod.ApprovalRefused as e:
+        head = f"{series}/{episode} · NOT approved"
+        if e.kind == "claims":
+            typer.secho(f"{head} — {e}", fg=typer.colors.RED)
+            typer.echo("")
+            _print_open_claims(e.claims)
+            typer.echo("")
+            raise _fail(
+                f"run `agsoc video check {episode} --series {series}` for the "
+                "full detail. Nothing moved; the episode is still in_review"
+            )
+        if e.kind == "ledger":
+            typer.secho(f"{head} — the check does not describe this script", fg=typer.colors.RED)
+            typer.echo(_detail("why", str(e)))
+            raise _fail(
+                _detail(
+                    "fix",
+                    f"run `agsoc video check {episode} --series {series}`, read "
+                    "it, then approve",
+                )
+            )
+        raise _fail(f"{head} — {e}")
+    except TransitionError as e:
+        raise _fail(
+            f"{series}/{episode} · NOT approved — {e}. Only a script an agent "
+            "has finished and marked `status: in_review` can be approved"
+        )
+    except (SeriesError, EpisodeError, verify_mod.VerifyError) as e:
+        raise _fail(str(e))
+    except OSError as e:
+        raise _fail(f"cannot write script.yaml: {e}")
+
+    typer.secho(f"{series}/{episode} · approved", fg=typer.colors.GREEN)
+    typer.echo(_detail("by", record["by"]))
+    typer.echo(_detail("at", record["at"]))
+    typer.echo(_detail("script", f"sha256 {record['script_sha256']} (the beats document)"))
+    counted = record["claims"]
+    if counted["total"]:
+        tail = ""
+        if counted["attested"]:
+            tail += f" · {counted['attested']} attested by hand, not verified (D-088)"
+        if counted["overridden"]:
+            tail += (
+                f" · {counted['overridden']} cleared by override, not verified (§8.4)"
+            )
+        typer.echo(
+            _detail(
+                "claims",
+                f"{counted['verified']} of {counted['total']} verified{tail}, "
+                f"checked {record['claims_checked_at']}",
+            )
+        )
+        # Every claim that is standing on a person rather than on a source, on
+        # the screen of the person it is standing on, at the moment they sign —
+        # and the rate beside it (D-040). Reading these off the RECORD, not off
+        # the ledger a second time: the screen and the file must be one answer.
+        for entry in record.get("overrides", []):
+            typer.echo(
+                _detail("override", f"{entry['id']}  “{entry['reason']}” — {entry['by']}")
+            )
+        if counted["overridden"]:
+            typer.echo(
+                _detail(
+                    "override",
+                    _override_rate(counted["overridden"], counted["total"]),
+                )
+            )
+    else:
+        typer.echo(
+            _detail("claims", "none — this script asserts nothing about the world")
+        )
+    # The other half of what was just signed, and the half an operator does not
+    # expect to have signed: `series.toml` paints every frame and is a different
+    # file from the one they were reading. Said on the screen because a
+    # guarantee nobody knows they have is one nobody notices losing — and
+    # because the next person to change the accent should have been told, once,
+    # that it is covered.
+    inputs = record.get("series_inputs") or {}
+    if inputs:
+        typer.echo(_detail("design", _covered_inputs(inputs)))
+    typer.echo(
+        _detail(
+            "next",
+            "edit the beats and this approval no longer describes them — "
+            "`script_sha256` is what says so; the same goes for the design, "
+            "and `agsoc video check` says so on both",
+        )
+    )
+
+
+def _covered_inputs(inputs: dict) -> str:
+    """What of `series.toml` this approval binds, counted off the record itself.
+
+    Derived from the record, never re-listed here: the screen and the file are
+    one answer, and a hand-written summary is where they would stop being one.
+    """
+    labels = {"design": "design", "acts": "act labels"}
+    parts = []
+    for key in sorted(inputs):
+        value = inputs[key]
+        label = labels.get(key, key)
+        if isinstance(value, dict):
+            parts.append(f"{label} ({len(value)})")
+        else:
+            parts.append(label)
+    return (
+        f"series.toml is covered too — {', '.join(parts)}. Change any of them "
+        "and this approval no longer describes the frame"
     )
 
 

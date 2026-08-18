@@ -20,6 +20,7 @@ owns the real beats parser.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -239,8 +240,45 @@ def resolve_episode(series: Series, query: str) -> Episode:
     return load_episode(series, matches[0])
 
 
-def set_status(episode: Episode, target: Status) -> Episode:
+def beats_sha256(episode: Episode) -> str:
+    """sha256 over the BEATS DOCUMENT's bytes — spec §10's `script_sha256`.
+
+    Not the whole file, and the difference is load-bearing. The file also holds
+    the metadata document, which carries `status` and the approval record
+    itself, so a whole-file digest is either self-invalidating (approve writes
+    the digest into the bytes it just hashed) or invalidated by the pipeline's
+    own next move — `approved → rendering` rewrites the status, and every drift
+    check after it would report a change nobody made. This module's docstring
+    says the same thing from the other side: beats are re-emitted verbatim on a
+    status change precisely so approval survives one.
+
+    What it therefore does NOT cover is the metadata document: `pace` scales
+    every hold and `date_long` is on screen. `approve` records `pace` beside the
+    digest rather than pretending the hash covers it.
+
+    Hashed as read — `read_script` opens with `newline=""`, so CRLF stays CRLF
+    and the digest is over the operator's bytes, not Python's translation of
+    them (D-031).
+    """
+    _, beats_text, _ = _read_meta(episode.script_path)
+    if beats_text is None:
+        raise EpisodeError(
+            f"{episode.script_path}: no beats document — script.yaml needs a "
+            "`---` separator line, then `beats:`"
+        )
+    return hashlib.sha256(beats_text.encode("utf-8")).hexdigest()
+
+
+def set_status(episode: Episode, target: Status, record: dict | None = None) -> Episode:
     """Move an episode to `target`, gated on the status ON DISK.
+
+    `record` is extra metadata to write IN THE SAME WRITE — the approval record,
+    today. It is a parameter rather than a second function because D-059's root
+    cause was a second, ungated status writer: an `approve` that called
+    `set_status` and then wrote its record separately would be two writes, and
+    a crash between them leaves an approved episode nobody signed. It cannot
+    carry a status: `status` is set from `target` after `record` is merged, so
+    `{"status": ...}` in here is overwritten rather than honoured.
 
     The gate is checked against the status ON DISK, not against `episode.status`.
     A caller holding a stale Episode must not be able to reach RENDERING from a
@@ -260,6 +298,7 @@ def set_status(episode: Episode, target: Status) -> Episode:
             f"{', '.join(s.value for s in Status)}"
         )
     assert_transition(current, target, VIDEO_TRANSITIONS)
+    meta.update(record or {})
     meta["status"] = target.value
     atomic_write(episode.script_path, _compose(meta, beats_text, nl))
     return replace(episode, status=target, meta=meta)

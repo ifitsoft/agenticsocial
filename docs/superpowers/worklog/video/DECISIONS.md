@@ -2733,3 +2733,177 @@ inherits their confidence rather than the data's.
 It sits directly in front of Phase 7's approval gate, which consumes exactly
 these verdicts. **Fixed in Phase 7 Task 1**, not here, because the gate and its
 summary should agree by construction rather than by coincidence.
+
+## D-113 · phase 7 / task 1 · the gate exists, and the predicate under it was failing open
+
+`agsoc video approve <ep> --by "<name>"` lands. It loads series, episode and
+ledger itself (D-072), refuses on any `fail` / `no_source` / unattested `manual`
+naming each, refuses distinguishably on a stale or absent ledger, and records the
+approver, `script_sha256`, `pace`, `corpus_sha` and `claims_checked_at` **in the
+same gated write**. 1658 tests, **21/21 mutants**.
+
+### The finding: `is_blocking` failed open
+
+The predicate the gate was about to be built on was
+`verdict in ("fail", "no_source")` — which is **False for `supported`, for `ok`,
+and for a record with no `mechanical` block at all.** A hand-edited ledger, or a
+Phase 9 verdict that does not exist yet, would have approved with nothing checked.
+
+D-106's exact shape — *unrecognised input treated as fine rather than as
+unknown* — found this time **in the gate itself**, one task after being named.
+The lesson did not transfer on its own; it had to be looked for again.
+
+Now `verify.classify()`, and leader-verified fail-closed on every shape:
+
+```
+normal pass -> verified     phase-9 verdict     -> open
+fail        -> open         bare 'ok'           -> open
+no_source   -> open         no mechanical block -> open
+                            empty verdict       -> open
+```
+
+**It is the single function `check`'s summary, `review`'s table and the gate all
+derive from**, which kills the D-059 shape by construction rather than by
+discipline: there is no second path to disagree with. D-112's overclaim is fixed
+as a side effect —
+
+```
+6 verified · 1 attested by hand, NOT verified (D-088) · 7 claims, none open
+```
+
+### Three decisions
+
+- **`--by` is required and never inferred.** `byline` is a display credit the
+  renderer draws; `getpass.getuser()` is whoever's laptop ran the command; an env
+  var lets an unattended process sign under the operator's name. A test pins that
+  a non-empty `byline` does *not* become the approver. **Stated limit, and the
+  honesty is the point: this records a name that was typed, not evidence that a
+  human typed it.**
+- **The ledger is required, not recomputed.** It is the artifact of record and the
+  screen the human actually read — attestations, entity misses, fix lines.
+  Computing verdicts inside the gate means signing verdicts nobody displayed.
+- **`script_sha256` covers the beats document, not the file.** Forced by the code:
+  the approval record is written *into* the bytes a whole-file digest would
+  cover, so it has no fixed point.
+
+### And a hole the task created and caught
+
+R5's enumeration — *every status-writing path in `src/`, and how each is gated* —
+found that `set_status`'s new metadata parameter **is itself a status writer**
+unless the merge runs before the status assignment. Created by this task, caught
+by the check the brief demanded instead of an assertion, pinned by a test.
+
+**That is the argument for enumerating rather than asserting, in one example:**
+the enumeration found a defect that did not exist when the enumeration was
+specified.
+
+## D-114 · phase 7 / task 2 · the override clears a claim, and drift catches the edit that changes no number
+
+`classify()` gained a **fourth state — `verified · attested · overridden ·
+open` — not a second path.** `is_blocking` stays derived from it, so the gate,
+`check`'s summary, `check`'s exit code and `review`'s table all changed together
+because they are one function. Override validity is **re-checked at the gate**,
+because `claims.json` is a file on disk and a gate that trusts the loader clears
+a claim on `{}`.
+
+**Stale overrides warn, never refuse.** The measurement is consulted *before* the
+override, so a claim that now passes reads `verified` and the leftover sentence
+is named STALE. Refusing would make the remedy *"delete the paragraph you
+wrote"* — **inverting the exact cost asymmetry §8.4 is built on**, where writing
+the sentence is the expensive act. Both screens print the override rate (D-040).
+
+**Drift, measured rather than asserted.** Editing `scale: 5 → 25`:
+
+```
+claims.json  byte-identical
+corpus_sha   unchanged
+every verdict unchanged
+stale_reason "current"
+```
+
+**Every existing signal said fine.** Drift caught it and named both digests, the
+approver and the date. That is the case Phase 5 named and could not close, closed.
+
+D-036 resolved: `plan.json`'s whole-file digest became `script_file_sha256` — the
+mp4 `comment=` tag was the one place the two would have been compared. One key
+with two meanings is a bug waiting for someone to compare them.
+
+**Three of the implementer's own eleven mutants survived and were reported as
+survivors.** O2 was a real defect: `_print_overrides` restated `stale_override`'s
+rule inline — *two statements of one rule, on the screen where the last three
+overclaims came from.* Found by sweeping past the brief's table.
+
+## D-115 · phase 7 / task 3 · an approval covers what the approver saw, and design was outside it
+
+Task 2's report named a hole bigger than the one it closed. Leader-verified:
+`plan.py:268` copies `series.design` straight into `plan.json` and it repaints
+every frame; **`approve.py` never mentions it.** Approve, change `accent`,
+render — something the approver never saw, with a valid approval and no drift.
+
+Strictly worse than the `scale` case in three ways:
+
+- `scale` moves one beat; `design` moves **every frame of every episode in the
+  series**.
+- `scale` lives in the file the digest covers; `design` lives in a **file the
+  approval does not read at all**.
+- **A design change is routine.** It is the knob most likely to be turned between
+  approving and rendering, precisely because it feels cosmetic.
+
+The rule this settles, and it is the one to carry into Phase 8: **§10's letter is
+"the script has not changed"; its purpose is "the approver saw this frame."**
+Every input that reaches the frame is in scope, and the ones that arrive from
+another file are the dangerous ones because nothing about editing them feels like
+touching an approved episode.
+
+Phase 8's `render` gate is therefore **three checks, not one** —
+`assert_transition` + `approval_drift` + `stale_reason` — and they stay
+distinguishable so an operator is told *which* thing moved. Folding them together
+would rebuild the second-path shape D-113 just eliminated.
+
+## D-116 · phase 7 / task 3 · the covered set is derived from the AST, and the regex would have lied
+
+Design drift is closed. `plan.series_reads()` walks `build_plan`'s **AST** and
+returns `{slug, name, byline, design, acts, dir}`; `SERIES_ATTR_COVERAGE` marks
+each `frame` or `identity`; `[design]` is covered as a whole table, so **a token
+added tomorrow is covered with no edit anywhere.** 1737 tests, 18/18 mutants.
+
+**Why the AST and not a text scan, which is the detail worth keeping:**
+`build_plan`'s own *comments* contain the string `series.toml`, which a regex
+turns into a phantom attribute named `toml`. The naive implementation would have
+produced a covered-set that looked plausible, included something that does not
+exist, and nobody would have questioned it — **a wrong answer of exactly the
+shape nobody audits.**
+
+What cannot be derived is **refused loudly** (D-096's precedent): an unclassified
+attribute, `s = series` aliasing, `series` passed whole to a helper outside the
+known set, or a value JSON cannot compare — each raises and refuses the approval
+naming the key. The failure mode is a stopped approval, never a silent gap.
+
+Drift stays a **third answer**: one `classify()`, one `approval_drift`, and it
+names the token that moved — `[design] accent was '#2E6BFF', now '#12A150'` —
+rather than claiming the beats document changed.
+
+### What an approval covers, stated exactly, for Phase 8
+
+**The approval covers everything the operator authors, and nothing the renderer
+is.**
+
+*Bound:* beats bytes, `pace`, palette, series name, byline, act labels.
+*Unbound:* `engine.js`, `planbuild.js`, `content/*.js`, `scene.html`'s CSS,
+**the resolved font — the one thing that differs between machines** —
+Chromium/Playwright, the ffmpeg binary and its flags, and the chosen `--format`.
+
+That sentence is the honest scope of the guarantee, and Phase 8 must not describe
+it as more.
+
+### A false positive, caused by the plan rather than the check
+
+`type_family` and `type_scale` are copied into `plan.json` and **the engine
+ignores them** — leader-verified, neither string appears anywhere in `engine/`,
+where `PLAN_TOKENS` maps the six colours only. So the approval binds two values
+that reach no pixel, while **the type that is actually drawn lives in
+`scene.html`, uncovered.**
+
+Two knobs an operator would reasonably believe control the typography, that
+control nothing. Recorded for Phase 10 (wide format), which is the next phase to
+touch layout — and it is a spec-versus-implementation gap, not a drift bug.
