@@ -19,7 +19,7 @@ Emitting one message for both would tell an operator to go and fix a file that
 is already correct.
 
 It only ever READS the script — `script.yaml` bytes are load-bearing for
-`script_sha256` (spec 10, DECISIONS D-026).
+`script_file_sha256` (spec 10, DECISIONS D-026).
 """
 from __future__ import annotations
 
@@ -254,7 +254,12 @@ def build_plan(series: Series, episode: Episode, fmt: str = "vertical") -> dict:
         # `the-brief` is not what the brand card says.
         "series_name": series.name,
         "byline": series.byline,
-        "script_sha256": digest,
+        # `script_file_sha256`, not `script_sha256`: this is the WHOLE FILE,
+        # metadata document included, and the APPROVAL's `script_sha256` covers
+        # the beats document alone (see `episode.beats_sha256`). One key with
+        # two meanings in two files is the D-036 pattern, and these two are
+        # exactly the pair someone would eventually compare.
+        "script_file_sha256": digest,
         "format": {"name": fmt, **FORMATS[fmt]},
         "fps": FPS,
         "pace": pace,

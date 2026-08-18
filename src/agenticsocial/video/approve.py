@@ -39,7 +39,14 @@ from datetime import datetime
 from ..models import Status
 from ..workspace import Workspace
 from . import verify as verify_mod
-from .episode import beats_sha256, load_episode, set_status
+from .episode import (
+    EpisodeError,
+    beats_sha256,
+    load_episode,
+    read_script,
+    set_status,
+)
+from .models import Episode
 from .series import load_series
 
 
@@ -155,3 +162,91 @@ def _cleared_by_hand(records: list[dict]) -> list[dict]:
             }
         )
     return out
+
+
+# --- §10: an approval that stopped being true ---------------------------------------
+
+
+def approval_record(episode: Episode) -> dict | None:
+    """The approval written into `script.yaml`, read from DISK, or None.
+
+    Read here rather than from `episode.meta` for the same reason `set_status`
+    re-reads the status it gates on: a caller holding an object loaded before an
+    edit must not be able to answer a question about the file with a snapshot of
+    what the file used to say.
+    """
+    try:
+        meta, _, _ = read_script(episode.script_path)
+    except EpisodeError:
+        return None
+    record = meta.get("approval")
+    return record if isinstance(record, dict) else None
+
+
+def approval_drift(episode: Episode) -> str | None:
+    """Why this approval no longer describes the script on disk, or None. §10.
+
+        > `approve` records `script_sha256`, and `render` refuses if the script
+        > has changed since approval, **naming the drift.**
+
+    This is the refusal, as a check. `render` is Phase 8 and will call it; a
+    stubbed command would be a second place the rule lives before it has a
+    caller. `check` and `review` already print it, because an approval that
+    stopped being true is otherwise visible to nothing until the expensive step
+    §10 wrote the rule to protect.
+
+    **Two comparisons, because one digest cannot cover both documents.**
+
+      * `script_sha256` is the BEATS document's bytes — see `beats_sha256` for
+        why it cannot be the whole file: the approval record is written *into*
+        the bytes a whole-file digest would cover, so it has no fixed point, and
+        `approved → rendering` would then invalidate the approval it is acting
+        on. The cost of that choice is that the metadata document is outside the
+        hash, which is why the second comparison exists.
+      * `pace` multiplies every hold, and it lives in the metadata document.
+        `approve` records it beside the digest rather than pretending the hash
+        covered it, and this reads it back.
+
+    **What the digest catches that nothing else can**: an edit that changes no
+    number. A chart's `scale` shifts every bar on the frame while every claim
+    still verifies, the corpus never moved, and `stale_reason` correctly answers
+    "this ledger is current". `corpus_sha` cannot see it. A numeric check cannot
+    see it. Phase 5 named this gap and this is the answer to it.
+
+    **It fails closed.** No approval, an unreadable file, a script with no beats
+    document: all drift. A caller that reads `None` as "fine" must never get one
+    for a question this could not answer.
+    """
+    record = approval_record(episode)
+    if record is None:
+        return (
+            "no approval on record — nothing in script.yaml says these bytes "
+            "were ever signed. Run `agsoc video approve`"
+        )
+    try:
+        meta, _, _ = read_script(episode.script_path)
+        current = beats_sha256(episode)
+    except EpisodeError as e:
+        return f"the script can no longer be hashed, so nothing can be compared — {e}"
+
+    moved: list[str] = []
+    signed = record.get("script_sha256")
+    if signed != current:
+        moved.append(
+            f"the beats document has changed: the approval covers sha256 "
+            f"{signed}, the file on disk is sha256 {current}"
+        )
+    signed_pace = record.get("pace")
+    pace = meta.get("pace", 1.0)
+    if signed_pace != pace:
+        moved.append(
+            f"`pace` has changed from {signed_pace} to {pace}, and pace "
+            "multiplies every hold, so every beat's timing moved"
+        )
+    if not moved:
+        return None
+    return (
+        f"{'; and '.join(moved)} — approved by {record.get('by')} at "
+        f"{record.get('at')}. Re-run `agsoc video check` and approve again, or "
+        "put the script back"
+    )

@@ -573,6 +573,34 @@ def _print_claim_summary(ledger: dict) -> None:
     typer.echo("")
 
 
+def _echo_drift(ep) -> None:
+    """Say when an approval no longer describes the script on disk (§10).
+
+    `render` is Phase 8 and it is the command that will REFUSE; this prints the
+    same answer, from the same function, where an operator can already see it.
+    Without it an approval that stopped being true is visible to nothing until
+    the render — the expensive, hard-to-retract step §10 wrote the rule to
+    protect.
+
+    Silent unless there is an approval to contradict: "not approved yet" is the
+    normal state of a fresh script, and a banner on every draft is a banner
+    nobody reads by the time one of them is true. One function, two call sites,
+    for the reason `_echo_runtime` gives.
+    """
+    if approve_mod.approval_record(ep) is None:
+        return
+    drift = approve_mod.approval_drift(ep)
+    if not drift:
+        return
+    typer.secho(
+        textwrap.fill(
+            f"the approval on this episode no longer describes it — {drift}",
+            width=ROW_WIDTH,
+        ),
+        fg=typer.colors.RED,
+    )
+
+
 def _echo_runtime(script, check) -> None:
     """The two runtime lines, printed identically by `review` and by `check`.
 
@@ -653,6 +681,7 @@ def video_review(
         _print_claim_summary(ledger)
 
     _echo_runtime(script, check)
+    _echo_drift(ep)
 
     # Valid beats this phase cannot draw yet. Named, counted, and NOT treated as
     # an operator error: the fix is to implement the renderer, not to edit the
@@ -1023,6 +1052,7 @@ def video_check(
 
     typer.echo(f"wrote {path}")
     _echo_runtime(script, runtime)
+    _echo_drift(ep)
     if not records:
         typer.echo("no claims — this script asserts nothing about the world")
         return

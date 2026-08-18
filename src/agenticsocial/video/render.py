@@ -87,7 +87,7 @@ def preview(
                 "-i", str(frames / "%05d.png"),
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-                "-metadata", f"comment=script_sha256={plan['script_sha256']}",
+                "-metadata", f"comment=script_file_sha256={plan['script_file_sha256']}",
                 "-metadata", f"title={series.name} — {episode.id}",
                 str(mp4),
             ],
