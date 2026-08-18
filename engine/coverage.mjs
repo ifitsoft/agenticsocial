@@ -34,43 +34,43 @@ const haystack = (s) =>
 
 /* Separators carry no meaning here and they are the one thing an author and a
  * ledger reliably disagree about. The ledger says `Gemini 3.7 Flash`; a person
- * writing a candidate story says `gemini-3.7`; the id says `gemini-3-7-flash`.
- * A raw substring match made those three different queries, and the third one
- * silently came back empty — a false negative on a check whose entire job is
- * to say "we already told this story".
+ * writing a candidate story says `gemini-3.7`; the id says `gemini-3-7-flash`;
+ * and somebody will write `gemini3.7`. A raw substring match made those four
+ * different queries, and three of them silently came back empty — a false
+ * negative on a check whose entire job is to say "we already told this story".
  *
- * So compare twice, on two normalisations that between them make every
- * spelling of a separator equivalent:
+ * So strip every non-alphanumeric character from BOTH sides and compare what is
+ * left. All four spellings become `gemini37…` and find each other.
  *
- *   spaced   every run of non-alphanumerics becomes one space
- *            `gemini-3.7` and `Gemini 3.7` both → `gemini 3 7`
- *   squashed separators removed entirely
- *            `gemini3.7` → `gemini37`, which the spaced form alone would miss
+ * Two things this deliberately is not:
  *
- * A hit on either is a hit. This is deliberately one-directional: it can only
- * add matches to what the old substring check found, never remove one. A term
- * that starts mid-token — `watermark` against *watermarking*, `llm` against
- * *LiteLLM* — still hits, because the comparison is still containment and not
- * token equality. Tightening to whole tokens would have fixed `gemini-3.7` and
- * lost those two, trading one silent miss for others.
+ *   - It is not token equality. Containment is kept, so `watermark` still finds
+ *     *watermarking* and `llm` still finds *LiteLLM*. Matching whole tokens
+ *     would have fixed `gemini-3.7` and lost those — one silent miss traded for
+ *     others, in a check where a miss is the dangerous outcome.
+ *   - It is not two comparisons. Collapsing separators to a single space was
+ *     tried first, alongside this one; every match it finds this one finds too
+ *     (verified by brute force over the whole ledger), so it was dead code
+ *     dressed as a second opinion.
  *
- * The cost is false positives: `foo-bar` now also finds a ledger entry saying
- * *foo bar*, and the squashed pass can join across a word boundary (`aiact`
- * would find *EU AI Act*). That is the direction to be wrong in. A false
- * positive costs the author ten seconds of reading a title that turns out to
- * be unrelated; a false negative costs the series its one rule.
+ * The cost is false positives, and stripping separators can join across a word
+ * boundary: `aiact` now finds *EU AI Act*. That is the direction to be wrong
+ * in. A false positive costs the author ten seconds of reading a title that
+ * turns out to be unrelated; a false negative costs the series its one rule.
+ *
+ * `spaced` survives as a TOKENISER — it is how a term is split up for the
+ * "related, and not a hit" pointer below — and not as a matcher.
  */
 const spaced = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const squashed = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 const matches = (story, term) => {
-  const t = spaced(term);
+  const t = squashed(term);
   /* A term of pure punctuation normalises to nothing, and an empty needle is a
    * substring of every string — the loosest possible matcher, arrived at by
    * accident. Nothing matches nothing. */
   if (!t) return false;
-  const h = haystack(story);
-  return spaced(h).includes(t) || squashed(h).includes(squashed(term));
+  return squashed(haystack(story)).includes(t);
 };
 
 if (cmd === 'check') {
