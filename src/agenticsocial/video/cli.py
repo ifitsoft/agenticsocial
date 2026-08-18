@@ -259,7 +259,7 @@ ROW_WIDTH = 100
 ACT_WIDTH = 10
 TYPE_WIDTH = 9  # `statement` and `jumpChart`, the longest catalogue names
 SRC_WIDTH = 16  # inside the brackets — enough for a bare domain
-CLAIM_WIDTH = 9  # `no_source`, the longest verdict
+CLAIM_WIDTH = 11  # `unsupported`, the longest verdict either pass can record
 MIN_TEXT_WIDTH = 20
 LEAD = 8  # a space, the ! margin, two spaces, a two-digit index, two spaces
 
@@ -539,10 +539,21 @@ def _ledger_state(episode):
     verdicts = {}
     for record in ledger.get("claims") or []:
         if isinstance(record, dict) and isinstance(record.get("beat_index"), int):
-            verdicts[record["beat_index"]] = _verdict(record) + (
-                "*" if _written(record) else ""
-            )
+            verdicts[record["beat_index"]] = _claim_cell(record)
     return ledger, None, False, verdicts
+
+
+def _claim_cell(record: dict) -> str:
+    """The table's one-word answer about a claim, and it must be the BINDING one.
+
+    Where pass 2 refuses, the pass-1 verdict is `pass` — that is what pass 2 is
+    for — so a cell showing the measurement would print a green word on the row
+    the gate refuses. The measurement is not lost: it is on the claim's line in
+    the summary below, and in `check`'s row, which prints both.
+    """
+    state, _ = adversarial_state(record)
+    binding = _verdict(record) if state in ("unjudged", "supported") else state
+    return binding + ("*" if _written(record) else "")
 
 
 def _print_claim_summary(ledger: dict) -> None:

@@ -428,6 +428,22 @@ def test_the_pass_2_state_is_on_the_claim_row_not_only_the_mechanical_one(series
     assert "refuted" in row.lower()
 
 
+def test_reviews_table_shows_the_verdict_that_binds_not_the_one_that_passed(series):
+    """M3 on `review`'s table. A refuted claim's mechanical verdict is `pass`,
+    and this is the column an operator scans down the page before signing."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    assert judge(verdict="refuted").exit_code == 0
+    result = review()
+    row = next(line for line in result.output.splitlines() if "statement" in line)
+    assert "refuted" in row
+    assert "pass" not in row
+    # And the measurement is not lost — it is on the claim's own line below.
+    assert "pass" in next(
+        line for line in result.output.splitlines() if line.strip().startswith("! c-001")
+    )
+
+
 # --- M5, M6: residual_risk --------------------------------------------------------
 
 

@@ -904,7 +904,11 @@ def adversarial_state(record: dict) -> tuple[str, str]:
             "source or its quote has changed since. Re-judge the claim"
         )
     if verdict != "supported":
-        return verdict, f"pass 2 found this claim {verdict} — {refutation.strip()}"
+        # No "pass 2 found…" prefix: the screens print this under a `pass 2`
+        # label and beside a row that already says the verdict, and a sentence
+        # that repeats both reads as a stutter on the one screen an operator is
+        # meant to read word by word.
+        return verdict, f"{verdict} — {refutation.strip()}"
     age = (datetime.now().astimezone() - judged_at).days
     if age > PASS2_HORIZON_DAYS:
         return "expired", (
