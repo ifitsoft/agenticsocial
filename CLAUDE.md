@@ -58,7 +58,13 @@ The video render engine — a Node subproject, and the target of the video MVP (
 
 **Its invariant is load-bearing:** `window.__seek(t)` must position every element purely as a function of `t` — no CSS keyframes, no `Date.now()`, no randomness. That purity is what makes renders reproducible and any single frame re-creatable for inspection. Anything touching it needs the determinism test green in the same commit.
 
-Tracked: `scene.html`, `engine.js`, `render.mjs`, `coverage.mjs`, `content/*.js`, `coverage.json`, `package*.json`. Ignored: `node_modules/`, `frames/`, `probe/`, `*.mp4`, `*.png`.
+**One supported path in, and it is Python.** `render.mjs` renders a resolved `plan.json` — it takes no date, no pace and no content file, and refuses to start without `--plan`. `agsoc video render` is what writes that plan, and it is the command that checks the episode was approved and has not changed since. `render.mjs --day <date>`, which rendered `engine/content/*.js` directly, retired in Phase 8: it was a second route to an MP4 that passed neither `check` nor `approve`.
+
+`content/2026-08-12.js` and `content/2026-08-14.js` stay as the engine's regression fixtures — two complete episodes, every builder — loaded through `scene.html?day=…` by `determinism.test.mjs` and by anyone scrubbing the slider. Fixtures, not a workflow.
+
+Tracked: `scene.html`, `engine.js`, `planbuild.js`, `render.mjs`, `coverage.mjs`, `content/*.js`, `coverage.json`, `package*.json`, and the three tests — `determinism.test.mjs`, `network.test.mjs`, `coverage.test.mjs`. Ignored: `node_modules/`, `frames/`, `probe/`, `*.mp4`, `*.png`.
+
+The tests are run by hand (`node determinism.test.mjs`, and the same for the other two) — they are not in `uv run pytest`.
 
 Check `coverage.json` via `node coverage.mjs check <terms>` before writing a new episode — the series must never re-tell a story as if it were new.
 
