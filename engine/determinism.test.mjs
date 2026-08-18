@@ -203,6 +203,42 @@ const FIXTURE = [
     expect: ['Hand-built, and it still has to be seen', 'drawn by the beat itself'],
     forbid: ['Draws two lines of copy'],
   },
+  {
+    /* Task 5. `shown` is the one field set as `html`, and innerHTML grants
+     * ATTRIBUTES as well as tags — every inline event handler is one. Measured
+     * in a real browser from a beat exactly like this, with no `custom` and no
+     * `attest` anywhere in the plan:
+     *
+     *     load 1, frame t=1.0 : THE BRIEF|T1787015967789
+     *     load 2, frame t=1.0 : THE BRIEF|T1787015970251
+     *
+     * A data field broke `__seek(t)` purity. `crossLoad` marks this beat for
+     * the two-page-load check below; the vocabulary is closed, so the handler
+     * is TEXT on the frame and the timestamp never exists. */
+    crossLoad: true,
+    at: 0.95,
+    beat: {
+      type: 'jumpChart',
+      rows: [
+        { label: 'FrontierCode 1.1', before: 34.4, after: 43.6, shown: '<s>34.4</s> &rarr; 43.6' },
+        {
+          label: 'GDP.pdf',
+          before: 22.0,
+          after: 34.0,
+          shown:
+            '<img src=x onerror="this.parentNode.appendChild(' +
+            'document.createTextNode(Date.now()))">',
+        },
+      ],
+      scale: 70,
+      footnote: 'Scores as published by Google, on a common 0–70% scale.',
+      src: 'deepmind',
+      quote: 'FrontierCode 1.1 rises from 34.4 to 43.6',
+    },
+    /* The good row still renders as markup; the hostile one renders as the
+     * characters the author wrote, which is the honest thing to show. */
+    expect: ['34.4→43.6', 'onerror', 'Date.now()'],
+  },
 ];
 
 const PLAN = {
@@ -372,6 +408,50 @@ for (const c of CASES) {
     console.error('  page errors: ' + errors.join('; '));
   }
   await page.close();
+}
+
+/* Cross-PAGE-LOAD reproducibility.
+ *
+ * Everything above seeks twice inside one page, which is blind to a whole class
+ * of impurity: content that is created once, at parse time, from something
+ * other than `t`. `<img src=x onerror="…Date.now()…">` in a `shown` cell fires
+ * when the element is inserted, so both seeks in one page see the SAME
+ * timestamp and agree with each other. Two loads of the same plan disagree, and
+ * that is the failure the gate review reproduced:
+ *
+ *     load 1, frame t=1.0 : THE BRIEF|T1787015967789
+ *     load 2, frame t=1.0 : THE BRIEF|T1787015970251
+ *
+ * #stage rather than #scenes: an injected node can land anywhere on the card,
+ * and here the chrome is not a blind spot but the rest of the surface. */
+{
+  const i = FIXTURE.findIndex((f) => f.crossLoad);
+  const t = sampleAt(FIXTURE[i], i);
+  const frameAt = async () => {
+    const page = await browser.newPage({
+      viewport: { width: 1080, height: 1920 },
+      deviceScaleFactor: 1,
+    });
+    await page.goto('file://' + join(HERE, 'scene.html') + '?plan=1');
+    await page.evaluate(() => document.body.classList.add('render'));
+    await page.evaluate(() => document.fonts.ready);
+    await page.evaluate((tt) => window.__seek(tt), t);
+    /* The handler fires on the image's load failure, which is asynchronous —
+     * measuring before it has had the chance to be wrong would report a broken
+     * page as a pure one. */
+    await page.waitForTimeout(300);
+    const text = await page.evaluate(() => document.getElementById('stage').innerText);
+    await page.close();
+    return text.replace(/\s+/g, ' ').trim();
+  };
+  const first = await frameAt();
+  const second = await frameAt();
+  const same = first === second;
+  if (!same) failures++;
+  console.log(
+    `  ${same ? 'ok  ' : 'FAIL'} beat ${i} (jumpChart) t=${t} renders the same frame on a second page load` +
+      (same ? '' : `\n       load 1: ${first}\n       load 2: ${second}`),
+  );
 }
 
 await browser.close();

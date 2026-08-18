@@ -1517,3 +1517,225 @@ def test_the_payload_does_not_repeat_the_shared_fields(series):
     for shared in ("act", "kicker", "src", "quote", "hold", "type"):
         assert shared not in fields, shared
     assert fields["text"] == VALID["statement"]["text"]
+
+
+# --- Phase 4 Task 5: `shown` is data, not a script -------------------------------
+#
+# `jumpChart.rows[].shown` is the documented innerHTML exemption (D-078/D-081).
+# innerHTML does not only grant TAGS, it grants ATTRIBUTES, and every inline
+# event handler is an attribute. Leader-verified in a real browser, from a plain
+# `jumpChart` beat with no `custom` and no `attest`:
+#
+#     load 1, frame t=1.0 : THE BRIEF|T1787015967789
+#     load 2, frame t=1.0 : THE BRIEF|T1787015970251
+#     *** NOT REPRODUCIBLE: same t, same plan, different frame ***
+#
+# `__seek(t)` purity, broken by a data field. The answer is the same one D-080
+# gave for prose: a CLOSED vocabulary, because a script.yaml is written by an
+# agent against a fetched source. A blocklist of `on*` is the `window['Ma'+'th']`
+# situation from D-088 — a lint sold as a boundary.
+#
+# The vocabulary: `<s>` and `</s>`, verbatim and attribute-free, plus character
+# references. That is what the committed episodes use, all four rows of
+# content/2026-08-14.js: `<s>34.4</s> &rarr; 43.6`.
+
+# What the only real episode actually writes. Not a shortened stand-in: this is
+# the regression the whole task is measured against.
+REAL_SHOWN = [
+    "<s>34.4</s> &rarr; 43.6",
+    "<s>48–49</s> &rarr; 65.3",
+    "<s>17.0</s> &rarr; 30.4",
+    "<s>22.0</s> &rarr; 34.0",
+]
+
+
+def _jump(shown):
+    return dict(
+        VALID["jumpChart"],
+        rows=[{"label": "FrontierCode", "before": 34.4, "after": 43.6, "shown": shown}],
+    )
+
+
+@pytest.mark.parametrize("value", REAL_SHOWN)
+def test_the_shown_the_committed_episode_writes_is_accepted(series, value):
+    """R1 NEGATIVE (M4, M5). precondition: content/2026-08-14.js renders all
+    four of these, and the strikethrough and the arrow are the whole point of
+    the field — a rule that refuses them has replaced the type rather than
+    secured it."""
+    script = _load(series, [_jump(value)])
+    assert script.beats[0].fields["rows"][0]["shown"] == value
+
+
+EXECUTABLE_SHOWN = [
+    # the leader's reproduction, verbatim
+    '<img src=x onerror="window.__PWNED=1">',
+    # M3: a blocklist of `on*` handlers is not a boundary. Each of these walks
+    # past a naive one, and each executes in Chromium.
+    '<img src=x onpointerenter="pwn()">',
+    '<img src=x OnErRoR="pwn()">',
+    '<img src=x\tonerror="pwn()">',
+    '<img src=x\nonerror="pwn()">',
+    "<svg onload=pwn()>",
+    '<iframe src="javascript:pwn()"></iframe>',
+    "<script>pwn()</script>",
+    # R2: the tag is in the vocabulary and the ATTRIBUTE is not. A rule that
+    # only inspects the tag name lets this one through.
+    '<s onclick="pwn()">34.4</s>',
+    '<s style="background:url(http://evil/x)">34.4</s>',
+    # not executable, but outside the vocabulary all the same: the surface is
+    # closed by what it allows, not by what it fears.
+    "<b>34.4</b>",
+    "<a href=\"http://evil/\">34.4</a>",
+]
+
+
+@pytest.mark.parametrize("value", EXECUTABLE_SHOWN)
+def test_markup_outside_the_vocabulary_is_refused_at_validation(series, value):
+    """R3 (M1, M3, M6, M9). precondition: `shown` reaches innerHTML and there is
+    no `attest` on a jumpChart, no `NONDETERMINISTIC` lint over this field and
+    no line in `agsoc video review` that used to show it — three controls, all
+    of which this field sat outside. The plan is the contract: a script that
+    validates and then needs the renderer to save it has already been approved
+    by a human reading a screen that did not show this."""
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [_jump(value)])
+    assert "shown" in str(e.value)
+
+
+def test_the_refusal_names_the_beat_the_row_and_what_was_rejected(series):
+    """R3 NEGATIVE (M7). precondition: a four-bar chart in a twelve-beat episode.
+    "invalid" sends an operator reading everything; the beat, the row and the
+    fragment send them to the character they typed."""
+    beat = dict(
+        VALID["jumpChart"],
+        rows=[
+            {"label": "ok", "before": 1, "after": 2, "shown": "<s>1</s> &rarr; 2"},
+            {"label": "ok too", "before": 1, "after": 2},
+            {
+                "label": "bad",
+                "before": 1,
+                "after": 2,
+                "shown": '<img src=x onerror="pwn()">',
+            },
+        ],
+    )
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [VALID["statement"], beat])
+    msg = str(e.value)
+    assert "beat 1" in msg, msg
+    assert "[2]" in msg, msg
+    assert "<img" in msg, msg
+
+
+ORDINARY_SHOWN = [
+    "34.4 &rarr; 43.6",
+    "34.4 → 43.6",
+    "AT&T",
+    "43.6 > 34.4",
+    "",
+    "&lt;s&gt;",
+    "&#8594;",
+]
+
+
+@pytest.mark.parametrize("value", ORDINARY_SHOWN)
+def test_a_shown_that_is_only_text_and_entities_is_accepted(series, value):
+    """R3 NEGATIVE. precondition: the rule is a closed markup vocabulary, not a
+    ban on punctuation. A bare `&` is an ampersand, a bare `>` is a
+    greater-than, and `&lt;s&gt;` is an author asking for the characters — none
+    of them can open a tag, so none of them is refused."""
+    script = _load(series, [_jump(value)])
+    assert script.beats[0].fields["rows"][0]["shown"] == value
+
+
+# --- ride-along F5: `decimals` has no upper bound --------------------------------
+
+
+def test_decimals_above_a_hundred_are_refused(series):
+    """precondition: `toFixed` accepts 0–100 and throws a RangeError above it,
+    so `decimals: 101` is a script that validates and then kills the render at
+    build-walk time, after the operator has already reached `render`."""
+    beat = dict(VALID["kpis"], items=[{"value": 1, "label": "x", "decimals": 101}])
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    assert "101" in str(e.value) and "100" in str(e.value)
+
+
+def test_a_hundred_decimals_is_still_accepted(series):
+    """precondition NEGATIVE: the bound is `toFixed`'s own, and it is inclusive.
+    Refusing 100 would be a bound invented here rather than the engine's."""
+    beat = dict(VALID["kpis"], items=[{"value": 1, "label": "x", "decimals": 100}])
+    assert _load(series, [beat]).beats[0].fields["items"][0]["decimals"] == 100
+
+
+# --- ride-along F6: a value that renders in exponential notation -----------------
+
+
+def test_a_value_at_the_exponential_threshold_is_refused(series):
+    """precondition: both R2 gates ask `Number(v.toFixed(d)) === v`, and 1e21
+    passes both while reaching the frame as `1e+21`. That is the one input found
+    that defeats R2 SILENTLY rather than loudly: the frame carries a figure
+    written in a notation the plan does not."""
+    beat = dict(VALID["kpis"], items=[{"value": 1e21, "label": "x"}])
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    assert "e+21" in str(e.value)
+
+
+def test_a_large_value_below_the_threshold_still_renders_as_digits(series):
+    """precondition NEGATIVE: 1e20 is `100,000,000,000,000,000,000` on the
+    frame — absurd for this series, and digits, which is all R2 asks."""
+    beat = dict(VALID["kpis"], items=[{"value": 1e20, "label": "x"}])
+    assert _load(series, [beat]).beats[0].fields["items"][0]["value"] == 1e20
+
+
+# --- ride-along F3: "a dumbbell renders no numbers at all" -----------------------
+#
+# Asserted in script.py, in engine.js and in a test, and true only of `values`.
+# `caption`, `footnote`, row `label` and row `note` are unconstrained text and
+# all reach the stage, so a `cited: False` card can print `+18 pts` with no `src`
+# and no `quote` anywhere in the pipeline. The exemption rests on a property the
+# type does not hold.
+#
+# Decision: the exemption is kept and made CONDITIONAL on the property. A
+# dumbbell that prints no digit needs no citation, exactly as spec §7.2 says. A
+# dumbbell that prints one is a beat that renders numbers, and §7.2's own
+# sentence — "there is no path to rendering a number that isn't in a source" —
+# is written about numbers, not about types.
+
+DIGIT_FIELDS = [
+    {"caption": "Rated 4.2 out of 5 by 27 evaluators"},
+    {"footnote": "Direction only. n=159 cases, 2026."},
+    {"kicker": "18 points ahead"},
+    {"rows": [{"label": "History-taking (0.72)", "values": [0.4, 0.4]}]},
+    {"rows": [{"label": "History-taking", "values": [0.4, 0.4], "note": "+18 pts"}]},
+]
+
+
+@pytest.mark.parametrize("override", DIGIT_FIELDS)
+def test_a_dumbbell_that_prints_a_digit_needs_a_source(series, override):
+    """precondition: each of these fields reaches the stage — `caption` is
+    `.body`, `footnote` is `.foot`, `kicker` is drawn by planKicker and the row
+    label and note are the chart's own text. The uncited exemption is justified
+    by "it renders no numbers"; where that is false the justification is too."""
+    beat = dict(VALID["dumbbell"], **override)
+    with pytest.raises(S.ScriptError) as e:
+        _load(series, [beat])
+    msg = str(e.value)
+    assert "src" in msg and "quote" in msg
+
+
+@pytest.mark.parametrize("override", DIGIT_FIELDS)
+def test_a_dumbbell_that_prints_a_digit_renders_when_it_is_cited(series, override):
+    """precondition NEGATIVE: the rule is a citation requirement, not a ban on
+    digits. "n=159 cases" is a real footnote from a real study, and refusing it
+    outright would push the operator into writing a vaguer one."""
+    beat = dict(VALID["dumbbell"], src="nature", quote="159 cases", **override)
+    assert _load(series, [beat]).beats[0].type == "dumbbell"
+
+
+def test_a_digit_free_dumbbell_still_needs_no_citation(series):
+    """precondition NEGATIVE: spec §7.1 does not put `dumbbell` in the cited
+    pair, and the AMIE chart the type exists for carries no figure at all.
+    Making every dumbbell cited would be a spec change wearing a bugfix."""
+    assert _load(series, [VALID["dumbbell"]]).beats[0].type == "dumbbell"

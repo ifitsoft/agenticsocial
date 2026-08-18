@@ -861,3 +861,60 @@ def test_a_kpi_reads_on_the_review_line_the_way_it_reads_on_the_frame(ws, series
     out = run("video", "review", "2026-08-17", "--series", "the-brief").output
     assert "$0.75" in out
     assert "50%" in out
+
+
+# --- Task 5, R4: `shown` reaches the approver ------------------------------------
+#
+# D-081 records `jumpChart.shown` as the ONE field where the frame and the
+# script legitimately differ — it is an HTML display override, so the bar says
+# 34.4→43.6 and the cell says whatever `shown` says. The summariser printed only
+# the row LABEL, so the field never reached the review screen at all. That is how
+# an unattested markup surface stayed invisible to the one control that is a
+# person rather than a check.
+
+
+def test_review_shows_the_shown_cell_of_a_jumpchart_row(ws, series):
+    """precondition: this is the one field where the frame and the script
+    legitimately differ (D-081), so it is the one field an approver cannot
+    reconstruct from the rest of the row. A label they can read off the chart is
+    not what needs showing."""
+    episode(
+        series,
+        [
+            {
+                "type": "jumpChart",
+                "hold": 3.0,
+                "rows": [
+                    {"label": "Code", "before": 34.4, "after": 43.6,
+                     "shown": "<s>34.4</s> &rarr; 43.6"}
+                ],
+                "scale": 70,
+                "footnote": "Scores as published.",
+                "src": "deepmind",
+                "quote": "rises from 34.4 to 43.6",
+            }
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    assert "<s>34.4</s> &rarr; 43.6" in out
+
+
+def test_review_still_names_the_row_when_there_is_no_shown(ws, series):
+    """NEGATIVE half. precondition: `shown` is optional — an absent one blanks
+    the value cell — so the label must not disappear with it."""
+    episode(
+        series,
+        [
+            {
+                "type": "jumpChart",
+                "hold": 3.0,
+                "rows": [{"label": "FrontierCode", "before": 34.4, "after": 43.6}],
+                "scale": 70,
+                "footnote": "Scores as published.",
+                "src": "deepmind",
+                "quote": "rises from 34.4 to 43.6",
+            }
+        ],
+    )
+    out = run("video", "review", "2026-08-17", "--series", "the-brief").output
+    assert "FrontierCode" in out
