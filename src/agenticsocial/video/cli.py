@@ -277,6 +277,25 @@ def _kpi(item: dict) -> str:
     return f"{prefix}{value}{unit} {label}".strip()
 
 
+def _jump_row(row: dict) -> str:
+    """One jumpChart row, with the cell that does not follow from the bar.
+
+    `shown` is an HTML display override, and D-081 records it as the one field
+    where the frame and the script legitimately differ: the bar is drawn from
+    `before`/`after` and this text is drawn from nothing else. So it is the one
+    field an approver cannot reconstruct from the rest of the row, and printing
+    only the label is how it stayed invisible to the only control that is a
+    person rather than a check — it can carry markup, and until Phase 4 Task 5
+    it could carry an inline event handler.
+
+    Shown verbatim, as authored, because that is the string in the file they are
+    about to edit.
+    """
+    label = row.get("label", "")
+    shown = row.get("shown")
+    return _join([label, shown]) if isinstance(shown, str) else _one_line(label)
+
+
 # One summariser per catalogue type. A dict rather than a chain of `if`s for the
 # same reason BEAT_TYPES is: adding a type in Phase 4 is a row here. There is no
 # `.get(type, "")` default anywhere below — a default is how a new type silently
@@ -286,7 +305,7 @@ SUMMARISERS = {
     "body": lambda b: _one_line(b.fields.get("text", "")),
     "list": lambda b: _join([b.fields.get("lead", ""), *b.fields.get("items", [])]),
     "kpis": lambda b: _join(_kpi(i) for i in b.fields.get("items", [])),
-    "jumpChart": lambda b: _join(r.get("label", "") for r in b.fields.get("rows", [])),
+    "jumpChart": lambda b: _join(_jump_row(r) for r in b.fields.get("rows", [])),
     "dumbbell": lambda b: _one_line(b.fields.get("caption", "")),
     "quote": lambda b: _one_line(
         f"“{b.fields.get('text', '')}” — {b.fields.get('attribution', '')}"
