@@ -1453,6 +1453,11 @@ def test_the_design_drift_names_the_value_that_moved(series):
     assert "#2E6BFF" in message, "what was signed"
     assert "#12A150" in message, "what is on disk now"
     assert BY in message and approval_on_disk(series)["at"] in message
+    assert "type_family" not in message, (
+        "naming every token is not naming the change — a message that prints "
+        "both tables and leaves the operator to diff them has told them "
+        "nothing they could not have got by opening the file"
+    )
 
 
 def test_changing_the_series_name_after_approval_is_drift(series):
@@ -1531,6 +1536,18 @@ def test_a_design_token_nobody_has_heard_of_yet_is_covered(series):
     edit_series_toml(series, 'halo        = "#FF0000"', 'halo        = "#00FF00"')
     message = drift(series)
     assert message is not None, "an unknown token still repaints the frame"
+    assert "halo" in message
+
+
+def test_deleting_a_design_token_after_approval_is_drift(series):
+    """A token that disappears falls back to whatever the stylesheet does
+    without it — a different frame, arrived at by subtraction. A comparison
+    that only walks the keys present in both files cannot see it."""
+    add_to_design(series, 'halo        = "#FF0000"')
+    approved_episode(series)
+    edit_series_toml(series, 'halo        = "#FF0000"\n', "")
+    message = drift(series)
+    assert message is not None
     assert "halo" in message
 
 
