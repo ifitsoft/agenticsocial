@@ -39,6 +39,10 @@ that make it so.
   named that episode and asked you to re-draft it. A day can hold more than one
   episode (step 3); an overwritten `script.yaml` is gone, because `workspace/`
   is not version controlled.
+- **Every beat that asserts something names its subject in its own text**
+  (step 4.5). A card reading `$1.32 / per 1M input tokens` is a price about
+  nobody: viewers scrub, and pass 2 shows each card to a refuter alone. `title`
+  and `signoff` assert nothing and are exempt.
 - **Say only what a source says.** If your source gives a direction rather than
   a magnitude, say the direction — with `dumbbell`, which renders no digits at
   all — rather than reaching for a number to make the card feel finished.
@@ -301,6 +305,124 @@ two beats. Decide this while you are outlining, not after `check` refuses it.
   frame showing a value nobody wrote — at a 2-second hold an authored `50%`
   ended the beat reading `40%`. 4.0s of authored hold clears every case in the
   catalogue at any sane pace.
+
+### 4.5 Every beat that asserts something names its subject
+
+**A card that asserts something says who or what it is about, in its own text.**
+Not in the beat before it, not in the act chip, not in the viewer's memory of
+five seconds ago.
+
+Two reasons, and the second one is why this is a rule rather than a preference:
+
+- **A vertical video is not watched in order.** Viewers scrub, they arrive
+  mid-scroll, and every card is on screen alone for about three seconds. A card
+  reading `$1.32 / per 1M input tokens` is a price about nobody.
+- **Pass 2 reads it the same way** (`skills/verify`). One refuter per claim gets
+  that card and the source document, and nothing else, on purpose. On this
+  series' first real pass-2 run, **four of five claims came back `unsupported`
+  and every one of them said the same thing: the card names no subject.** The
+  single card that named its own came back `supported`. Those beats were not
+  wrong; they were underspecified, and the fix is the beat.
+
+`title` and `signoff` assert nothing, so they are exempt — a title card with a
+`sub` of *Five stories from the last 24 hours* is not a claim about anybody.
+Everything else — `statement`, `body`, `list`, `quote`, `kpis`, `jumpChart`,
+`dumbbell` — asserts, and every one of them has a field a name fits in: `text`,
+`kicker`, `lead`, `caption`, a KPI `label`, a chart row `label`.
+
+The cost is a few words per card. **What it buys is the better card**, which is
+why this is not a checker-appeasement exercise: writing for a viewer who arrived
+at beat 9 first is simply writing the story better.
+
+**Watch for these, they are the whole population:** a card opening with `It`,
+`They`, `The weights`, `The new model`, `The company`; a bare figure with a unit
+label and no owner; a second card continuing the sentence of the first.
+
+#### Worked, from the real episode `2026-08-17c`
+
+All four of these passed pass 1 — every figure was in the quote — and all four
+were refused by pass 2 for the same missing subject.
+
+**`c-019`, a `statement`. The cheapest fix there is.**
+
+```yaml
+# before                                # after
+text: It was released on August 14, 2026.
+text: Z.ai's GLM-5.3 was released on August 14, 2026.
+quote: Z.ai's GLM‑5.3, released August 14, 2026     # unchanged — the name was
+                                                    # already in the citation
+```
+
+**`c-005`, a `kpis` card. The archetype: the right price on nobody.**
+
+```yaml
+# before
+  - type: kpis
+    kicker: New pricing, from August 16
+    items:
+      - {prefix: "$", value: 1.32, label: per 1M input tokens}
+      - {prefix: "$", value: 3.96, label: per 1M output tokens}
+    quote: announced new pricing starting August 16 at about $1.32 / $3.96 per 1M tokens (in/out)
+
+# after
+  - type: kpis
+    kicker: DeepSeek's flagship, new pricing from August 16
+    items:
+      - {prefix: "$", value: 1.32, label: per 1M input tokens (source says "about")}
+      - {prefix: "$", value: 3.96, label: per 1M output tokens (source says "about")}
+    quote: >-
+      DeepSeek's 1.6T MoE flagship quietly moved from preview to general
+      availability this week with upgraded agent capabilities, then announced new
+      pricing starting August 16 at about $1.32 / $3.96 per 1M tokens (in/out)
+```
+
+Two moves, and the second is the one people miss. The kicker gains the subject —
+and **the quote is widened left to the clause that names it**, so the card's
+subject is inside its own citation rather than in the source somewhere. The
+labels carry the source's `about`: §6 is about digits, and a hedge is not a
+digit, so nothing upstream will ever tell you that you dropped one. A refuter
+will.
+
+**`c-010`, a `kpis` card whose quote already named the subject — so only the
+card changes.**
+
+```yaml
+# before                                 # after
+kicker: Roughly                          kicker: Alibaba's Qwen3.8-Max
+items:                                   items:
+  - {value: 2.4, unit: T,                  - {value: 2.4, unit: T,
+     label: parameters}                       label: parameters (roughly)}
+  - {value: 95, unit: B,                   - {value: 95, unit: B,
+     label: active}                           label: active (about)}
+quote: Alibaba's Qwen3.8‑Max, at roughly 2.4 trillion parameters with about 95B active
+```
+
+The refuter that read the `before` found the source's sentence, matched both
+figures — and refused anyway, because the same document also carries `1.6T`,
+`27.8B` and `95B`, and the card named none of the three models. It also caught
+that the card kept `Roughly` on the first figure and dropped `about` on the
+second.
+
+**`c-007`, a `statement` that was half of the sentence before it.**
+
+```yaml
+# before
+text: But a clear upward correction after undercutting the market for months.
+quote: but a clear upward correction after undercutting the market for months
+
+# after
+text: >-
+  Still cheaper than many closed frontiers — but a clear upward correction after
+  DeepSeek undercut the market for months.
+quote: >-
+  still substantially cheaper than many closed frontiers, but a clear upward
+  correction after undercutting the market for months
+```
+
+The `before` opens with `But`, which is a card that cannot stand alone by
+construction. Restoring the subject also restored the counterweight the card had
+dropped — the source's *still substantially cheaper than many closed frontiers*
+— which was the second thing the refuter said about it.
 
 ### 5. Write `script.yaml`
 
@@ -574,6 +696,14 @@ you were handed is the input, not a search.) **`approve`, `render`, `preview`
 and `post` are not on this list and are not yours to run.**
 
 ### 9. Hand it over
+
+**First, read the cards one at a time.** Not the script top to bottom — that is
+the reading in which every subject is still on screen from the beat before.
+Take each asserting beat's rendered text alone and ask who it is about. Anything
+opening with `It`, `They`, `But`, `The weights`, `The new model`, or any bare
+figure with a label and no owner, fails step 4.5 and will be refused by pass 2
+for exactly that. `check` cannot see this: a nameless card whose figures are all
+in its quote passes pass 1 cleanly.
 
 When `check` exits 0 and `review` says *within tolerance*, edit the metadata
 document of `script.yaml` and set:
