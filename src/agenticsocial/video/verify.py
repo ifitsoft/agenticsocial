@@ -260,6 +260,14 @@ MAGNITUDE_WORDS: dict[str, Decimal] = {
         ("trillion", MAGNITUDES["T"]),
     )
     for word in (stem, stem + "s")
+} | {
+    # The two-letter spellings again, this time standing on their own. A beat
+    # writes `95bn` and also `95 bn`, and the second one never reaches the
+    # suffix strip: the atom was the bare `95`, which a source saying "95
+    # million" contains. Same defect as F1, one space away from it.
+    "bn": MAGNITUDES["B"],
+    "mn": MAGNITUDES["M"],
+    "tn": MAGNITUDES["T"],
 }
 
 
