@@ -688,7 +688,7 @@ def test_extraction_writes_nothing_to_disk(tmp_path):
         allow_unicode=True,
     )
     ep.script_path.write_text(
-        "---\nepisode: 2026-08-14\nseries: the-brief\nstatus: draft\n---\n" + body,
+        '---\nepisode: "2026-08-14"\nseries: the-brief\nstatus: draft\n---\n' + body,
         encoding="utf-8",
     )
     before = {
