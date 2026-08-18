@@ -658,10 +658,9 @@ def test_video_new_hints_the_next_command_with_its_series(ws):
 
 
 def test_the_next_command_video_new_prints_actually_runs(ws, tmp_path):
-    """precondition: the hint is executed, not pattern-matched. `--research`
-    would need the network, so only that one flag is swapped for the offline
-    `--paste`; the command name, the episode id and the series all come from
-    the hint's own bytes."""
+    """precondition: the hint is executed, not pattern-matched. Only the
+    `<file>` placeholder is substituted — the command name, the flag, the
+    episode id and the series all come from the hint's own bytes."""
     run("series", "new", "the-brief")
     result = run("video", "new", "2026-08-14", "--series", "the-brief")
     hint = next(ln for ln in result.output.splitlines() if ln.startswith("next:"))
@@ -669,9 +668,34 @@ def test_the_next_command_video_new_prints_actually_runs(ws, tmp_path):
     brief.write_text("DeepSeek raised prices.", encoding="utf-8")
     argv = hint[len("next:"):].split()
     assert argv[0] == "agsoc"
-    argv = argv[1:argv.index("--research")] + ["--paste", str(brief)]
+    argv = [str(brief) if a == "<file>" else a for a in argv[1:]]
     ingested = run(*argv)
     assert ingested.exit_code == 0, ingested.output
     assert (
         ws.series_dir / "the-brief" / "episodes" / "2026-08-14" / "sources" / "_pasted.txt"
     ).exists()
+
+
+def test_video_new_hints_the_ingest_mode_the_workflow_uses(ws):
+    """The hint named `--research` alone. That is the one ingest mode the
+    documented workflow does not use — the storyboard skill hands the author a
+    brief that is already a file — and it is the one mode that needs the
+    network, so an author following the tool over the doc (D-109, again) ends
+    up fetching search results over the brief they were given.
+
+    The hint must lead with the offline mode and must still say the other two
+    exist, because `ingest` takes exactly one of the three and a hint that
+    names one is read as the only one."""
+    run("series", "new", "the-brief")
+    result = run("video", "new", "2026-08-17", "--series", "the-brief")
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    hint = next(ln for ln in lines if ln.startswith("next:"))
+    assert "--paste" in hint, hint
+    assert "--research" not in hint, hint
+    rest = "\n".join(lines[lines.index(hint) + 1:])
+    for alternative in ("--research", "--from-source"):
+        assert alternative in rest, result.output
+    # and the negative half: naming the alternatives may not make the hint
+    # ambiguous about how many of them you pass.
+    assert "one" in rest.lower(), result.output
