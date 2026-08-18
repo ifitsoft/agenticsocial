@@ -818,10 +818,18 @@ def test_the_custom_javascript_sees_the_engine_primitives():
 def test_the_custom_javascript_is_handed_the_scene_root():
     """R4. Both episodes write `scene(act, dur, tag, s => { … })` and the `s`
     parameter is the card. An escape hatch that does not pass it forces every
-    custom beat to reach for a global the engine does not promise."""
-    js = "E('div', 'kicker', {p: s, text: 'from s'});\n"
+    custom beat to reach for a global the engine does not promise.
+
+    The assertion READS `s` rather than passing it to `E({p: s})`, which is the
+    version my mutation sweep killed: `E()` falls back to `opts.p || SC`, and
+    inside a build closure SC is the same node — so a builder that dropped the
+    argument entirely produced an identical tree and the test passed."""
+    js = (
+        "const cls = s.className;\n"
+        "E('div', 'kicker', {text: 'root class ' + cls});\n"
+    )
     tree = build([beat("custom", **{**CUSTOM, "js": js})])[0]["tree"]
-    assert find(tree, "kicker")[0]["text"] == "from s"
+    assert find(tree, "kicker")[0]["text"] == "root class sc"
 
 
 @needs_node
@@ -928,6 +936,20 @@ def test_the_merged_marker_is_decided_per_row_not_per_chart():
     beat draws the wrong marker on one half of it either way."""
     tree = build([beat("dumbbell", **DUMBBELL)])[0]["tree"]
     assert len(find(tree, "dot merged")) == 1
+    assert len(find(tree, "dot a")) == 1 and len(find(tree, "dot b")) == 1
+
+
+@needs_node
+def test_a_row_where_the_second_series_is_higher_also_separates():
+    """R3 NEGATIVE, and a hole my own mutation sweep found: every fixture in
+    this file put the FIRST series ahead, so `a !== b` and `a > b` were
+    indistinguishable. Under `a > b` a row where the second entity rates higher
+    merges — the chart draws "on par" over a real gap, hides a series and
+    reverses the finding, which is the exact failure R3 exists to prevent."""
+    tree = build([beat("dumbbell", **{**DUMBBELL, "rows": [
+        {"label": "the other way round", "values": [0.4, 0.8]},
+    ]})])[0]["tree"]
+    assert not find(tree, "dot merged")
     assert len(find(tree, "dot a")) == 1 and len(find(tree, "dot b")) == 1
 
 

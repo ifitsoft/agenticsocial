@@ -143,6 +143,66 @@ const FIXTURE = [
       'Scores as published by Google',
     ],
   },
+  {
+    /* The dumbbell, and the two properties that are the reason the type exists.
+     *
+     * The `expect` list is the caption, both series names, every row label and
+     * the footnote — and the NEGATIVE half is `forbid`, below: not one digit of
+     * 0.72 or 0.82 may reach the screen. That is the check no unit test can
+     * make convincingly, because "the value never became text" is a statement
+     * about the whole rendered card rather than about one node.
+     *
+     * Sampled at 0.95: the fifth row starts at 1.43s and its markers take until
+     * 2.61s to separate, and the footnote arrives after that. */
+    at: 0.95,
+    beat: {
+      type: 'dumbbell',
+      caption: 'Evaluators rated it **on par** with primary care physicians',
+      series: ['AMIE (video)', 'Primary care physician'],
+      rows: [
+        { label: 'History-taking', values: [0.72, 0.72], note: 'on par' },
+        { label: 'Diagnostic accuracy', values: [0.72, 0.72], note: 'on par' },
+        { label: 'Management', values: [0.72, 0.72], note: 'on par' },
+        { label: 'Communication quality', values: [0.72, 0.72], note: 'on par' },
+        { label: 'Eliciting physical signs', values: [0.82, 0.58], note: 'rated higher' },
+      ],
+      footnote:
+        'Direction only — the source reports evaluator ratings, not published scores.',
+    },
+    expect: [
+      'Evaluators rated it on par with primary care physicians',
+      'AMIE (video)',
+      'Primary care physician',
+      'both',
+      'History-taking',
+      'Eliciting physical signs',
+      'rated higher',
+      'lower',
+      'higher →',
+      'Direction only',
+    ],
+    forbid: ['0.72', '0.82', '0.58', '72', '82', '58'],
+  },
+  {
+    /* `custom`: the beat that executes. It has to actually RUN — an escape
+     * hatch that silently draws nothing is worse than none — and it has to
+     * reach the same primitives the committed episodes call as bare globals.
+     *
+     * `attest` is deliberately not in `expect`: it is a claim made to the
+     * approver in `agsoc video review`, and a beat that displayed its own
+     * sign-off would look verified on screen. It is in `forbid` instead. */
+    beat: {
+      type: 'custom',
+      js:
+        "const h = E('h2', null, P('Hand-built, and it still has to be seen'));\n" +
+        "rise(h, .15);\n" +
+        "const b = E('div', 'body', {text: 'drawn by the beat itself'});\n" +
+        "fade(b, .8);\n",
+      attest: 'Draws two lines of copy and no figures. — the test',
+    },
+    expect: ['Hand-built, and it still has to be seen', 'drawn by the beat itself'],
+    forbid: ['Draws two lines of copy'],
+  },
 ];
 
 const PLAN = {
@@ -272,13 +332,39 @@ for (const c of CASES) {
        * passed on an empty scene. Read only what the builder built. */
       const shown = await page.evaluate(() => document.getElementById('scenes').innerText);
       const missing = expect.filter((e) => !squash(shown).includes(squash(e)));
+      /* The negative half. `forbid` is for what must NOT be on the card: the
+       * dumbbell's positions (it encodes direction only, so a digit from a
+       * value is a number nobody published) and a custom beat's attestation
+       * (a claim made to the approver, not to the viewer). A beat that renders
+       * everything it should AND something it should not still fails. */
+      const banned = (c.content[i].forbid || []).filter((e) =>
+        squash(shown).includes(squash(e)),
+      );
       const leaked = shown.includes('**') ? ' · `**` reached the screen' : '';
-      if (missing.length || leaked) failures++;
+      if (missing.length || banned.length || leaked) failures++;
       console.log(
-        `  ${missing.length || leaked ? 'FAIL' : 'ok  '} beat ${i} (${beat.type})` +
-          (missing.length ? ` missing ${JSON.stringify(missing)}${leaked}` : ` renders its text${leaked}`),
+        `  ${missing.length || banned.length || leaked ? 'FAIL' : 'ok  '} beat ${i} (${beat.type})` +
+          (missing.length ? ` missing ${JSON.stringify(missing)}` : '') +
+          (banned.length ? ` MUST NOT SHOW ${JSON.stringify(banned)}` : '') +
+          (missing.length || banned.length ? leaked : ` renders its text${leaked}`),
       );
     }
+  }
+
+  /* Every builder has a fixture. Phase 4's exit criterion is
+   * `RENDERABLE == set(BEAT_TYPES)`, and a type that renders in principle and
+   * is covered by nothing here is a type this file certifies deterministic
+   * without ever having drawn it. BUILDERS is read off the live page rather
+   * than listed again: a second list is the D-036 drift pattern. */
+  if (c.content) {
+    const builders = await page.evaluate(() => Object.keys(BUILDERS));
+    const covered = new Set(c.content.map((f) => f.beat.type));
+    const uncovered = builders.filter((t) => !covered.has(t));
+    if (uncovered.length) failures++;
+    console.log(
+      `  ${uncovered.length ? 'FAIL' : 'ok  '} every builder has a fixture` +
+        (uncovered.length ? ` — none for ${JSON.stringify(uncovered)}` : ` (${builders.length})`),
+    );
   }
 
   if (errors.length) {
