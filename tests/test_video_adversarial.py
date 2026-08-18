@@ -1210,6 +1210,25 @@ def test_check_counts_the_binding_verdict_too(series):
 # reached, the write succeeds, and the verdict looks completely normal on screen
 # while quoting a price nobody wrote.
 
+def warning_block(result) -> str:
+    """The `warning` detail line and its wrapped continuations, and nothing else.
+
+    `labelled` reads the 6-indent blocks; this one is printed at indent 2 under
+    `judge`'s own echo, and a test that searched the whole screen for a flag
+    name would pass on the help text (D-118).
+    """
+    lines = result.output.splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if line.strip().startswith("warning")
+    )
+    block = [lines[start].strip()]
+    for line in lines[start + 1:]:
+        if not line.startswith(" " * (2 + 9)) or not line.strip():
+            break
+        block.append(line.strip())
+    return " ".join(block)
+
+
 MONEY = (
     "SUBJECT and CONTEXT: the source writes about $1.32 / $3.96 per 1M tokens "
     "(in/out), hedged with `about`, and the card drops it; it's a 100% figure "
@@ -1312,9 +1331,9 @@ def test_an_inline_refutation_that_lost_a_dollar_sign_says_so(series):
         verdict="unsupported",
     )
     assert result.exit_code == 0, result.output
-    note = labelled(result, "warning")
-    assert ".32" in note
-    assert "--refutation-file" in note
+    note = warning_block(result)
+    assert ".32" in note, note
+    assert "--refutation-file" in note, note
 
 
 def test_the_note_is_silent_on_prose_that_lost_nothing(series):

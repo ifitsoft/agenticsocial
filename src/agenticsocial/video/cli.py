@@ -1,6 +1,7 @@
 """`agsoc series` and `agsoc video` commands."""
 from __future__ import annotations
 
+import re
 import textwrap
 from pathlib import Path
 from typing import Optional
@@ -1219,6 +1220,70 @@ def video_check(
     typer.secho(_cleared_summary(records), fg=typer.colors.GREEN)
 
 
+# A figure with no digit in front of its decimal point — what `$1.32` leaves
+# behind after a shell has removed `$1` from a double-quoted argument.
+_LOST_MAGNITUDE = re.compile(r"(?<![\w.])(\.\d[\d,]*)")
+
+
+def _prose(inline: str | None, path: str | None, flag: str, label: str) -> str | None:
+    """One prose field, from an argument or from a file — never from both.
+
+    **The file is the byte-exact path and it exists because of a real defect.**
+    `--refutation "$1.32"` records `.32`: the shell removes `$1` before this
+    command is reached, the write succeeds and the verdict reads normally on
+    every screen while quoting a price nobody wrote. Nothing downstream can
+    detect that, because the bytes that would prove it were destroyed one
+    process earlier — so the fix is a route that never passes the prose through
+    a shell at all, not a checker for text that is already gone.
+
+    Two sources for one field would be the D-059 shape at the input boundary:
+    the silent winner is whichever the code reads second. So it refuses.
+    """
+    if inline is not None and path is not None:
+        raise _fail(
+            f"{label} was given twice — `{flag}` and `{flag}-file`. Pass one: "
+            f"`{flag}-file` for anything a refuter wrote, because the shell "
+            "cannot reach those bytes"
+        )
+    if path is not None:
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise _fail(f"{path} is not UTF-8 text, so it cannot be recorded")
+        except OSError as e:
+            raise _fail(f"cannot read {path}: {e}")
+        return _text(text, label)
+    return None if inline is None else _text(inline, label)
+
+
+def _echo_lost_magnitude(text: str, field: str, flag: str) -> None:
+    """Say when an inline argument looks like it was eaten by the shell.
+
+    A NOTE, never a refusal, and it says only what it can see. `.32` is a legal
+    thing to write; this command cannot know whether a `$1` was there, and it
+    does not claim to — the wording is conditional because the evidence is. It
+    is also incomplete by construction: `$1M` expands to nothing at all and
+    leaves no residue for anything to find. That is why the note points at the
+    flag that makes the whole class impossible rather than at a fix for this
+    one.
+    """
+    found = _LOST_MAGNITUDE.search(text)
+    if found is None:
+        return
+    typer.secho(
+        _detail(
+            "warning",
+            f"the {field} contains `{found.group(1)}` — a figure with no leading "
+            f"digit. If it was typed inline as `${'{'}n{'}'}{found.group(1)}`, the shell "
+            f"removed the `$` and the digits before it and this record now "
+            f"quotes a number nobody wrote. `{flag}-file <path>` is not re-read "
+            "by a shell",
+            indent=2,
+        ),
+        fg=typer.colors.YELLOW,
+    )
+
+
 @video_app.command("judge")
 def video_judge(
     episode: str,
@@ -1226,13 +1291,21 @@ def video_judge(
     verdict: str = typer.Option(
         ..., "--verdict", help="supported · unsupported · refuted"
     ),
-    refutation: str = typer.Option(
-        ...,
+    refutation: Optional[str] = typer.Option(
+        None,
         "--refutation",
         help="what you attacked and what the source said — required, §8.3",
     ),
+    refutation_file: Optional[str] = typer.Option(
+        None,
+        "--refutation-file",
+        help="a file holding it instead — no shell touches these bytes",
+    ),
     risk: Optional[str] = typer.Option(
         None, "--risk", help="residual risk, recorded even on `supported`"
+    ),
+    risk_file: Optional[str] = typer.Option(
+        None, "--risk-file", help="a file holding the residual risk"
     ),
     by: str = typer.Option(..., "--by", help="who or what judged — required"),
     series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
@@ -1245,10 +1318,19 @@ def video_judge(
     concluded. Nothing here reaches the network or a model, and nothing here
     decides anything except whether the record is well formed.
 
-    `--refutation` is required and may not be blank. A `supported` with no
+    A refutation is required and may not be blank. A `supported` with no
     account of what was attacked records only that somebody looked, which is
     worth nothing — it is the evidence for the verdict, and this project has
     printed a conclusion stronger than its evidence four times.
+
+    **Give it as `--refutation-file <path>` whenever a refuter wrote it.**
+    `--refutation "$1.32"` records `.32`: a shell removes `$1` from a
+    double-quoted argument before this command exists, the write succeeds, and
+    the verdict reads normally on every screen while quoting a price nobody
+    wrote. A file is never re-read by a shell, so `$`, backticks and
+    apostrophes land byte for byte. `--risk-file` is the same field's twin.
+    Inline stays for a sentence a person is typing, and prints a note when what
+    arrives looks like it lost a magnitude.
 
     Takes IDENTIFIERS and loads the ledger itself (D-072). It refuses on a
     missing or stale `claims.json`, on an unknown claim id, and on a claim pass
@@ -1258,10 +1340,16 @@ def video_judge(
     episode = _text(episode, "The episode id")
     series = _text(series, "The series slug")
     claim = _text(claim, "The claim id")
-    refutation = _text(refutation, "The refutation")
+    refutation = _prose(refutation, refutation_file, "--refutation", "The refutation")
+    risk = _prose(risk, risk_file, "--risk", "The residual risk")
     by = _text(by, "The judge")
-    if risk is not None:
-        risk = _text(risk, "The residual risk")
+    if refutation is None:
+        raise _fail(
+            "a verdict needs its refutation: what did you attack, and what did "
+            "the source say back? Pass `--refutation-file <path>` — the bytes "
+            "of a refuter's own reply, unread by any shell — or `--refutation` "
+            "for a sentence you are typing yourself"
+        )
     try:
         s = load_series(ws, series)
         ep = load_episode(s, episode)
@@ -1282,6 +1370,11 @@ def video_judge(
     typer.echo(_detail("refuted", block["attempted_refutation"], indent=2))
     if block["residual_risk"]:
         typer.echo(_detail("risk", block["residual_risk"], indent=2))
+    # Only for what arrived through a shell. A file cannot have lost anything.
+    if refutation_file is None:
+        _echo_lost_magnitude(block["attempted_refutation"], "refutation", "--refutation")
+    if risk_file is None and block["residual_risk"]:
+        _echo_lost_magnitude(block["residual_risk"], "residual risk", "--risk")
     # The honesty line, on the screen the agent that recorded it reads. A stored
     # judgement that looks like a stored measurement is the confusion this whole
     # record exists to prevent.
