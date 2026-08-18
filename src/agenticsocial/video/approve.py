@@ -38,6 +38,7 @@ from datetime import datetime
 
 from ..models import Status
 from ..workspace import Workspace
+from . import plan as plan_mod
 from . import verify as verify_mod
 from .episode import (
     EpisodeError,
@@ -46,14 +47,14 @@ from .episode import (
     read_script,
     set_status,
 )
-from .models import Episode
-from .series import load_series
+from .models import Episode, SeriesError
+from .series import load_series, load_series_dir
 
 
 class ApprovalRefused(Exception):
     """A refusal an operator can act on: why, and which claims if any.
 
-    `kind` is `approver` · `ledger` · `claims`. R3 asks that a stale ledger be
+    `kind` is `approver` · `ledger` · `claims` · `design`. R3 asks that a stale ledger be
     distinguishable from an open claim, and the distinction is not cosmetic: one
     is "re-run the check", the other is "fix the script". A single message the
     caller has to pattern-match would be one screen for two different problems.
@@ -128,6 +129,19 @@ def approve_episode(
         # attested claim is NOT verified (D-088, and D-112's overclaim), and
         # neither is one a person cleared by hand.
         "claims": verify_mod.claim_tally(records),
+        # What the frame will look like. `script.yaml` says what the video
+        # SAYS; `series.toml` says what it LOOKS like — the palette, the type,
+        # the show's name at 150px, the act chip on every beat — and it is a
+        # different file, which the approval did not read at all until this
+        # task. Approve, change `accent`, render, and you have shipped
+        # something the approver never saw with a valid approval and no drift.
+        #
+        # Derived from what `plan.py` copies (`plan.series_inputs`), never
+        # listed here: a design token added tomorrow is covered the day it is
+        # added, and an input `plan.py` starts copying that nobody has
+        # classified refuses the approval instead of quietly falling outside
+        # it (D-096).
+        "series_inputs": _series_inputs_or_refuse(series),
     }
     # §8.4's accountability, carried into the diff a human commits. The count
     # says how many sentences were spent; only this says WHICH claims are
@@ -139,6 +153,14 @@ def approve_episode(
         record["overrides"] = cleared
     set_status(episode, Status.APPROVED, {"approval": record})
     return record
+
+
+def _series_inputs_or_refuse(series) -> dict:
+    """What `plan.py` copies out of series.toml, or a refusal naming why not."""
+    try:
+        return plan_mod.series_inputs(series)
+    except plan_mod.PlanError as e:
+        raise ApprovalRefused("design", str(e)) from e
 
 
 def _cleared_by_hand(records: list[dict]) -> list[dict]:
@@ -243,10 +265,134 @@ def approval_drift(episode: Episode) -> str | None:
             f"`pace` has changed from {signed_pace} to {pace}, and pace "
             "multiplies every hold, so every beat's timing moved"
         )
+    design = _design_drift(episode, record)
+    if design:
+        moved.append(design)
     if not moved:
         return None
     return (
         f"{'; and '.join(moved)} — approved by {record.get('by')} at "
         f"{record.get('at')}. Re-run `agsoc video check` and approve again, or "
-        "put the script back"
+        "put the change back"
     )
+
+
+def _design_drift(episode: Episode, record: dict) -> str | None:
+    """The third question: does the FRAME still look like the one that was signed?
+
+    `script_sha256` covers what the video says. This covers what it looks like —
+    `series.toml`'s `[design]` table, which `plan.py` copies whole into
+    `plan.json` and which repaints every frame of every episode in the series,
+    plus the show's name and byline (drawn at 150px on the title and signoff
+    cards) and the act labels (the chip on every beat).
+
+    It is deliberately a THIRD answer, named separately in the message:
+
+      * the beats digest says the script moved — go and look at `script.yaml`;
+      * this says the design moved — go and look at `series.toml`;
+      * `verify.stale_reason` says the ledger no longer describes the corpus,
+        and that question is NOT asked here. Folding it in would give two paths
+        to one answer, which is the D-059 shape that published a draft.
+
+    Sending an operator to the wrong file is not a cosmetic failure: the two
+    files are edited by different acts, and a message that names the wrong one
+    costs the reader the only thing this check was trying to give them.
+
+    Reads `series.toml` from DISK, walking up from the episode's own directory,
+    for the reason the rest of this module re-reads everything: a caller holding
+    a `Series` loaded before the edit must not be able to answer a question
+    about the file with a snapshot of what the file used to say.
+
+    Fails closed. No recorded inputs (an approval written before this existed),
+    an unreadable or missing `series.toml`, a value that cannot be compared: all
+    drift.
+    """
+    signed = record.get("series_inputs")
+    if not isinstance(signed, dict):
+        return (
+            "this approval records nothing about series.toml, so what the frame "
+            "looks like — the palette, the type, the show's name, the act "
+            "labels — was never signed. Approve again and it will be"
+        )
+    try:
+        series = load_series_dir(episode.dir.parent.parent, episode.series_slug)
+        current = plan_mod.series_inputs(series)
+    except (SeriesError, plan_mod.PlanError, OSError) as e:
+        return (
+            "series.toml can no longer be read, so what the frame will look "
+            f"like cannot be compared with what was approved — {e}"
+        )
+    changes = _named_changes(signed, current)
+    if not changes:
+        return None
+    return "series.toml has changed: " + "; ".join(changes)
+
+
+# Where each covered input lives in series.toml, for a message that points at the
+# line an operator would edit rather than at an attribute name only this code uses.
+_INPUT_LOCATIONS = {
+    "design": "[design]",
+    "name": "[series] name",
+    "byline": "[series] byline",
+    "acts": "act label",
+}
+
+_MAX_NAMED = 6
+
+
+def _named_changes(signed: dict, current: dict) -> list[str]:
+    """Every covered value that moved, said as `where`, `was`, `now`.
+
+    "series.toml has changed" is a true statement and a useless one — the same
+    standard the beats digest is held to. The values are in the record precisely
+    so this can name them without the operator opening two files.
+    """
+    was = _flatten(signed)
+    now = _flatten(current)
+    changes = []
+    for key in sorted(set(was) | set(now)):
+        if was.get(key, _MISSING) == now.get(key, _MISSING):
+            continue
+        where = _where(key)
+        if key not in now:
+            changes.append(f"{where} was {was[key]!r} and is now gone")
+        elif key not in was:
+            changes.append(f"{where} is new, {now[key]!r}")
+        else:
+            changes.append(f"{where} was {was[key]!r}, now {now[key]!r}")
+    if len(changes) > _MAX_NAMED:
+        extra = len(changes) - _MAX_NAMED
+        changes = changes[:_MAX_NAMED] + [f"and {extra} more"]
+    return changes
+
+
+class _Missing:
+    def __repr__(self) -> str:  # pragma: no cover - never printed
+        return "<absent>"
+
+
+_MISSING = _Missing()
+
+
+def _where(key: str) -> str:
+    head, _, rest = key.partition(".")
+    location = _INPUT_LOCATIONS.get(head, head)
+    return f"{location} {rest}".strip()
+
+
+def _flatten(inputs: dict) -> dict:
+    """`{"design": {"accent": "#..."}}` -> `{"design.accent": "#..."}`.
+
+    Flat so that a change can be named at the token an operator recognises,
+    rather than by printing two tables and leaving them to diff it. Nested
+    values below the first level are compared whole — there are none today and
+    a wrong-but-loud name is better than a missed comparison.
+    """
+    out: dict = {}
+    for key, value in (inputs or {}).items():
+        if isinstance(value, dict):
+            for sub, inner in value.items():
+                out[f"{key}.{sub}"] = inner
+        else:
+            out[str(key)] = value
+    return out

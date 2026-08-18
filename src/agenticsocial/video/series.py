@@ -246,7 +246,18 @@ def scaffold_series(ws: Workspace, slug: str, name: str | None = None) -> Series
 
 def load_series(ws: Workspace, slug: str) -> Series:
     assert_safe_name(slug, "series slug", SeriesError)
-    d = ws.series_dir / slug
+    return load_series_dir(ws.series_dir / slug, slug)
+
+
+def load_series_dir(d, slug: str) -> Series:
+    """Load `series.toml` from a directory that is already known to be a series.
+
+    `load_series` resolves a slug against a workspace and calls this; callers
+    that already hold the directory — `approval_drift`, which walks up from the
+    episode it was handed — call it directly. ONE implementation: a second
+    reader of series.toml would be a second answer to "what is the design", and
+    the whole point of the drift check is that there is only one.
+    """
     path = d / "series.toml"
     if not path.is_file():
         raise SeriesError(f"no series '{slug}' — create it with `agsoc series new {slug}`")

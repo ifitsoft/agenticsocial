@@ -1194,12 +1194,41 @@ def video_approve(
         typer.echo(
             _detail("claims", "none — this script asserts nothing about the world")
         )
+    # The other half of what was just signed, and the half an operator does not
+    # expect to have signed: `series.toml` paints every frame and is a different
+    # file from the one they were reading. Said on the screen because a
+    # guarantee nobody knows they have is one nobody notices losing — and
+    # because the next person to change the accent should have been told, once,
+    # that it is covered.
+    inputs = record.get("series_inputs") or {}
+    if inputs:
+        typer.echo(_detail("design", _covered_inputs(inputs)))
     typer.echo(
         _detail(
             "next",
             "edit the beats and this approval no longer describes them — "
-            "`script_sha256` is what says so",
+            "`script_sha256` is what says so; the same goes for the design, "
+            "and `agsoc video check` says so on both",
         )
+    )
+
+
+def _covered_inputs(inputs: dict) -> str:
+    """What of `series.toml` this approval binds, counted off the record itself.
+
+    Derived from the record, never re-listed here: the screen and the file are
+    one answer, and a hand-written summary is where they would stop being one.
+    """
+    parts = []
+    for key in sorted(inputs):
+        value = inputs[key]
+        if isinstance(value, dict):
+            parts.append(f"{key} ({len(value)})")
+        else:
+            parts.append(key)
+    return (
+        f"series.toml is covered too — {', '.join(parts)}. Change any of them "
+        "and this approval no longer describes the frame"
     )
 
 

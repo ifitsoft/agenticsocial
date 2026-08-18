@@ -1472,11 +1472,11 @@ def test_changing_an_act_label_after_approval_is_drift(series):
     path = series_toml(series)
     path.write_text(
         path.read_text(encoding="utf-8")
-        + '\n[[structure.acts]]\nid = "01"\nlabel = "01 — The headline"\nbeats = 6\n',
+        + '\n[[structure.acts]]\nid = "01"\nlabel = "01 — Top of the show"\nbeats = 6\n',
         encoding="utf-8",
     )
     approved_episode(series)
-    edit_series_toml(series, "01 — The headline", "01 — The lede")
+    edit_series_toml(series, "01 — Top of the show", "01 — The lede")
     message = drift(series)
     assert message is not None
     assert "01 — The lede" in message
@@ -1700,6 +1700,7 @@ def test_a_stale_corpus_is_still_its_own_answer_after_a_design_change(series):
         url="https://local-ai-zone.example/x",
         key="local-ai-zone",
         fetched_at="2026-08-18",
+        replace=True,
     )
     ep = load_episode(series, EP)
     assert verify_mod_stale(ep) is not None, "the ledger is stale, and says so"
