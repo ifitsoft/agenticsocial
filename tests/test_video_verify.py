@@ -76,7 +76,13 @@ def claim_of(*beats):
 
 
 def check(beat_, document, **kw):
-    return V.check_claim(claim_of(beat_), document, **kw)
+    """The beat goes in as well as the claim: the `shown` check reads the row.
+
+    Deliberately NOT `shown_problems=V.shown_problems(beat_)` — a harness that
+    calls the function under test and feeds it back in is D-035's exact shape,
+    and would report green with the check deleted.
+    """
+    return V.check_claim(claim_of(beat_), document, beat=beat_, **kw)
 
 
 def episode_on_disk(tmp_path, sources=None, beats=None, status="draft"):
@@ -135,7 +141,13 @@ def test_the_quote_span_indexes_the_original_bytes_not_the_folded_ones(document)
     span = V.quote_span(quote, document)
     assert span is not None
     start, end = span
-    assert document[start:end].strip() == quote
+    # The slice is the SOURCE's own spelling, so it is compared after folding
+    # rather than byte for byte — the source is allowed to write the run of
+    # whitespace it wrote. What cannot survive is an offset shifted by the
+    # fold's own length change, which lands the slice a character or three off
+    # and makes the two sides unequal under any comparison.
+    assert C.fold(document[start:end]) == C.fold(quote)
+    assert document[start:end] != document
 
 
 def test_the_span_covers_the_source_bytes_when_the_source_spells_it_differently():
@@ -578,7 +590,7 @@ def test_a_shown_cell_may_carry_a_published_range_beside_the_row_value():
     problems = V.shown_problems(
         beat("jumpChart", scale=100,
              rows=[{"label": "GDP", "before": 48.0, "after": 65.3,
-                    "shown": "48–49 &rarr; 65.3"}])
+                    "shown": "48 – 49 &rarr; 65.3"}])
     )
     assert problems == ()
 
