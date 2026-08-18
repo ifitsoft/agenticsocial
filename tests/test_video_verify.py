@@ -552,6 +552,45 @@ def test_a_figure_that_fell_does_not_verify_against_a_source_saying_it_rose():
     assert check(beat("body", text="Revenue fell -18%.", quote=agreeing), agreeing).verdict == "pass"
 
 
+def test_a_figure_spelled_with_typographic_punctuation_is_still_one_figure():
+    """precondition: the beat spells the range with an EN DASH and the quote
+    spells it with a hyphen, so the atom string and the string the comparison
+    re-derives are different bytes unless the classifier folds first.
+
+    Found by my own sweep. D-071's case, arriving at the figure this pass
+    cannot value: `claims.atoms` records what a beat asserts and
+    `verify.claim_values` re-walks the same text for the magnitude the atom
+    dropped, and `check_claim` RAISES when the two walks disagree (D-096 in
+    miniature). A classifier that reads the raw token turns a beat containing a
+    typographic dash into a traceback rather than a verdict.
+    """
+    quote = "over 2010-2011 the index moved by about 95 B"
+    result = check(
+        beat("body", text="Over 2010\u20132011 it moved by 95\u00a0B.", quote=quote), quote
+    )
+    assert result.verdict == "pass", result.reason
+
+
+def test_a_shown_cell_whose_extra_figure_cannot_be_valued_is_not_a_geometry_error():
+    """precondition: the cell carries the row's `after` value and one token this
+    pass cannot value, and `before` is NOT in the cell.
+
+    Found by my own sweep. R5 demands `before` only of a cell carrying two or
+    more figures, so counting an unreadable token as a figure turns a
+    single-value cell into a two-figure one and refuses the row for a
+    disagreement that does not exist. The unreadable token is not unchecked —
+    §8.2 asks the quote to spell it — so the two checks still decompose the
+    problem between them.
+    """
+    problems = V.shown_problems(
+        beat("jumpChart", scale=100,
+             rows=[{"label": "GDP", "before": 34.4, "after": 43.6,
+                    "shown": "43.6 over 2010-2011"}],
+             quote="q")
+    )
+    assert problems == ()
+
+
 def test_a_kpi_unit_carries_its_magnitude_into_the_comparison():
     """precondition: the digits `98` appear in the quote, so only the unit can
     make this claim wrong.
