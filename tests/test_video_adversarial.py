@@ -1336,6 +1336,20 @@ def test_an_inline_refutation_that_lost_a_dollar_sign_says_so(series):
     assert "--refutation-file" in note, note
 
 
+def test_the_note_is_silent_on_prose_that_came_out_of_a_file(series, tmp_path):
+    """The first sweep's survivor. A file cannot have been eaten by a shell, so
+    a bare `.32` in one is a number somebody meant — and a warning on the path
+    this skill mandates is a warning read on nothing but the healthy case."""
+    episode(series, [clean_beat()])
+    assert check().exit_code == 0
+    result = judge_file(
+        series, tmp_path,
+        text="CONTEXT: the source's own footnote writes .32 and .96, unprefixed.",
+    )
+    assert result.exit_code == 0, result.output
+    assert "warning" not in _screen(result)
+
+
 def test_the_note_is_silent_on_prose_that_lost_nothing(series):
     """Its negative half. A warning that fires on ordinary refutations is one an
     agent learns to ignore before the run where it is true."""
