@@ -205,3 +205,162 @@ def check_terms(
             )
         )
     return results
+
+
+# --- add: what a story is ----------------------------------------------------------------
+
+
+def _slug(text: str) -> str:
+    s = spaced(text).replace(" ", "-")
+    return s[:MAX_ID].rstrip("-") or "story"
+
+
+def _one_line(text: str) -> str:
+    line = " · ".join(part.strip() for part in text.splitlines() if part.strip())
+    return line[: MAX_TITLE - 1] + "…" if len(line) > MAX_TITLE else line
+
+
+def _manifest(episode: Episode) -> dict:
+    path = episode.sources_dir / "_manifest.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # A missing or broken manifest costs the ledger a hostname, not an
+        # entry. The corpus is the verifier's problem, not the ledger's.
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _host(url: Any) -> str:
+    if not isinstance(url, str):
+        return ""
+    m = re.match(r"^[a-z][a-z0-9+.-]*://([^/?#]+)", url.strip(), re.I)
+    host = m.group(1) if m else ""
+    return host.split("@")[-1].split(":")[0].lower()
+
+
+def derive_stories(script, manifest: dict) -> list[dict]:
+    """One entry per beat that asserts something about the world.
+
+    **What a story is, decided.** Not the operator's memory of the day and not
+    the beat text alone: an entry is *what the episode put on screen*, plus the
+    entities `claims.py` already extracted from it and the source it cited.
+    Three reasons.
+
+    - `check` matches against what is *in* the ledger. The entity atoms are the
+      product and vendor names an author will type six months from now
+      (`DeepSeek`, `Gemini 3.7 Flash`) — the exact strings D-112's defect was
+      about — and they are derived by the same code that verified the beat,
+      so the ledger and the claim ledger cannot drift apart.
+    - Beats that assert nothing (`title`, `signoff`) are exempt here for the
+      same reason they are exempt from citation. A ledger row for "Five stories
+      from the last 24 hours" matches every future episode and points at none.
+    - It is derivable, so it is *actually written*. The old ledger was
+      hand-maintained after each episode, which is why the storyboard skill had
+      to tell authors there was no way to record an update.
+    """
+    from .claims import EXEMPT_TYPES, beat_text
+
+    out: list[dict] = []
+    seen: dict[str, dict] = {}
+    for beat in script.beats:
+        if beat.type in EXEMPT_TYPES:
+            continue
+        text = _one_line(beat_text(beat)) if beat.type not in ("custom",) else ""
+        title = text or f"{beat.type} beat {beat.index + 1}"
+        story = {
+            "id": _slug(title),
+            "title": title,
+            "act": beat.act,
+            "beat": beat.type,
+            "entities": _entities(beat),
+            "sources": _sources(beat, manifest),
+        }
+        if story["id"] in seen:
+            # Two beats on one story: merge rather than write two rows with one
+            # id, which would make `list --ids` lie about how many stories there
+            # are without adding anything a search could find.
+            prior = seen[story["id"]]
+            for key in ("entities", "sources"):
+                prior[key] = sorted(set(prior[key]) | set(story[key]))
+            continue
+        seen[story["id"]] = story
+        out.append(story)
+    return out
+
+
+def _entities(beat) -> list[str]:
+    from .claims import beat_text
+    from .claims import atoms as atoms_of
+
+    if beat.type == "custom":
+        return []
+    return sorted({a.value for a in atoms_of(beat_text(beat)) if a.kind == "entity"})
+
+
+def _sources(beat, manifest: dict) -> list[str]:
+    out = []
+    if beat.src:
+        out.append(beat.src)
+        entry = manifest.get(beat.src)
+        host = _host(entry.get("url")) if isinstance(entry, dict) else ""
+        if host:
+            out.append(host)
+    return out
+
+
+def render_record(episode: Episode) -> dict:
+    record = episode.meta.get("render")
+    return record if isinstance(record, dict) else {}
+
+
+def episode_entry(episode: Episode, script, note: str = "") -> dict:
+    """The ledger row for one rendered episode."""
+    record = render_record(episode)
+    entry: dict[str, Any] = {"date": episode.id}
+    if record.get("file"):
+        entry["video"] = record["file"]
+    if isinstance(record.get("runtime_sec"), (int, float)):
+        entry["runtimeSec"] = record["runtime_sec"]
+    entry["recorded_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    if note:
+        entry["note"] = note
+    entry["stories"] = derive_stories(script, _manifest(episode))
+    return entry
+
+
+def assert_recordable(episode: Episode) -> None:
+    """`add` records after render (R5), and refuses before it.
+
+    An episode still in review has not told anyone anything, and an entry for it
+    would suppress a story the series never ran. The bound in the other
+    direction — a render that is discarded and never posted — is why `add` is a
+    command the operator runs and not a side effect of `render`.
+    """
+    if episode.status is not Status.RENDERED:
+        raise CoverageError(
+            f"{episode.id} is {episode.status.value}, not rendered — the ledger "
+            "records what the series actually put out. Render it first "
+            f"(`agsoc video render {episode.id}`), then record it."
+        )
+    if not render_record(episode):
+        raise CoverageError(
+            f"{episode.id} is marked rendered but carries no render record in "
+            "script.yaml. Re-render it rather than record an episode nothing "
+            "can account for."
+        )
+
+
+def add_entry(ledger: dict, entry: dict, replace: bool = False) -> dict:
+    existing = [e for e in ledger["episodes"] if e.get("date") == entry["date"]]
+    if existing and not replace:
+        raise CoverageError(
+            f"{entry['date']} is already in the ledger ({len(existing[0].get('stories', []))} "
+            "stories). Re-record it with --replace, or leave the record that is "
+            "already there."
+        )
+    episodes = [e for e in ledger["episodes"] if e.get("date") != entry["date"]]
+    episodes.append(entry)
+    episodes.sort(key=lambda e: e.get("date", ""))
+    ledger["episodes"] = episodes
+    return ledger

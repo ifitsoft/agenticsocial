@@ -1906,6 +1906,68 @@ def coverage_check(
         typer.echo("    new is a judgement this check cannot make for you.\n")
 
 
+@coverage_app.command("add")
+def coverage_add(
+    episode: str = typer.Argument(..., help="episode id, e.g. 2026-08-20"),
+    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
+    note: str = typer.Option("", "--note", help="what this episode did with the stories"),
+    replace: bool = typer.Option(False, "--replace", help="re-record an episode already in the ledger"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="print the entry; write nothing"),
+) -> None:
+    """Record a rendered episode's stories in the series ledger (§6).
+
+    Deliberately NOT a side effect of `render`. An automatic `add` records what
+    was *rendered*, and a render that is discarded and never posted would then
+    suppress a story the series never told — a silent drop, which is the failure
+    this ledger exists to prevent, pointing the other way. The operator runs
+    this when the episode is out.
+
+    What it records is what the episode put on screen: one entry per beat that
+    asserts something, with the entities `agsoc video check` extracted and the
+    source the beat cited. Chrome beats (`title`, `signoff`) assert nothing and
+    are skipped, exactly as they are exempt from citation.
+    """
+    ws = _workspace()
+    episode = _text(episode, "The episode id")
+    series = _text(series, "The series slug")
+    note = _text(note, "The note")
+    s = _coverage_series(ws, series)
+    try:
+        ep = load_episode(s, episode)
+        coverage_mod.assert_recordable(ep)
+        script = load_script(ep)
+        ledger = coverage_mod.load_ledger(s)
+        entry = coverage_mod.episode_entry(ep, script, note=note)
+        merged = coverage_mod.add_entry(ledger, entry, replace=replace)
+    except (
+        SeriesError,
+        EpisodeError,
+        ScriptError,
+        claims_mod.ClaimsError,
+        coverage_mod.CoverageError,
+    ) as e:
+        raise _fail(str(e))
+
+    typer.echo(f"\n  {s.slug}/{entry['date']} · {len(entry['stories'])} story(ies) recorded")
+    for story in entry["stories"]:
+        typer.echo(f"     [{story['id']}]  {story['title']}")
+    if dry_run:
+        typer.echo("\n  --dry-run: nothing written.\n")
+        return
+    try:
+        coverage_mod.save_ledger(s, merged)
+    except OSError as e:
+        raise _fail(f"cannot write {coverage_mod.LEDGER_NAME}: {e}")
+    stories, episodes = coverage_mod.counts(merged)
+    typer.echo(f"\n  recorded in {coverage_mod.ledger_path(s)}")
+    typer.echo(f"  the ledger now holds {stories} stories across {episodes} episodes.")
+    typer.echo(
+        "  what it records is what was RENDERED. If this episode is never "
+        "posted, remove\n  the entry — an entry for an episode nobody saw "
+        "suppresses a story you never told.\n"
+    )
+
+
 @coverage_app.command("list")
 def coverage_list(
     series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
