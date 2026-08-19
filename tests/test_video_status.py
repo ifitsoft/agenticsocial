@@ -147,7 +147,10 @@ def test_video_transitions_table_is_exact():
         Status.APPROVED: {Status.IN_REVIEW, Status.RENDERING},
         Status.SCHEDULED: set(),
         Status.RENDERING: {Status.RENDERED, Status.FAILED},
-        Status.RENDERED: set(),
+        # Phase 13 Task 1, and the ONE edge that changed: `rendered ->
+        # rendering` is §9's second format, not lifecycle progress. D-006's cut
+        # of `rendered -> publishing` is still in force below.
+        Status.RENDERED: {Status.RENDERING},
         Status.PUBLISHING: set(),
         Status.PUBLISHED: set(),
         Status.FAILED: {Status.RENDERING},

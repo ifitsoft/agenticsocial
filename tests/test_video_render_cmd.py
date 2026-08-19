@@ -20,6 +20,7 @@ Four habits, each because the matching mutant is a one-line source edit:
 import ast
 import inspect
 import json
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -406,12 +407,29 @@ def test_the_gate_loads_what_it_gates(series):
     assert forbidden.isdisjoint(params)
 
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def help_text(*args):
+    """`--help` with the ANSI stripped and the whitespace squashed.
+
+    Rich renders a flag as `ESC[1;36m-ESC[0mESC[1;36m-forceESC[0m`, so the
+    literal string `--force` NEVER appears in `result.output` — and every
+    `assert "--force" not in result.output` in this file was therefore
+    unfailable. Measured during Phase 13 Task 1 by adding a `--force` flag to
+    `video render`: the assertion below stayed green. It also wraps inside a
+    box, so a long help string is split across lines.
+    """
+    result = run(*args, "--help")
+    assert result.exit_code == 0
+    return " ".join(ANSI.sub("", result.output).split())
+
+
 def test_render_offers_no_way_to_skip_the_gate(ws):
     """M1-M3's CLI half — a flag is an argument a caller can shape."""
-    result = run("video", "render", "--help")
-    assert result.exit_code == 0
+    text = help_text("video", "render")
     for flag in ("--force", "--skip", "--no-check", "--script", "--ledger"):
-        assert flag not in result.output
+        assert flag not in text
 
 
 # --- R2: a crash leaves a recoverable state ------------------------------------------
@@ -1164,10 +1182,9 @@ def test_the_new_edge_is_the_only_change_to_the_video_table(series):
 def test_render_still_offers_no_way_to_skip_the_gate(ws):
     """M7. `--replace` is a decision about a FILE. It must not become a decision
     about the approval — the flags that would do that are still absent."""
-    result = run("video", "render", "--help")
-    assert result.exit_code == 0
+    text = help_text("video", "render")
     for flag in ("--force", "--skip", "--no-check", "--script", "--ledger"):
-        assert flag not in result.output
+        assert flag not in text
 
 
 def test_replace_does_not_skip_the_gate(series, fake):
@@ -1221,8 +1238,6 @@ def test_no_screen_tells_the_operator_that_rendered_is_terminal(series, fake):
 def test_the_help_says_what_no_format_does(series):
     """M8. §9 documents `render <ep>` as every enabled format; the flag's own
     help said only "output format", which is how the behaviour went unnoticed."""
-    result = run("video", "render", "--help")
-    assert result.exit_code == 0
-    text = flat(result)
+    text = help_text("video", "render")
     assert "every enabled format" in text
     assert "--replace" in text
