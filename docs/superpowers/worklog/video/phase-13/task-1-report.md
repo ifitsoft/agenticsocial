@@ -360,13 +360,42 @@ sustained ~225 frames/min for its whole 16 minutes (22:59 plan → 23:15 MP4,
 eventually stalls past Playwright's 30 s action timeout.** Same pixel count, same
 plan, same machine, same output volume.
 
+`render.py::_run` keeps only the last six lines of stderr, so the CLI screen
+above is the tail of a much more specific error. Run directly, the renderer says
+exactly what happened:
+
+```
+119.95s · 3599 frames @ 30fps · wide 1920x1080
+  4%  (150/3599)  eta 1390s
+  8%  (300/3599)  eta 1379s
+ 13%  (450/3599)  eta 1583s
+ 17%  (600/3599)  eta 1699s
+
+page.screenshot: Timeout 30000ms exceeded.
+Call log:
+  - taking page screenshot
+  - waiting for fonts to load...
+  - fonts loaded
+
+    at shoot (…/engine/render.mjs:121:14)
+    at async …/engine/render.mjs:154:5 {
+  name: 'TimeoutError'
+}
+```
+
+**A single `page.screenshot` exceeded 30 seconds**, at roughly frame 708 of 3599
+— about `t=23.5s` into the episode — after the renderer's own ETA had climbed
+1390 → 1699 s over the preceding 600 frames. The fonts had loaded; it is the
+rasterisation that stalled. `engine.js` re-inserts the scene node on every seek
+(deliberately — `render.mjs`'s comment says it is what keeps a frame a pure
+function of `t`), which is a full re-raster per frame, and something about the
+wide stage makes that cost grow until it exceeds Playwright's default action
+timeout.
+
 That is an **engine defect in the wide format** — Phase 10's territory, not the
 status machine's — and it means §9's "one script legitimately renders as two" is
 still not true end-to-end for a 120 s episode, for a reason no amount of work on
-`VIDEO_TRANSITIONS` can reach. A full untruncated renderer log was left running
-to capture the exact stall point; it is in the scratch directory
-(`node-wide-full.txt`) rather than pasted here, because it takes ~20 minutes per
-reproduction and the finding does not depend on which frame it is.
+`VIDEO_TRANSITIONS` can reach.
 
 **I did not soften any message in response to this.** The CLI's claim is about
 what the *approval* covers — "one approval renders every format" — and that is
@@ -505,8 +534,17 @@ found and it is **not** in this task's code: the wide render of the operator's
 120 s episode degrades from ~168 frames/min to ~72 and then stalls past
 Playwright's timeout, three times out of three, on an idle machine, while
 vertical sustains ~225 frames/min for the same episode on the same machine. The
-CLI now permits every format §9 documents; the engine can currently deliver the
-short ones. That belongs to whoever owns Phase 10.
+precise failure is `page.screenshot: Timeout 30000ms exceeded` in
+`render.mjs::shoot`, at ~frame 708 of 3599, with the renderer's own ETA climbing
+1390 → 1699 s beforehand. The CLI now permits every format §9 documents; the
+engine can currently deliver the short ones. That belongs to whoever owns
+Phase 10.
+
+Two things would make it visible sooner if it is not fixed: `_run` keeps only six
+lines of stderr, which hid `page.screenshot: Timeout` behind a bare
+`TimeoutError`; and the renderer's per-150-frame ETA is the one signal that
+predicted the failure and it never reaches the operator, because `_run` captures
+stdout instead of streaming it.
 
 ### 6.3 The next overclaim, and it is worse than this one: `agsoc video preview`
 
