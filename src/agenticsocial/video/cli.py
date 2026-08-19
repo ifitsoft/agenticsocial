@@ -1634,7 +1634,7 @@ def video_render(
     fmt: str = typer.Option(
         None,
         "--format",
-        help="output format",
+        help="one format; the default is every enabled format in series.toml",
     ),
     replace: bool = typer.Option(
         False,
@@ -1647,7 +1647,7 @@ def video_render(
         help="an earlier render was killed: mark it failed and start over",
     ),
 ) -> None:
-    """Render an APPROVED episode to an MP4 (§9, §10).
+    """Render an APPROVED episode to an MP4, in every enabled format (§9, §10).
 
     Three checks, and they stay three so you are told which thing moved
     (D-115): the status, the approval against what you authored, and the claim

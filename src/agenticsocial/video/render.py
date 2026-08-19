@@ -355,7 +355,21 @@ def render_episode(
     _require_tools(False)
 
     series = load_series(ws, series_slug)
-    targets = [fmt or "vertical"]  # Step 3 reads `[formats] enabled`
+    # Two different refusals, and collapsing them would send an operator to the
+    # wrong file: an UNSUPPORTED format is a name the engine cannot draw and the
+    # fix is in plan.py; a format this SERIES has not enabled is a name the
+    # engine draws fine and the fix is one line of series.toml. `series.formats`
+    # is validated against FORMATS at load, so the list below is always a subset.
+    if fmt is None:
+        targets = list(series.formats)
+    elif fmt not in series.formats:
+        raise RenderError(
+            f"{series.slug} does not render {fmt!r} — series.toml's "
+            f"`[formats] enabled` lists: {', '.join(series.formats)}. Add it "
+            "there, or render one of those"
+        )
+    else:
+        targets = [fmt]
 
     # Matched exactly. `resolve_episode`'s substring matching is right for
     # `review`, which shows you what it found, and wrong here, where the thing
