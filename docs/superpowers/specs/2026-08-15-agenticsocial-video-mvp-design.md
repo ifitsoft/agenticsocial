@@ -604,8 +604,15 @@ a probe frame at `t=42.9` is directly comparable across formats.
 ```sh
 agsoc video render 2026-08-14                        # every enabled format
 agsoc video render 2026-08-14 --format wide          # one
+agsoc video render 2026-08-14 --format wide --replace  # …overwriting out/
 agsoc video probe  2026-08-14 --at 42.9 --format wide
 ```
+
+`[formats] enabled` in `series.toml` is the list the first form renders, in the
+order it declares. A format the engine supports but the series has not enabled is
+refused by name — a different refusal from an unsupported format, because the two
+send an operator to different files. A format already in `out/` is kept, and the
+screen says so; `--replace` is how an operator spends a render they already have.
 
 ---
 
@@ -615,19 +622,37 @@ Reuses the existing `Status` enum and adds two states. Text variants never enter
 them; a second transition table keyed by kind keeps the two lifecycles honest.
 
 ```
-draft ──→ in_review ──→ approved ──→ rendering ──→ rendered   (terminal in MVP)
-             ↑              │            │
-             └──────────────┘            └──→ failed ──→ rendering   (retry)
+draft ──→ in_review ──→ approved ──→ rendering ──→ rendered   (end of the MVP)
+             ↑              │            │              │
+             └──────────────┘            │              └──→ rendering  (§9: a
+                                         │                    second format)
+                                         └──→ failed ──→ rendering   (retry)
 ```
 
-**`rendered` is terminal for the MVP.** An earlier draft of this spec drew
+**`rendered` is where the MVP ends, and it is not a dead end.** Its only outgoing
+edge is back to `rendering`, and that edge exists for §9: the formats of one
+episode are rendered minutes or days apart, `render <ep> --format wide` on an
+already-rendered episode is a documented command, and it was refused as a
+terminal-state violation until 2026-08-19. A second format is the same story
+producing a second artifact from the same signed bytes — not lifecycle progress,
+which is why the only way out of `rendered` comes back to it.
+
+The three gates are re-asked in full on every render, so the second format is
+reached the same way the first was. **What protects an artifact already on disk
+is not the status machine**: it is that a format whose file exists in `out/` is
+never re-rendered without `--replace`. `rendered` being terminal never protected
+it — `--restart` and a `failed` retry both walk around a status — and it forbade
+the one operation §9 promises.
+
+**Publishing is still unreachable.** An earlier draft of this spec drew
 `rendered → published`, anticipating the staged video-publishing work. That edge
 was cut on 2026-08-16 (decision D-006) because it was reachable but never
 exercised, and it made `failed` ambiguous: with `failed → rendering` as the only
 recovery edge, a *publish* failure could only be recovered by re-running the
 expensive render of an artifact already sitting on disk. A state machine whose
 only edge out of a state is the wrong one is worse than a state machine that
-refuses to model the state at all.
+refuses to model the state at all. That cut stands; `rendered` having *no*
+outgoing edge at all was its consequence, not its purpose.
 
 When video publishing lands, this table gains `rendered → publishing` **and**
 `failed → publishing` together, so recovery matches what actually failed.
