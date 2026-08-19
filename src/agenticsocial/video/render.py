@@ -201,12 +201,12 @@ def _encode(
             [
                 "ffmpeg", "-y",
                 "-framerate", str(plan["fps"]),
-                "-i", str(frames / "%05d.png"),
+                "-i", _abs(frames / "%05d.png"),
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                 "-metadata", f"comment=script_file_sha256={plan['script_file_sha256']}",
                 "-metadata", f"title={series.name} — {episode.id}",
-                str(mp4),
+                _abs(mp4),
             ],
             "ffmpeg",
         )
