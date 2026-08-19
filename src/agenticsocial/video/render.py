@@ -60,6 +60,20 @@ def _require_tools(probe: bool) -> None:
         )
 
 
+def _abs(p: Path) -> str:
+    """A path for the renderer, always absolute.
+
+    `_run` starts node with `cwd=ENGINE_DIR`, and `Workspace.locate()` returns
+    `Path("workspace")` when `AGSOC_WORKSPACE` is unset — which is the DEFAULT.
+    A cwd-relative path therefore resolved against `engine/` and the renderer
+    died with a raw `ENOENT` on a path that plainly existed. Handing a
+    cwd-relative path to a process with a different cwd is the bug; resolving at
+    the boundary is the fix, and it belongs here rather than in `locate()`
+    because this is the only place the cwd changes.
+    """
+    return str(Path(p).resolve())
+
+
 def _run(cmd: list[str], what: str) -> None:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ENGINE_DIR)
@@ -144,7 +158,7 @@ def probe(
 
     if at is None:
         _run(
-            ["node", "render.mjs", "--plan", str(plan_path), "--probe", "--out", str(out)],
+            ["node", "render.mjs", "--plan", _abs(plan_path), "--probe", "--out", _abs(out)],
             "the renderer",
         )
         return out
@@ -152,7 +166,7 @@ def probe(
     # Frames belong to the episode that produced them: --out, never
     # engine/probe, so two episodes probed in a row cannot overwrite each other.
     _run(
-        ["node", "render.mjs", "--plan", str(plan_path), "--at", str(at), "--out", str(out)],
+        ["node", "render.mjs", "--plan", _abs(plan_path), "--at", str(at), "--out", _abs(out)],
         "the renderer",
     )
     return out / f"at-{at}.png"
@@ -174,7 +188,7 @@ def _encode(
     frames = Path(tempfile.mkdtemp(prefix=f"agsoc-frames-{episode.id}-"))
     try:
         _run(
-            ["node", "render.mjs", "--plan", str(plan_path), "--out", str(frames)],
+            ["node", "render.mjs", "--plan", _abs(plan_path), "--out", _abs(frames)],
             "the renderer",
         )
         if not any(frames.glob("*.png")):
