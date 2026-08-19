@@ -1237,7 +1237,85 @@ def test_no_screen_tells_the_operator_that_rendered_is_terminal(series, fake):
 
 def test_the_help_says_what_no_format_does(series):
     """M8. §9 documents `render <ep>` as every enabled format; the flag's own
-    help said only "output format", which is how the behaviour went unnoticed."""
+    help said only "output format", which is how the behaviour went unnoticed.
+
+    Asserted against the `--format` OPTION LINE, not against the whole screen.
+    The first version searched the screen, and the mutant that reverts the
+    option help to "output format" SURVIVED it — because the command docstring
+    above the options box also says "every enabled format". That is D-118's
+    finding exactly: an assertion that matches a string produced by a different
+    part of the output than the one it claims to check. Measured, as a mutant,
+    before this version was written.
+    """
     text = help_text("video", "render")
-    assert "every enabled format" in text
-    assert "--replace" in text
+    option = text.split("--format TEXT", 1)[1].split("--restart", 1)[0]
+    assert "every enabled format" in option, option
+    assert "--replace" in option, option
+
+
+# --- mutants the first sweep found alive ------------------------------------------------
+
+
+def test_drift_is_reported_even_when_every_format_is_already_on_disk(series, fake):
+    """M10, found by the sweep: hoisting the "nothing left to render" check
+    ABOVE the three gates survived every other test in this file.
+
+    The two refusals mean opposite things. "Already rendered" says *and nothing
+    else was wrong*; if the episode has also drifted since approval, that is the
+    thing the operator has to know, and being told about their file instead
+    sends them away satisfied from an episode whose approval no longer describes
+    it. Order is the whole content of this test.
+    """
+    approved(series)
+    assert render().exit_code == 0
+    edit_beats(series, [clean_beat(), clean_beat(text="Something else entirely.")])
+    result = render()
+    assert result.exit_code == 1, result.output
+    assert "sha256" in result.output
+    assert "already rendered" not in result.output.lower()
+
+
+class FailOnNth(FakeRun):
+    """Fail the Nth call to one executable and succeed on the rest.
+
+    `FakeRun(fail_on=...)` fails EVERY ffmpeg call, which cannot express the case
+    that matters here: a two-format run where the first format encodes fine and
+    the second dies.
+    """
+
+    def __init__(self, exe, nth, **kw):
+        super().__init__(**kw)
+        self.exe, self.nth, self.seen = exe, nth, 0
+
+    def __call__(self, cmd, **kw):
+        from pathlib import Path as P
+
+        if P(cmd[0]).name == self.exe:
+            self.seen += 1
+            if self.seen == self.nth:
+                self.calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 1, "", "Invalid data found")
+        return super().__call__(cmd, **kw)
+
+
+def test_the_failure_record_names_the_format_that_died(series, monkeypatch):
+    """M11, found by the sweep: recording `targets[0]` instead of the format the
+    loop was on survived every single-format test, because in a one-format run
+    they are the same string.
+
+    "wide failed" and "vertical failed" send an operator to different frames.
+    The whole point of the record is that they read the episode a week later
+    rather than the terminal they have closed.
+    """
+    approved(series)
+    f = FailOnNth("ffmpeg", 2)
+    monkeypatch.setattr(R.subprocess, "run", f)
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n)
+
+    result = render()  # vertical encodes, wide dies
+    assert result.exit_code == 1, result.output
+    assert status_on_disk(series) == "failed"
+    record = meta_on_disk(series)["render"]
+    assert record["outcome"] == "failed"
+    assert record["format"] == "wide", record
+    assert out_file(series, VERTICAL).is_file(), "the format that succeeded is still there"
