@@ -231,7 +231,13 @@ def test_the_render_screen_says_the_format_was_not_approved(series, episode, mon
     }
     monkeypatch.setattr(
         R, "render_episode",
-        lambda *a, **k: R.RenderResult(record=record, path=Path("/tmp/wide-1920x1080.mp4")),
+        lambda *a, **k: R.RenderRun(
+            rendered=(
+                R.RenderResult(record=record, path=Path("/tmp/wide-1920x1080.mp4")),
+            ),
+            kept=(),
+            replaced=(),
+        ),
     )
     result = runner.invoke(
         app, ["video", "render", "2026-08-14", "--series", "the-brief", "--format", "wide"],

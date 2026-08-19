@@ -83,14 +83,21 @@ def test_rendering_may_complete():
     assert_transition(Status.RENDERING, Status.RENDERED, VIDEO_TRANSITIONS)
 
 
-def test_rendered_is_terminal_in_mvp():
-    """Video publishing is out of MVP scope (spec §3.1, D-006).
+def test_rendered_may_re_enter_rendering_and_go_nowhere_else():
+    """Spec §9, Phase 13 Task 1 — and D-006 is untouched by it.
 
-    `rendered` deliberately has no outgoing edge. When publishing lands, this
-    table gains `rendered -> publishing` AND `failed -> publishing` together, so
-    recovery matches what actually failed.
+    D-006 cut `rendered -> publishing` because that edge was reachable, never
+    exercised, and made `failed` ambiguous. `rendered` having NO outgoing edge
+    was a consequence of that cut, not its purpose — and the consequence was
+    that `render <ep> --format wide` on an already-rendered episode was refused
+    as a terminal-state violation, while §9 documents exactly that command.
+
+    `rendered -> rendering` is not lifecycle progress: it is the same story
+    producing a second artifact from the same signed bytes, through the same
+    three gates (status, drift, ledger). Publishing is still unreachable, which
+    `test_no_video_state_reaches_publishing` below is the guard for.
     """
-    assert VIDEO_TRANSITIONS[Status.RENDERED] == set()
+    assert VIDEO_TRANSITIONS[Status.RENDERED] == {Status.RENDERING}
 
 
 def test_no_video_state_reaches_publishing():
