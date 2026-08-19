@@ -1,9 +1,18 @@
 """Drive the Node renderer and ffmpeg from Python.
 
-Phase 1.5 ships `preview`, not `render`. Spec §10 makes RENDERING reachable only
-from APPROVED, and there is no approve command until Phase 7 — so a command
-named `render` today would have to bypass the gate it is named after. `preview`
-never touches status. Phase 8 adds the gated `render` on top of this.
+Two commands live here and the split is the point: **looking is free, producing
+the artifact is gated.** `probe` writes PNGs and reads no status; `render_episode`
+writes `out/<fmt>-<w>x<h>.mp4` behind three checks. There is no third thing.
+
+There was, until D-130. Phase 1.5 shipped `preview` because §10 makes RENDERING
+reachable only from APPROVED and no approve command existed yet — a defensible
+command at the time. Phase 7 built the gate and Phase 8 built the three checks in
+front of it, and `preview` went on calling the same `_encode` and writing the
+same path with none of them: **a draft could be rendered, and nothing on disk
+distinguished the result from an approved render.** It is retired, for the reason
+D-119 retired `render.mjs --day`: a second way to reach the artifact is a second
+way past the gate. A gate protects a decision, not a file, unless every writer of
+that file goes through it.
 """
 from __future__ import annotations
 
@@ -82,22 +91,6 @@ def _run(cmd: list[str], what: str) -> None:
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-6:]
         raise RenderError(f"{what} failed (exit {proc.returncode}):\n  " + "\n  ".join(tail))
-
-
-def preview(series: Series, episode: Episode, fmt: str = "vertical") -> Path:
-    """Render an episode to video without touching its status. Returns the mp4.
-
-    It took a `probe=True` until Phase 8. That made the cheap operation a flag
-    on the expensive one — see `probe` below for why that is the wrong way
-    round — and `probe` is now its own function and its own command.
-    """
-    if fmt not in FORMATS:
-        raise RenderError(f"unsupported format {fmt!r}")
-    _require_tools(False)
-
-    plan_path = write_plan(series, episode, fmt)  # raises PlanError before any subprocess
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    return _encode(series, episode, fmt, plan_path, plan)[0]
 
 
 def probe(
@@ -194,9 +187,16 @@ def _encode(
 ) -> tuple[Path, dict]:
     """plan -> node -> ffmpeg. Returns (the mp4, the plan it was made from).
 
-    One function, two callers: `preview` (ungated) and `render_episode` (gated).
-    Two renderers would be two things to keep identical, and the gated one would
-    be the one nobody exercised while developing.
+    **The only writer of the gated artifact, and it has exactly one caller.**
+    That sentence is the guarantee, not a description: `render_episode` asks the
+    three checks and nothing else reaches here, so the file in `out/` cannot
+    exist without them. D-130 was this function with two callers, one of which
+    asked nothing — and the argument that had kept it that way ("two renderers
+    would be two things to keep identical") was right about duplication and
+    silent about the gate. One encoder, one door to it.
+
+    `tests/test_video_gated_artifact.py` pins the caller list off the AST, so a
+    second one cannot be added without a test going red.
     """
     # Spec §5: the frames are ~2.5 GB per episode and they live in a temp
     # directory, never inside `workspace/`. A SIGKILL runs no `finally`, and

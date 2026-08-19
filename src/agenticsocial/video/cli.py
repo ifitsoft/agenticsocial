@@ -1558,30 +1558,6 @@ def _covered_inputs(inputs: dict) -> str:
     )
 
 
-@video_app.command("preview")
-def video_preview(
-    episode: str,
-    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
-) -> None:
-    """Render an episode to video WITHOUT the gate. Changes no status.
-
-    It carried a `--probe` flag until Phase 8. `probe` is its own command now:
-    the cheap operation must not be a flag on the fourteen-minute one.
-    """
-    ws = _workspace()
-    episode = _text(episode, "The episode id")
-    series = _text(series, "The series slug")
-    try:
-        s = load_series(ws, series)
-        ep = load_episode(s, episode)
-        out = render_mod.preview(s, ep)
-    except (SeriesError, EpisodeError, PlanError, render_mod.RenderError) as e:
-        raise _fail(str(e))
-    except OSError as e:
-        raise _fail(f"cannot write output: {e}")
-    typer.echo(f"wrote {out}")
-
-
 @video_app.command("probe")
 def video_probe(
     episode: str,
