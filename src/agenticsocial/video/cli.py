@@ -9,7 +9,7 @@ from typing import Optional
 
 import typer
 
-from ..models import Status, TransitionError
+from ..models import TransitionError
 from ..workspace import Workspace, WorkspaceError, atomic_write
 from . import approve as approve_mod
 from . import claims as claims_mod
@@ -1459,7 +1459,7 @@ def video_approve(
                 "full detail. Nothing moved; the episode is still in_review"
             )
         if e.kind == "ledger":
-            typer.secho(f"{head} — the check does not describe this script", fg=typer.colors.RED)
+            typer.secho(f"{head} — {e}", fg=typer.colors.RED)
             typer.echo(_detail("why", str(e)))
             raise _fail(
                 _detail(
@@ -1558,30 +1558,6 @@ def _covered_inputs(inputs: dict) -> str:
     )
 
 
-@video_app.command("preview")
-def video_preview(
-    episode: str,
-    series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
-) -> None:
-    """Render an episode to video WITHOUT the gate. Changes no status.
-
-    It carried a `--probe` flag until Phase 8. `probe` is its own command now:
-    the cheap operation must not be a flag on the fourteen-minute one.
-    """
-    ws = _workspace()
-    episode = _text(episode, "The episode id")
-    series = _text(series, "The series slug")
-    try:
-        s = load_series(ws, series)
-        ep = load_episode(s, episode)
-        out = render_mod.preview(s, ep)
-    except (SeriesError, EpisodeError, PlanError, render_mod.RenderError) as e:
-        raise _fail(str(e))
-    except OSError as e:
-        raise _fail(f"cannot write output: {e}")
-    typer.echo(f"wrote {out}")
-
-
 @video_app.command("probe")
 def video_probe(
     episode: str,
@@ -1631,39 +1607,46 @@ def video_probe(
 def video_render(
     episode: str,
     series: str = typer.Option(DEFAULT_SERIES, "--series", help="series slug"),
-    fmt: str = typer.Option("vertical", "--format", help="output format"),
+    fmt: str = typer.Option(
+        None,
+        "--format",
+        help="one format; the default is every enabled format in series.toml",
+    ),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        help="re-render a format whose file is already in out/, overwriting it",
+    ),
     restart: bool = typer.Option(
         False,
         "--restart",
         help="an earlier render was killed: mark it failed and start over",
     ),
 ) -> None:
-    """Render an APPROVED episode to an MP4 (§9, §10).
+    """Render an APPROVED episode to an MP4, in every enabled format (§9, §10).
 
     Three checks, and they stay three so you are told which thing moved
     (D-115): the status, the approval against what you authored, and the claim
     ledger against the corpus. It does not re-run `check` — the ledger on disk
     is the artifact of record, and a second set of verdicts computed here would
     be verdicts nobody displayed.
+
+    One approval covers every format, because the format is not part of what was
+    signed. What it does not cover is a file you already have: a format already
+    in `out/` is kept, and `--replace` is how you say otherwise.
     """
     ws = _workspace()
     episode = _text(episode, "The episode id")
     series = _text(series, "The series slug")
     head = f"{series}/{episode} · NOT rendered"
     try:
-        result = render_mod.render_episode(
-            ws, series, episode, fmt=fmt, restart=restart
+        run = render_mod.render_episode(
+            ws, series, episode, fmt=fmt, replace=replace, restart=restart
         )
     except TransitionError as e:
-        # Branching on the state, because one message cannot be right for both.
-        # `rendered` is terminal (D-006) and pointing that operator at `approve`
-        # sends them to a command that will refuse them for a second reason.
-        if e.current is Status.RENDERED:
-            raise _fail(
-                f"{head} — {e}. `rendered` is terminal in the MVP (D-006): the "
-                "file in `out/` is this episode's render, and there is no "
-                "supported way back. A changed story is a new episode"
-            )
+        # `rendered` no longer arrives here: §9's second format is `rendered →
+        # rendering` and it is a supported move. What is left is an episode
+        # nobody has approved, which is one message and one remedy.
         raise _fail(
             f"{head} — {e}. Only an episode a human has approved renders: "
             f"`agsoc video approve {episode} --series {series} --by \"Your Name\"`"
@@ -1675,7 +1658,7 @@ def video_render(
         raise _fail(f"{head} — {e}")
     except OSError as e:
         raise _fail(f"{head} — cannot write output: {e}")
-    _echo_rendered(series, episode, result)
+    _echo_rendered(series, episode, run)
 
 
 def _refusal(head: str, e: render_mod.RenderRefused, episode: str, series: str) -> str:
@@ -1700,6 +1683,19 @@ def _refusal(head: str, e: render_mod.RenderRefused, episode: str, series: str) 
             "put the change back, or run `agsoc video check "
             f"{episode} --series {series}` and approve again",
         )
+    if e.kind == "exists":
+        # Not a gate refusal: the approval, the beats and the ledger all just
+        # passed. It is a refusal to spend an artifact the operator already has,
+        # and the screen has to say which of the two it is — otherwise they go
+        # looking for a problem with the episode that is not there.
+        typer.secho(f"{head} — {e}", fg=typer.colors.RED)
+        return _detail(
+            "fix",
+            "nothing was rendered and nothing was replaced. The three checks "
+            "all passed — this is only about the file(s) above. `agsoc video "
+            f"render {episode} --series {series} --replace` re-renders and "
+            "overwrites them; add `--format F` to replace one",
+        )
     typer.secho(f"{head} — the check does not describe this script", fg=typer.colors.RED)
     typer.echo(_detail("why", str(e)))
     return _detail(
@@ -1707,7 +1703,7 @@ def _refusal(head: str, e: render_mod.RenderRefused, episode: str, series: str) 
     )
 
 
-def _format_line(fmt: str) -> str:
+def _format_line(*formats: str) -> str:
     """R5, said where an operator reads it rather than in a docstring.
 
     `approve` binds what the operator authored — the beats, `pace`, and the
@@ -1717,11 +1713,14 @@ def _format_line(fmt: str) -> str:
     looked at this shape of the card, and nobody has: a 9:16 headline set across
     16:9 is the same words in a layout no approver saw.
     """
-    geometry = plan_mod.FORMATS.get(fmt)
-    size = f"{geometry['w']}x{geometry['h']} · " if geometry else ""
+    named = []
+    for f in formats:
+        geometry = plan_mod.FORMATS.get(f)
+        named.append(f"{f} · {geometry['w']}x{geometry['h']}" if geometry else f)
     return (
-        f"{fmt} · {size}chosen at render time and NOT part of the approval — "
-        "one approval renders every format, and the approver saw none of them"
+        f"{' and '.join(named)} · chosen at render time and NOT part of the "
+        "approval — one approval renders every format, and the approver saw "
+        "none of them"
     )
 
 
@@ -1729,7 +1728,7 @@ def _size(n: int) -> str:
     return f"{n / 1_000_000:.1f} MB" if n >= 100_000 else f"{n / 1000:.0f} kB"
 
 
-def _echo_rendered(series: str, episode: str, result) -> None:
+def _echo_rendered(series: str, episode: str, run) -> None:
     """The success screen, written deliberately (D-116).
 
     It may say the episode was approved and that nothing the operator authored
@@ -1744,21 +1743,43 @@ def _echo_rendered(series: str, episode: str, result) -> None:
     someone who already knows the answer. So the last line is not a flourish; it
     is the part that makes the rest of the screen true.
     """
-    record = result.record
-    typer.secho(f"{series}/{episode} · rendered", fg=typer.colors.GREEN)
-    # Not through `_detail`: a wrapped path is a path you cannot copy out of a
-    # terminal, and this is the one line an operator will select and paste.
-    typer.echo(f"      {'file':<{LABEL_WIDTH}}{result.path}")
-    typer.echo(
-        _detail(
-            "",
-            f"{_size(record['bytes'])} · {record['runtime_sec']:.1f}s · "
-            f"{record['width']}x{record['height']} · {record['frames']} frames "
-            f"@ {record['fps']}fps",
-        )
+    records = [r.record for r in run.rendered]
+    typer.secho(
+        f"{series}/{episode} · rendered {_plural(len(records), 'format')}",
+        fg=typer.colors.GREEN,
     )
-    typer.echo(_detail("format", _format_line(record["format"])))
-    approval = record.get("approval") or {}
+    for result in run.rendered:
+        record = result.record
+        # Not through `_detail`: a wrapped path is a path you cannot copy out of
+        # a terminal, and this is the one line an operator will select and paste.
+        typer.echo(f"      {'file':<{LABEL_WIDTH}}{result.path}")
+        typer.echo(
+            _detail(
+                "",
+                f"{_size(record['bytes'])} · {record['runtime_sec']:.1f}s · "
+                f"{record['width']}x{record['height']} · {record['frames']} "
+                f"frames @ {record['fps']}fps",
+            )
+        )
+    # What this invocation did NOT do, said as plainly as what it did. A run
+    # that quietly skips the format already on disk and prints a heading saying
+    # `rendered` is the overclaim pattern (D-123) pointed at the operator's own
+    # artifacts — and the skip is the common case, because the vertical cut is
+    # normally rendered days before anyone wants the wide one.
+    for path in run.kept:
+        typer.echo(
+            _detail(
+                "kept",
+                f"{path.name} was already in out/ and was NOT re-rendered — "
+                "`--replace` re-renders it",
+            )
+        )
+    for path in run.replaced:
+        typer.echo(
+            _detail("replaced", f"{path.name} — the file that was there is gone")
+        )
+    typer.echo(_detail("format", _format_line(*(r["format"] for r in records))))
+    approval = records[-1].get("approval") or {}
     typer.echo(
         _detail(
             "approved",

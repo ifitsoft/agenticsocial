@@ -42,7 +42,18 @@ VIDEO_TRANSITIONS: dict[Status, set[Status]] = {
     Status.APPROVED: {Status.IN_REVIEW, Status.RENDERING},
     Status.SCHEDULED: set(),
     Status.RENDERING: {Status.RENDERED, Status.FAILED},
-    Status.RENDERED: set(),      # terminal in MVP; see spec §10 and D-006
+    # Back to `rendering`, and NOWHERE else. Spec §9 makes one approval render
+    # every enabled format, and the formats are rendered minutes or days apart;
+    # a second format is the same story producing a second artifact from the
+    # same signed bytes, through the same three gates. It is not lifecycle
+    # progress, which is why the only edge out is the one that comes back here.
+    #
+    # D-006 is untouched: it cut `rendered -> publishing` because that edge was
+    # never exercised and made `failed` ambiguous. `rendered` having no outgoing
+    # edge at all was its consequence, not its purpose — and the consequence was
+    # that `render <ep> --format wide` was refused on the one episode most
+    # likely to want it. Publishing is still unreachable from every video state.
+    Status.RENDERED: {Status.RENDERING},
     Status.PUBLISHING: set(),    # unreachable in MVP; kept for table totality
     Status.PUBLISHED: set(),
     Status.FAILED: {Status.RENDERING},

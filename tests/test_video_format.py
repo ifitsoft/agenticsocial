@@ -174,14 +174,18 @@ def test_an_unknown_format_is_still_refused(series, episode):
 # --- 2 · end to end ------------------------------------------------------------------
 
 
-def test_preview_wide_encodes_at_1920x1080(series, episode, fake):
-    """M7 end to end: the mp4 is named for the format AND its geometry, so a
-    wide render that quietly produced 1080×1920 is visible in `out/`."""
-    out = R.preview(series, episode, "wide")
-    assert out.name == "wide-1920x1080.mp4"
-    node = [c for c in fake.calls if Path(c[0]).name == "node"][0]
-    plan = json.loads(Path(node[node.index("--plan") + 1]).read_text())
-    assert plan["format"]["w"] == 1920
+def test_the_wide_mp4_is_named_for_its_geometry(series, episode):
+    """M7: the file is named for the format AND its geometry, so a wide render
+    that quietly produced 1080×1920 is visible in `out/` without opening it.
+
+    Read off `output_path` rather than off a render. It used to run `preview`,
+    which is retired (D-130): the encoder now has exactly one caller and it is
+    the gate, so the end-to-end wide render lives where an approved episode
+    exists — `test_video_render_cmd.py`, the `WIDE` assertions.
+    """
+    assert R.output_path(episode, "wide").name == "wide-1920x1080.mp4"
+    assert R.output_path(episode, "vertical").name == "vertical-1080x1920.mp4"
+    assert R.output_path(episode, "wide").parent == episode.out_dir
 
 
 def test_probe_wide_reaches_the_renderer_with_the_wide_plan(series, episode, fake):
@@ -231,7 +235,13 @@ def test_the_render_screen_says_the_format_was_not_approved(series, episode, mon
     }
     monkeypatch.setattr(
         R, "render_episode",
-        lambda *a, **k: R.RenderResult(record=record, path=Path("/tmp/wide-1920x1080.mp4")),
+        lambda *a, **k: R.RenderRun(
+            rendered=(
+                R.RenderResult(record=record, path=Path("/tmp/wide-1920x1080.mp4")),
+            ),
+            kept=(),
+            replaced=(),
+        ),
     )
     result = runner.invoke(
         app, ["video", "render", "2026-08-14", "--series", "the-brief", "--format", "wide"],

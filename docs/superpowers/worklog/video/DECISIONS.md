@@ -3532,3 +3532,132 @@ called on every card. Now gated and pinned.
 
 Every phase that required someone to *look at the artifact* found something the
 tests did not. Twelve for twelve.
+
+## D-130 · CRITICAL · `preview` is an ungated route to the file `render` gates
+
+Found by the implementer of the second-format fix while auditing capability
+claims, and **leader-verified empirically** on a throwaway workspace:
+
+```
+status on disk: draft
+render  -> exit 1   "cannot move draft -> rendering; allowed next: in_review"
+preview -> exit 0   wrote out/vertical-1080x1920.mp4  (518,230 B)
+status after preview: draft
+```
+
+`preview` calls the same `_encode`, which writes
+`episode.out_dir / f"{fmt}-{w}x{h}.mp4"` — **the exact path `render` protects** —
+with no status check, no `approval_drift`, no `stale_reason`.
+
+**This is D-059 alive in the video pipeline.** The v1 defect was *a draft was
+published*; this is *a draft was rendered*, and the artifact is byte-identical to
+an approved one and sits precisely where an operator or a publishing step would
+look for the approved file. Nothing on disk distinguishes them.
+
+Phase 7 spent three tasks establishing that a gate takes identifiers and loads
+from disk, and Phase 8 built three checks in front of `render`. **All of it is
+bypassed by a sibling command that was never asked what it writes.** D-119
+retired the *Node-side* second route to an MP4 for exactly this reason and the
+Python one survived, because the audit was aimed at `render.mjs`.
+
+The transferable lesson, and it is the strongest one this project has produced:
+**a gate protects a decision, not a file, unless every writer of that file goes
+through it.** Enumerating the *readers* of a verdict caught six overclaims
+(D-123); nobody enumerated the *writers* of the artifact.
+
+**Fix required before this pipeline is used in anger.** `probe` already provides
+the ungated look and produces frames rather than a shippable video (D-119), which
+is the honest shape: *looking is free, producing the artifact is gated.*
+
+## D-131 · the second format renders, and §9 is still not true at full length
+
+`rendered → rendering` added — one edge, nothing else in either table moves.
+D-006's cut was `rendered → publishing`; **`rendered` having no outgoing edge was
+that cut's consequence, not its purpose.** The rejected alternative ("not a
+transition at all") was run **as a mutant rather than argued away** — it has to
+decide whether to run the status gate by reading the status, which is D-059's
+shape, and it discards crash recovery. The suite kills it.
+
+2053 tests, **18/19 mutants**. The R5 enumeration is now **pinned by a test read
+from the AST**: exactly three functions in `src/` write a `status` key, two are
+gated `set_status`, the third writes what disk already says. `render.py` gained
+zero new status writers.
+
+**A whole class of unfailable assertions was found:** every
+`assert "--force" not in result.output` in the render tests **could not fail** —
+Rich splits flags with ANSI codes. Measured by adding a real `--force` flag: the
+old assertion stayed green, a correct one went red. D-035's family, in a form
+nothing else in this project had hit.
+
+**And §9 is still not true end-to-end.** The wide render of the operator's real
+120 s episode reaches the renderer and **the renderer cannot finish it** — three
+times out of three, `page.screenshot: Timeout 30000ms` at ~frame 708/3599, with
+the engine's own ETA climbing 1390 → 1699 s. Vertical sustains ~225 frames/min on
+the same episode; wide decays from ~168 to ~72 and stalls.
+
+So the geometry is proved on a short episode (`ffprobe` 1920×1080, both formats
+carrying the **same `script_file_sha256`** — one approval, two artifacts) and the
+full-length wide render is an **open engine performance defect**. The implementer
+changed no message to hide it, which is the right instinct and the opposite of
+what produced seven overclaims.
+
+## D-132 · CRITICAL, closed · `preview` retired — the gate protects a decision, not a location
+
+**Decision: `preview` is gone**, function and command, as D-119 retired
+`render.mjs --day`. Leader-verified: the command no longer exists, a draft
+produces no MP4, and `render` still refuses it.
+
+**Its justification had expired and nobody re-asked it.** The module docstring
+said `preview` existed *because there was no approve command until Phase 7*. The
+gate arrived in Phase 7, the three checks in Phase 8 — and the stand-in was never
+asked what it wrote. **A temporary bypass outlives the reason for it silently,
+because nothing about it changes when the reason disappears.**
+
+Both alternatives were rejected with arguments worth keeping: **writing it
+elsewhere** leaves a thirteen-minute unapproved encoder in the product and makes
+the gate protect a *location* rather than a *decision*; **gating it** makes it
+`render` under a second name, which is D-113's shape.
+
+### The enumeration, which is the durable part
+
+Asked from the AST, four questions rather than a grep:
+
+1. `output_path` is the **only** function in `src/` containing an `.mp4` literal.
+2. `_encode` is the **only** function that hands a path under `out/` to a writing
+   process.
+3. `_encode` has exactly **one** caller: `render_episode`.
+4. Exactly **one** CLI command reaches it transitively.
+
+**Before the fix, row 3 read `{preview, render_episode}` — that entry is the
+entire defect.** All four rows are now pinned by tests, so a fourth writer cannot
+be added silently.
+
+Also: the tests that had used `preview` as a cheap handle on `_encode` now drive
+`render_episode`, because reaching the encoder by a route the product does not
+have is testing a harness rather than a product.
+
+**The cost, stated plainly:** motion and pacing can no longer be watched before
+approving. `probe` covers frames; `approve` is cheap, and re-editing re-drifts it.
+
+## D-133 · open · `claims.json` has a second writer, and a refutation after signing does not stop a render
+
+Found by the same enumeration, verified empirically: `check` and `judge` both
+write `claims.json`. So after `approve`, a `judge --verdict refuted` lands in the
+ledger while `approval_drift`, `stale_reason` and the status all read clean — **a
+claim refuted after the signature still renders.**
+
+D-130's shape at lower severity: no artifact is produced by the bypass, a named
+human runs `judge`, and the direction of the error is *more* scrutiny arriving,
+not less. But the approval says "24 of 24 verified" and that sentence can become
+false without anything noticing.
+
+**Recommended fix, not done:** `approve` records a digest of the ledger's
+findings, and `approval_drift` compares it — the same mechanism already protecting
+the beats and the design (D-114, D-115). It is a Phase 7/9 gate question rather
+than part of this fix.
+
+**The general form, now stated three times in one night:** *a gate protects a
+decision, not a file, unless every writer of that file goes through it.*
+Enumerating the readers of a verdict caught six overclaims (D-123); enumerating
+the writers of an artifact caught D-130 and D-133. **Both enumerations belong in
+the checklist whenever a new pass, command or artifact is added.**

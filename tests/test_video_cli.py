@@ -288,40 +288,6 @@ def test_series_option_with_undecodable_text_fails_cleanly(ws):
     assert "UTF-8" in result.output
 
 
-# --- preview -------------------------------------------------------------------
-
-
-def test_video_preview_reports_the_output_path(ws, monkeypatch):
-    import agenticsocial.video.render as R
-
-    run("series", "new", "the-brief")
-    run("video", "new", "2026-08-14", "--series", "the-brief")
-    ep_dir = ws.series_dir / "the-brief" / "episodes" / "2026-08-14"
-    (ep_dir / "script.yaml").write_text(
-        "---\nstatus: draft\n---\nbeats:\n  - type: statement\n    text: hi\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(R, "preview", lambda *a, **k: ep_dir / "out" / "x.mp4")
-    result = run("video", "preview", "2026-08-14", "--series", "the-brief")
-    assert result.exit_code == 0
-    assert "x.mp4" in result.output
-
-
-def test_video_preview_render_failure_is_a_clean_error(ws, monkeypatch):
-    import agenticsocial.video.render as R
-
-    run("series", "new", "the-brief")
-    run("video", "new", "2026-08-14", "--series", "the-brief")
-
-    def boom(*a, **k):
-        raise R.RenderError("ffmpeg not found on PATH")
-
-    monkeypatch.setattr(R, "preview", boom)
-    result = run("video", "preview", "2026-08-14", "--series", "the-brief")
-    assert result.exit_code == 1
-    assert "ffmpeg" in result.output
-
-
 # --- agsoc video ingest --------------------------------------------------------
 
 

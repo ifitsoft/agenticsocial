@@ -1,9 +1,18 @@
 """Drive the Node renderer and ffmpeg from Python.
 
-Phase 1.5 ships `preview`, not `render`. Spec §10 makes RENDERING reachable only
-from APPROVED, and there is no approve command until Phase 7 — so a command
-named `render` today would have to bypass the gate it is named after. `preview`
-never touches status. Phase 8 adds the gated `render` on top of this.
+Two commands live here and the split is the point: **looking is free, producing
+the artifact is gated.** `probe` writes PNGs and reads no status; `render_episode`
+writes `out/<fmt>-<w>x<h>.mp4` behind three checks. There is no third thing.
+
+There was, until D-130. Phase 1.5 shipped `preview` because §10 makes RENDERING
+reachable only from APPROVED and no approve command existed yet — a defensible
+command at the time. Phase 7 built the gate and Phase 8 built the three checks in
+front of it, and `preview` went on calling the same `_encode` and writing the
+same path with none of them: **a draft could be rendered, and nothing on disk
+distinguished the result from an approved render.** It is retired, for the reason
+D-119 retired `render.mjs --day`: a second way to reach the artifact is a second
+way past the gate. A gate protects a decision, not a file, unless every writer of
+that file goes through it.
 """
 from __future__ import annotations
 
@@ -60,6 +69,20 @@ def _require_tools(probe: bool) -> None:
         )
 
 
+def _abs(p: Path) -> str:
+    """A path for the renderer, always absolute.
+
+    `_run` starts node with `cwd=ENGINE_DIR`, and `Workspace.locate()` returns
+    `Path("workspace")` when `AGSOC_WORKSPACE` is unset — which is the DEFAULT.
+    A cwd-relative path therefore resolved against `engine/` and the renderer
+    died with a raw `ENOENT` on a path that plainly existed. Handing a
+    cwd-relative path to a process with a different cwd is the bug; resolving at
+    the boundary is the fix, and it belongs here rather than in `locate()`
+    because this is the only place the cwd changes.
+    """
+    return str(Path(p).resolve())
+
+
 def _run(cmd: list[str], what: str) -> None:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ENGINE_DIR)
@@ -68,22 +91,6 @@ def _run(cmd: list[str], what: str) -> None:
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-6:]
         raise RenderError(f"{what} failed (exit {proc.returncode}):\n  " + "\n  ".join(tail))
-
-
-def preview(series: Series, episode: Episode, fmt: str = "vertical") -> Path:
-    """Render an episode to video without touching its status. Returns the mp4.
-
-    It took a `probe=True` until Phase 8. That made the cheap operation a flag
-    on the expensive one — see `probe` below for why that is the wrong way
-    round — and `probe` is now its own function and its own command.
-    """
-    if fmt not in FORMATS:
-        raise RenderError(f"unsupported format {fmt!r}")
-    _require_tools(False)
-
-    plan_path = write_plan(series, episode, fmt)  # raises PlanError before any subprocess
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    return _encode(series, episode, fmt, plan_path, plan)[0]
 
 
 def probe(
@@ -144,7 +151,7 @@ def probe(
 
     if at is None:
         _run(
-            ["node", "render.mjs", "--plan", str(plan_path), "--probe", "--out", str(out)],
+            ["node", "render.mjs", "--plan", _abs(plan_path), "--probe", "--out", _abs(out)],
             "the renderer",
         )
         return out
@@ -152,10 +159,27 @@ def probe(
     # Frames belong to the episode that produced them: --out, never
     # engine/probe, so two episodes probed in a row cannot overwrite each other.
     _run(
-        ["node", "render.mjs", "--plan", str(plan_path), "--at", str(at), "--out", str(out)],
+        ["node", "render.mjs", "--plan", _abs(plan_path), "--at", str(at), "--out", _abs(out)],
         "the renderer",
     )
     return out / f"at-{at}.png"
+
+
+def output_path(episode: Episode, fmt: str) -> Path:
+    """Where one format's MP4 lives. The ONE answer to that question.
+
+    It is asked twice and by two different kinds of caller — the encoder, which
+    is about to write the file, and the gate, which needs to know whether a file
+    is already there before it overwrites thirteen minutes of somebody's
+    machine. Two spellings of the same f-string is the D-036 pattern, and here
+    the two answers disagreeing means the check guards a path nothing writes.
+
+    Derived from `FORMATS`, not from `plan.json`: the plan is built from the
+    same table, and the caller that needs to ask "does this exist yet?" has not
+    built a plan and must not have to build one to find out.
+    """
+    geometry = FORMATS[fmt]
+    return episode.out_dir / f"{fmt}-{geometry['w']}x{geometry['h']}.mp4"
 
 
 def _encode(
@@ -163,9 +187,16 @@ def _encode(
 ) -> tuple[Path, dict]:
     """plan -> node -> ffmpeg. Returns (the mp4, the plan it was made from).
 
-    One function, two callers: `preview` (ungated) and `render_episode` (gated).
-    Two renderers would be two things to keep identical, and the gated one would
-    be the one nobody exercised while developing.
+    **The only writer of the gated artifact, and it has exactly one caller.**
+    That sentence is the guarantee, not a description: `render_episode` asks the
+    three checks and nothing else reaches here, so the file in `out/` cannot
+    exist without them. D-130 was this function with two callers, one of which
+    asked nothing — and the argument that had kept it that way ("two renderers
+    would be two things to keep identical") was right about duplication and
+    silent about the gate. One encoder, one door to it.
+
+    `tests/test_video_gated_artifact.py` pins the caller list off the AST, so a
+    second one cannot be added without a test going red.
     """
     # Spec §5: the frames are ~2.5 GB per episode and they live in a temp
     # directory, never inside `workspace/`. A SIGKILL runs no `finally`, and
@@ -174,25 +205,24 @@ def _encode(
     frames = Path(tempfile.mkdtemp(prefix=f"agsoc-frames-{episode.id}-"))
     try:
         _run(
-            ["node", "render.mjs", "--plan", str(plan_path), "--out", str(frames)],
+            ["node", "render.mjs", "--plan", _abs(plan_path), "--out", _abs(frames)],
             "the renderer",
         )
         if not any(frames.glob("*.png")):
             raise RenderError(
                 "the renderer produced no frames — check the script has beats"
             )
-        w, h = plan["format"]["w"], plan["format"]["h"]
-        mp4 = episode.out_dir / f"{fmt}-{w}x{h}.mp4"
+        mp4 = output_path(episode, fmt)
         _run(
             [
                 "ffmpeg", "-y",
                 "-framerate", str(plan["fps"]),
-                "-i", str(frames / "%05d.png"),
+                "-i", _abs(frames / "%05d.png"),
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                 "-metadata", f"comment=script_file_sha256={plan['script_file_sha256']}",
                 "-metadata", f"title={series.name} — {episode.id}",
-                str(mp4),
+                _abs(mp4),
             ],
             "ffmpeg",
         )
@@ -219,16 +249,55 @@ class RenderResult:
     path: Path
 
 
+@dataclass(frozen=True)
+class RenderRun:
+    """What ONE invocation did — which is not the same as what it rendered.
+
+    `kept` is here because a format that was skipped is a thing the operator has
+    to be told: `render <ep>` on an episode with a vertical cut already on disk
+    does less than its name says, and a success screen listing two files it did
+    not make is this project's overclaim pattern in its purest form (D-123).
+    `replaced` is the other half — an 18 MB file that is gone.
+    """
+
+    rendered: tuple[RenderResult, ...]
+    # Paths, not format names: the operator's question about a kept file is
+    # "which file did you leave alone", and a name it can be pasted after is a
+    # better answer than a word they have to map back onto a filename.
+    kept: tuple[Path, ...] = ()
+    replaced: tuple[Path, ...] = ()
+
+
 def render_episode(
     ws: Workspace,
     series_slug: str,
     ep_id: str,
     *,
-    fmt: str = "vertical",
+    fmt: str | None = None,
+    replace: bool = False,
     restart: bool = False,
     now: str | None = None,
-) -> RenderResult:
-    """Render one approved episode, or refuse. Spec §9, §10.
+) -> RenderRun:
+    """Render an approved episode's formats, or refuse. Spec §9, §10.
+
+    **`fmt=None` means every format `series.toml` enables**, which is what §9's
+    `agsoc video render 2026-08-14` has always been documented to do. Before
+    Phase 13 it rendered `vertical` and `[formats] enabled` was read by nothing
+    but the list screen.
+
+    **A second format is a second artifact, not a second story.** The episode
+    may already be `rendered`, and `rendered → rendering` is the edge that
+    allows it (D-006 is untouched — see `VIDEO_TRANSITIONS`). The three gates
+    are re-asked in full every time: a second format is only safe *because* the
+    script and the design are provably unchanged since approval, so the drift
+    check is what makes the new edge legitimate rather than something the new
+    edge had to get past.
+
+    **What protects an existing file is not the status machine.** It is that a
+    format already on disk is never re-rendered without `replace=True`. That is
+    the honest place for the guarantee: `rendered` being terminal never
+    protected anything a `--restart` or a `failed` retry could not walk around,
+    and it forbade the one operation §9 promises.
 
     **Takes identifiers, not objects (D-072).** It loads the series, the episode
     and the ledger itself, immediately before the transition, so there is no
@@ -275,7 +344,7 @@ def render_episode(
     the renderer is. The font this machine resolved is outside it, and a font
     substitution changes every frame with all three checks green.
     """
-    if fmt not in FORMATS:
+    if fmt is not None and fmt not in FORMATS:
         raise RenderError(
             f"unsupported format {fmt!r} — this phase renders: "
             f"{', '.join(sorted(FORMATS))}"
@@ -286,6 +355,22 @@ def render_episode(
     _require_tools(False)
 
     series = load_series(ws, series_slug)
+    # Two different refusals, and collapsing them would send an operator to the
+    # wrong file: an UNSUPPORTED format is a name the engine cannot draw and the
+    # fix is in plan.py; a format this SERIES has not enabled is a name the
+    # engine draws fine and the fix is one line of series.toml. `series.formats`
+    # is validated against FORMATS at load, so the list below is always a subset.
+    if fmt is None:
+        targets = list(series.formats)
+    elif fmt not in series.formats:
+        raise RenderError(
+            f"{series.slug} does not render {fmt!r} — series.toml's "
+            f"`[formats] enabled` lists: {', '.join(series.formats)}. Add it "
+            "there, or render one of those"
+        )
+    else:
+        targets = [fmt]
+
     # Matched exactly. `resolve_episode`'s substring matching is right for
     # `review`, which shows you what it found, and wrong here, where the thing
     # it might find is an expensive render of an episode you did not name.
@@ -308,7 +393,11 @@ def render_episode(
         episode = set_status(
             episode,
             Status.FAILED,
-            {"render": _failure_record("the previous render was abandoned", fmt, now)},
+            {
+                "render": _failure_record(
+                    "the previous render was abandoned", targets[0], now
+                )
+            },
         )
     assert_transition(episode.status, Status.RENDERING, VIDEO_TRANSITIONS)
 
@@ -322,26 +411,67 @@ def render_episode(
     if stale:
         raise RenderRefused("ledger", stale)
 
+    # --- 4. is there anything left to render? ---------------------------------
+    # AFTER the three gates, deliberately. A drifted episode whose formats all
+    # happen to be on disk must still be told it has drifted: "everything is
+    # already rendered" is only a true account of the situation when nothing
+    # else would have stopped you.
+    on_disk = [f for f in targets if output_path(episode, f).is_file()]
+    todo = list(targets) if replace else [f for f in targets if f not in on_disk]
+    if not todo:
+        # Not a success with an empty list. A screen that names two files this
+        # invocation did not make, under a green heading, is the overclaim
+        # pattern (D-123) with the operator's own artifacts as the subject.
+        raise RenderRefused(
+            "exists",
+            "already rendered: "
+            + ", ".join(
+                str(output_path(episode, f).relative_to(episode.dir)) for f in on_disk
+            ),
+        )
+
     # The authoritative gate: `set_status` re-reads the status ON DISK and
     # asserts the transition itself, in the same function that performs the
     # write. The check above is the same assertion made early so the refusal is
     # cheap and legible; this one is the guarantee.
+    #
+    # ONE transition covers every format in the run: the formats are the same
+    # story, `rendering → rendering` is not an edge, and a status written per
+    # format would be a second reason to write status inside the loop.
     episode = set_status(episode, Status.RENDERING)
 
+    results: list[RenderResult] = []
+    current = todo[0]
     try:
-        plan_path = write_plan(series, episode, fmt)
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        mp4, plan = _encode(series, episode, fmt, plan_path, plan)
+        for current in todo:
+            plan_path = write_plan(series, episode, current)
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            mp4, plan = _encode(series, episode, current, plan_path, plan)
+            results.append(
+                RenderResult(record=_render_record(episode, plan, mp4, now), path=mp4)
+            )
     except BaseException as e:
         # `BaseException`, not `Exception`: Ctrl-C is the likeliest way a
         # fourteen-minute render ends early, and an `except Exception` here
         # would leave exactly the `rendering` forever this exists to prevent.
-        _fail_episode(episode, e, fmt, now)
+        # `current` is the format that died, not the one that was asked for:
+        # "wide failed" and "vertical failed" send an operator to different
+        # frames, and a two-format run can fail on either.
+        _fail_episode(episode, e, current, now)
         raise
 
-    record = _render_record(episode, plan, mp4, now)
-    set_status(episode, Status.RENDERED, {"render": record})
-    return RenderResult(record=record, path=mp4)
+    # The LAST record, and `render` keeps the meaning it has always had: the
+    # most recent render ATTEMPT, success or failure. It is not a per-format
+    # archive and must not become one — the per-format audit trail is in the MP4
+    # itself, where ffmpeg wrote `script_file_sha256` into the container's
+    # comment tag, so each file can be matched back to the script it was made
+    # from without this record at all.
+    set_status(episode, Status.RENDERED, {"render": results[-1].record})
+    return RenderRun(
+        rendered=tuple(results),
+        kept=tuple(output_path(episode, f) for f in targets if f not in todo),
+        replaced=tuple(output_path(episode, f) for f in todo if f in on_disk),
+    )
 
 
 def _fail_episode(episode: Episode, error: BaseException, fmt: str, now) -> None:

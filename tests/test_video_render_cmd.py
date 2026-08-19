@@ -20,6 +20,7 @@ Four habits, each because the matching mutant is a one-line source edit:
 import ast
 import inspect
 import json
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -406,12 +407,29 @@ def test_the_gate_loads_what_it_gates(series):
     assert forbidden.isdisjoint(params)
 
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def help_text(*args):
+    """`--help` with the ANSI stripped and the whitespace squashed.
+
+    Rich renders a flag as `ESC[1;36m-ESC[0mESC[1;36m-forceESC[0m`, so the
+    literal string `--force` NEVER appears in `result.output` — and every
+    `assert "--force" not in result.output` in this file was therefore
+    unfailable. Measured during Phase 13 Task 1 by adding a `--force` flag to
+    `video render`: the assertion below stayed green. It also wraps inside a
+    box, so a long help string is split across lines.
+    """
+    result = run(*args, "--help")
+    assert result.exit_code == 0
+    return " ".join(ANSI.sub("", result.output).split())
+
+
 def test_render_offers_no_way_to_skip_the_gate(ws):
     """M1-M3's CLI half — a flag is an argument a caller can shape."""
-    result = run("video", "render", "--help")
-    assert result.exit_code == 0
+    text = help_text("video", "render")
     for flag in ("--force", "--skip", "--no-check", "--script", "--ledger"):
-        assert flag not in result.output
+        assert flag not in text
 
 
 # --- R2: a crash leaves a recoverable state ------------------------------------------
@@ -518,15 +536,22 @@ def test_restart_does_not_skip_the_gate(series, fake):
     assert fake.calls == []
 
 
-def test_rendered_is_terminal(series, fake):
-    """R2 negative, D-006. A second render of a finished episode is refused, not
-    silently repeated."""
+def test_a_finished_episode_is_not_re_rendered_by_accident(series, fake):
+    """R2 negative. Every enabled format is already on disk, so there is nothing
+    to do and a success screen would be a lie.
+
+    This test used to assert the word "terminal" — Phase 13 Task 1. `rendered`
+    being terminal was D-006's *consequence*, not its purpose, and it made
+    `--format wide` unreachable on the one episode most likely to want it. What
+    protects the artifact is not the status machine, it is that an existing file
+    is never replaced without the operator saying so.
+    """
     approved(series)
     assert render().exit_code == 0
     result = render()
     assert result.exit_code == 1, result.output
     assert status_on_disk(series) == "rendered"
-    assert "terminal" in result.output
+    assert "--replace" in result.output
     # And it must not send them to `approve`, which would refuse them for a
     # second reason. A fix line that names the wrong command costs the reader
     # the only thing the message was trying to give them.
@@ -626,7 +651,7 @@ def test_the_frames_are_deleted_when_the_render_fails(series, monkeypatch):
 def test_the_render_is_recorded_in_the_script(series, fake):
     """R4. "somewhere stated" means stated in the artifact, not in scrollback."""
     approved(series)
-    render()
+    render("--format", "vertical")
     record = meta_on_disk(series)["render"]
     assert record["file"] == "out/vertical-1080x1920.mp4"
     # Relative to the episode, not absolute: a committed artifact that names
@@ -774,3 +799,523 @@ def test_the_episode_id_is_matched_exactly(series, fake):
     result = render(ep_id="2026")
     assert result.exit_code == 1, result.output
     assert status_on_disk(series) == "approved"
+
+
+# --- Phase 13 Task 1: one approval renders every format --------------------------------
+#
+# The defect, against the operator's own episode:
+#
+#     $ agsoc video render 2026-08-18 --series the-brief --format wide
+#     NOT rendered — cannot move rendered -> rendering; allowed next: none (terminal).
+#
+# while the success screen the same command had printed minutes earlier said
+# "one approval renders every format". Spec §9 documents both `render <ep>`
+# (every enabled format) and `--format wide` (one); neither worked after the
+# first render, and `[formats] enabled` in series.toml was read by nothing but
+# the list screen.
+#
+# The mutant table is in the Phase 13 Task 1 brief. Every test below names its
+# mutant, and every refusal also asserts the status ON DISK did not move and
+# that no subprocess ran (D-059).
+
+VERTICAL = "vertical-1080x1920.mp4"
+WIDE = "wide-1920x1080.mp4"
+SENTINEL = b"the bytes of the render that already existed"
+
+
+def out_file(series, name, ep_id=EP):
+    return series.episodes_dir / ep_id / "out" / name
+
+
+def set_enabled(series, formats):
+    """Rewrite `[formats] enabled`, and NOTHING else.
+
+    `[formats]` is not one of the series values `build_plan` reads, so this is
+    deliberately not a drift-triggering edit — which is what makes it a fair
+    test of the enabled list rather than of the drift check.
+    """
+    toml = series.dir / "series.toml"
+    text = toml.read_text(encoding="utf-8")
+    old = 'enabled = ["vertical", "wide"]'
+    assert old in text, text
+    new = "enabled = [" + ", ".join(f'"{f}"' for f in formats) + "]"
+    toml.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def encoded(fake, since=0):
+    """The basenames ffmpeg was asked to write, from `since` onward.
+
+    Read off the calls rather than off the output directory: a format that is
+    correctly skipped and a format that is re-rendered to identical bytes look
+    the same on disk, and the thing under test is whether the work was done.
+    """
+    return [
+        Path(c[-1]).name for c in fake.calls[since:] if Path(c[0]).name == "ffmpeg"
+    ]
+
+
+def flat(result):
+    return " ".join(result.output.split())
+
+
+# --- R1: a format the episode has not produced yet -------------------------------------
+
+
+def test_a_rendered_episode_renders_a_format_it_has_not_produced(series, fake):
+    """M1. The defect itself. `rendered` describes the story — verified,
+    approved, committed to — and a second format is a second artifact from the
+    same signed bytes, not a second story."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    result = render("--format", "wide")
+    assert result.exit_code == 0, result.output
+    assert out_file(series, WIDE).is_file()
+    assert out_file(series, VERTICAL).is_file(), "the first format must survive"
+    assert status_on_disk(series) == "rendered"
+
+
+def test_a_drifted_rendered_episode_renders_no_second_format(series, fake):
+    """M2 — the dangerous one. A second format is only safe BECAUSE the script
+    is provably unchanged since approval; an implementation that reaches the new
+    edge by loosening the drift check inverts the point of the gate."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    edit_beats(series, [clean_beat(), clean_beat(text="Something else entirely.")])
+    n = len(fake.calls)
+    result = render("--format", "wide")
+    assert result.exit_code == 1, result.output
+    assert "sha256" in result.output
+    assert not out_file(series, WIDE).exists()
+    assert status_on_disk(series) == "rendered"
+    assert fake.calls[n:] == []
+
+
+def test_a_design_change_after_rendering_blocks_the_second_format(series, fake):
+    """M2, D-115's half: `series.toml` repaints every frame, and the wide cut is
+    exactly where an operator would be tempted to "just adjust the accent"."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    toml = series.dir / "series.toml"
+    toml.write_text(
+        toml.read_text(encoding="utf-8").replace("#2E6BFF", "#12A150"), encoding="utf-8"
+    )
+    n = len(fake.calls)
+    result = render("--format", "wide")
+    assert result.exit_code == 1, result.output
+    assert "series.toml" in result.output
+    assert not out_file(series, WIDE).exists()
+    assert status_on_disk(series) == "rendered"
+    assert fake.calls[n:] == []
+
+
+def test_a_stale_corpus_blocks_the_second_format(series, fake):
+    """M3. The ledger no longer describes the bytes it was computed from, and
+    that is as true for the wide cut as for the vertical one."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    corpus.write_document(
+        load_episode(series, EP),
+        SOURCE + " A sentence nobody checked.",
+        url="https://local-ai-zone.example/x",
+        key="local-ai-zone",
+        fetched_at="2026-08-18",
+        replace=True,
+    )
+    n = len(fake.calls)
+    result = render("--format", "wide")
+    assert result.exit_code == 1, result.output
+    assert "corpus" in result.output
+    assert not out_file(series, WIDE).exists()
+    assert status_on_disk(series) == "rendered"
+    assert fake.calls[n:] == []
+
+
+def test_a_missing_ledger_blocks_the_second_format(series, fake):
+    """M3. `check` deleted after the first render: nothing verifies these
+    sentences any more, whatever the episode's status says."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    (series.episodes_dir / EP / "claims.json").unlink()
+    n = len(fake.calls)
+    result = render("--format", "wide")
+    assert result.exit_code == 1, result.output
+    assert not out_file(series, WIDE).exists()
+    assert status_on_disk(series) == "rendered"
+    assert fake.calls[n:] == []
+
+
+def test_an_unapproved_episode_still_renders_nothing_in_any_format(series, fake):
+    """M2/M1's floor. The new edge starts at `rendered`, and nothing about it
+    may make an unapproved episode reachable — in either format."""
+    episode(series)
+    for extra in (("--format", "wide"), ("--format", "vertical"), ()):
+        result = render(*extra)
+        assert result.exit_code == 1, result.output
+        assert status_on_disk(series) == "in_review"
+    assert fake.calls == []
+    assert not list((series.episodes_dir / EP / "out").glob("*.mp4"))
+
+
+# --- R2: `[formats] enabled` is the list, and it is read -------------------------------
+
+
+def test_render_with_no_format_renders_every_enabled_format(series, fake):
+    """M4. Spec §9: `agsoc video render <ep>` is documented as every enabled
+    format. It rendered the default one and printed a screen claiming the
+    other."""
+    approved(series)
+    result = render()
+    assert result.exit_code == 0, result.output
+    assert out_file(series, VERTICAL).is_file()
+    assert out_file(series, WIDE).is_file()
+    assert "vertical" in result.output and "wide" in result.output
+
+
+def test_no_format_renders_only_the_formats_the_series_enabled(series, fake):
+    """M4's negative. A series that has turned `wide` off must not get one."""
+    set_enabled(series, ["vertical"])
+    approved(series)
+    result = render()
+    assert result.exit_code == 0, result.output
+    assert out_file(series, VERTICAL).is_file()
+    assert not out_file(series, WIDE).exists()
+    assert encoded(fake) == [VERTICAL]
+
+
+def test_a_format_the_series_has_not_enabled_is_refused_by_name(series, fake):
+    """M5. `wide` is a format the engine supports and this series does not, and
+    the refusal has to say which of the two it is — "unsupported format" would
+    send the operator to plan.py instead of to series.toml."""
+    set_enabled(series, ["vertical"])
+    approved(series)
+    result = render("--format", "wide")
+    assert result.exit_code == 1, result.output
+    assert "wide" in result.output
+    assert "series.toml" in result.output or "enabled" in result.output
+    assert "vertical" in result.output, "name the list they could have chosen from"
+    assert status_on_disk(series) == "approved", "a typo must not spend the gate"
+    assert fake.calls == []
+    assert not out_file(series, WIDE).exists()
+
+
+def test_the_enabled_list_is_read_from_the_series_not_from_a_constant(series, fake):
+    """M5. `enabled = ["wide"]` renders wide and only wide — the mutant that
+    hard-codes plan.FORMATS passes the test above and fails this one."""
+    set_enabled(series, ["wide"])
+    approved(series)
+    result = render()
+    assert result.exit_code == 0, result.output
+    assert encoded(fake) == [WIDE]
+    assert not out_file(series, VERTICAL).exists()
+
+
+# --- R3: replacing an existing file is explicit ----------------------------------------
+
+
+def test_an_existing_file_is_not_silently_replaced(series, fake):
+    """M6. The operator's vertical cut is 18 MB and thirteen minutes; a command
+    that quietly overwrites it has spent both without asking."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    out_file(series, VERTICAL).write_bytes(SENTINEL)
+    n = len(fake.calls)
+    result = render("--format", "vertical")
+    assert result.exit_code == 1, result.output
+    assert VERTICAL in result.output
+    assert "--replace" in result.output
+    assert out_file(series, VERTICAL).read_bytes() == SENTINEL
+    assert fake.calls[n:] == []
+    assert status_on_disk(series) == "rendered"
+
+
+def test_replace_re_renders_the_existing_file(series, fake):
+    """M6's positive half. Refusing forever is its own defect: an engine fix is
+    exactly the reason to re-render an approved, undrifted episode."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    out_file(series, VERTICAL).write_bytes(SENTINEL)
+    result = render("--format", "vertical", "--replace")
+    assert result.exit_code == 0, result.output
+    assert out_file(series, VERTICAL).read_bytes() != SENTINEL
+    assert status_on_disk(series) == "rendered"
+
+
+def test_replace_says_which_file_it_replaced(series, fake):
+    """M6. "Explicit" is not only the flag: the screen has to state that the
+    file the operator had is gone."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    result = render("--format", "vertical", "--replace")
+    assert result.exit_code == 0, result.output
+    assert "replaced" in flat(result).lower()
+    assert VERTICAL in result.output
+
+
+def test_the_default_run_renders_what_is_missing_and_names_what_it_kept(series, fake):
+    """M6 + M4 together, and the shape the operator's episode is actually in:
+    vertical on disk, wide never rendered. The wide cut must be produced and the
+    18 MB file must not be touched — and the screen must say so, because a
+    silent skip is the same overclaim from the other direction."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    out_file(series, VERTICAL).write_bytes(SENTINEL)
+    n = len(fake.calls)
+    result = render()
+    assert result.exit_code == 0, result.output
+    assert encoded(fake, n) == [WIDE]
+    assert out_file(series, VERTICAL).read_bytes() == SENTINEL
+    assert out_file(series, WIDE).is_file()
+    assert VERTICAL in result.output and "--replace" in result.output
+    assert status_on_disk(series) == "rendered"
+
+
+def test_a_run_with_nothing_left_to_do_refuses_rather_than_claiming_success(series, fake):
+    """M6. Exit 0 with a screen listing two files it did not make is the
+    overclaim pattern in its purest form."""
+    approved(series)
+    assert render().exit_code == 0
+    n = len(fake.calls)
+    result = render()
+    assert result.exit_code == 1, result.output
+    assert "--replace" in result.output
+    assert fake.calls[n:] == []
+    assert status_on_disk(series) == "rendered"
+
+
+# --- R4: no new way to reach `rendering` that skips a gate -----------------------------
+
+
+def test_a_second_format_still_passes_through_rendering(series, fake, monkeypatch):
+    """M7. The proof that the second format is a TRANSITION and not a side door:
+    a crash mid-way leaves `failed`, which is reachable only from `rendering`.
+    An implementation that renders without the status write cannot produce this
+    — the episode would still read `rendered` with no artifact."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    broken(monkeypatch, fail_on="ffmpeg", stderr="Invalid data found")
+    result = render("--format", "wide")
+    assert result.exit_code == 1, result.output
+    assert status_on_disk(series) == "failed"
+
+
+def test_that_failure_recovers_without_re_rendering_the_first_format(series, monkeypatch, fake):
+    """M7. §10's `failed -> rendering` is the retry, and it must not charge the
+    operator thirteen minutes for the format that already succeeded."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    out_file(series, VERTICAL).write_bytes(SENTINEL)
+    broken(monkeypatch, fail_on="ffmpeg", stderr="Invalid data found")
+    assert render("--format", "wide").exit_code == 1
+    assert status_on_disk(series) == "failed"
+
+    monkeypatch.setattr(R.subprocess, "run", fake)
+    n = len(fake.calls)
+    result = render()
+    assert result.exit_code == 0, result.output
+    assert encoded(fake, n) == [WIDE]
+    assert out_file(series, VERTICAL).read_bytes() == SENTINEL
+    assert status_on_disk(series) == "rendered"
+
+
+def test_only_two_functions_write_a_status_key():
+    """M7, D-059, and Phase 7's R5 enumeration re-run as a test rather than as a
+    paragraph in a report.
+
+    D-059's root cause was a SECOND, ungated status writer: `save_variant`
+    stamped `publishing` onto a draft and the closing `set_status(PUBLISHED)`
+    then passed legitimately. So the property is not "the gate is checked" — it
+    is that the set of functions able to write the key is closed, enumerated
+    from the AST of everything under `src/`, and each member is gated.
+
+    `save_variant` is the third, and it is here deliberately: it writes the
+    status it just READ FROM DISK, which is the fix D-059 shipped. If it ever
+    writes a caller-supplied value again, the `disk_status` assertion below
+    fails.
+    """
+    src_root = Path(R.__file__).resolve().parent.parent
+    writers = {}
+    for path in sorted(src_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(fn):
+                targets = []
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                elif isinstance(node, ast.AugAssign):
+                    targets = [node.target]
+                for t in targets:
+                    if (
+                        isinstance(t, ast.Subscript)
+                        and isinstance(t.slice, ast.Constant)
+                        and t.slice.value == "status"
+                    ):
+                        key = (path.name, fn.name)
+                        writers[key] = ast.dump(node) + "|" + ast.unparse(fn)
+    assert set(writers) == {
+        ("episode.py", "set_status"),
+        ("workspace.py", "set_status"),
+        ("workspace.py", "save_variant"),
+    }, sorted(writers)
+    for name in ("set_status",):
+        for module in ("episode.py", "workspace.py"):
+            assert "assert_transition" in writers[(module, name)], module
+    # The one writer that is not a gate writes what disk already says.
+    save = writers[("workspace.py", "save_variant")]
+    assert "disk_status" in save
+    assert "assert_transition" not in save
+
+
+def test_the_new_edge_is_the_only_change_to_the_video_table(series):
+    """M7. `rendered -> rendering` is one edge. A table opened up more widely
+    than that — `rendered -> approved`, say — would let a re-approval launder an
+    edit past the drift check."""
+    from agenticsocial.models import VIDEO_TRANSITIONS, Status
+
+    assert VIDEO_TRANSITIONS[Status.RENDERED] == {Status.RENDERING}
+    assert VIDEO_TRANSITIONS[Status.APPROVED] == {Status.IN_REVIEW, Status.RENDERING}
+    assert VIDEO_TRANSITIONS[Status.FAILED] == {Status.RENDERING}
+    assert VIDEO_TRANSITIONS[Status.RENDERING] == {Status.RENDERED, Status.FAILED}
+
+
+def test_render_still_offers_no_way_to_skip_the_gate(ws):
+    """M7. `--replace` is a decision about a FILE. It must not become a decision
+    about the approval — the flags that would do that are still absent."""
+    text = help_text("video", "render")
+    for flag in ("--force", "--skip", "--no-check", "--script", "--ledger"):
+        assert flag not in text
+
+
+def test_replace_does_not_skip_the_gate(series, fake):
+    """M2 through the new door. `--replace` answers "may this file be
+    overwritten"; it answers nothing about drift."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    edit_beats(series, [clean_beat(text="Moved.")])
+    n = len(fake.calls)
+    result = render("--format", "vertical", "--replace")
+    assert result.exit_code == 1, result.output
+    assert "sha256" in result.output
+    assert fake.calls[n:] == []
+    assert status_on_disk(series) == "rendered"
+
+
+# --- R5: the message's claims are true -------------------------------------------------
+
+
+def test_the_success_screens_promise_is_executable(series, fake):
+    """M8. The screen says "one approval renders every format". The test does
+    not check the wording — it reads the claim off the screen and then performs
+    it, which is the only version of this assertion the defect would have
+    failed."""
+    approved(series)
+    first = render("--format", "vertical")
+    assert first.exit_code == 0, first.output
+    assert "one approval renders every format" in flat(first)
+    for fmt in ("vertical", "wide"):
+        result = render("--format", fmt, "--replace")
+        assert result.exit_code == 0, (fmt, result.output)
+        assert status_on_disk(series) == "rendered"
+
+
+def test_no_screen_tells_the_operator_that_rendered_is_terminal(series, fake):
+    """M8. The sentence that made the defect legible — "`rendered` is terminal
+    in the MVP … there is no supported way back" — was TRUE of the code and
+    false of the tool's own promise. Whichever half was going to move, both
+    could not stay."""
+    approved(series)
+    assert render("--format", "vertical").exit_code == 0
+    screens = (
+        render("--format", "wide").output
+        + render("--format", "wide").output
+        + render().output
+    ).lower()
+    assert "terminal" not in screens
+    assert "no supported way back" not in screens
+
+
+def test_the_help_says_what_no_format_does(series):
+    """M8. §9 documents `render <ep>` as every enabled format; the flag's own
+    help said only "output format", which is how the behaviour went unnoticed.
+
+    Asserted against the `--format` OPTION LINE, not against the whole screen.
+    The first version searched the screen, and the mutant that reverts the
+    option help to "output format" SURVIVED it — because the command docstring
+    above the options box also says "every enabled format". That is D-118's
+    finding exactly: an assertion that matches a string produced by a different
+    part of the output than the one it claims to check. Measured, as a mutant,
+    before this version was written.
+    """
+    text = help_text("video", "render")
+    option = text.split("--format TEXT", 1)[1].split("--restart", 1)[0]
+    assert "every enabled format" in option, option
+    assert "--replace" in option, option
+
+
+# --- mutants the first sweep found alive ------------------------------------------------
+
+
+def test_drift_is_reported_even_when_every_format_is_already_on_disk(series, fake):
+    """M10, found by the sweep: hoisting the "nothing left to render" check
+    ABOVE the three gates survived every other test in this file.
+
+    The two refusals mean opposite things. "Already rendered" says *and nothing
+    else was wrong*; if the episode has also drifted since approval, that is the
+    thing the operator has to know, and being told about their file instead
+    sends them away satisfied from an episode whose approval no longer describes
+    it. Order is the whole content of this test.
+    """
+    approved(series)
+    assert render().exit_code == 0
+    edit_beats(series, [clean_beat(), clean_beat(text="Something else entirely.")])
+    result = render()
+    assert result.exit_code == 1, result.output
+    assert "sha256" in result.output
+    assert "already rendered" not in result.output.lower()
+
+
+class FailOnNth(FakeRun):
+    """Fail the Nth call to one executable and succeed on the rest.
+
+    `FakeRun(fail_on=...)` fails EVERY ffmpeg call, which cannot express the case
+    that matters here: a two-format run where the first format encodes fine and
+    the second dies.
+    """
+
+    def __init__(self, exe, nth, **kw):
+        super().__init__(**kw)
+        self.exe, self.nth, self.seen = exe, nth, 0
+
+    def __call__(self, cmd, **kw):
+        from pathlib import Path as P
+
+        if P(cmd[0]).name == self.exe:
+            self.seen += 1
+            if self.seen == self.nth:
+                self.calls.append(cmd)
+                return subprocess.CompletedProcess(cmd, 1, "", "Invalid data found")
+        return super().__call__(cmd, **kw)
+
+
+def test_the_failure_record_names_the_format_that_died(series, monkeypatch):
+    """M11, found by the sweep: recording `targets[0]` instead of the format the
+    loop was on survived every single-format test, because in a one-format run
+    they are the same string.
+
+    "wide failed" and "vertical failed" send an operator to different frames.
+    The whole point of the record is that they read the episode a week later
+    rather than the terminal they have closed.
+    """
+    approved(series)
+    f = FailOnNth("ffmpeg", 2)
+    monkeypatch.setattr(R.subprocess, "run", f)
+    monkeypatch.setattr(R.shutil, "which", lambda n: "/usr/bin/" + n)
+
+    result = render()  # vertical encodes, wide dies
+    assert result.exit_code == 1, result.output
+    assert status_on_disk(series) == "failed"
+    record = meta_on_disk(series)["render"]
+    assert record["outcome"] == "failed"
+    assert record["format"] == "wide", record
+    assert out_file(series, VERTICAL).is_file(), "the format that succeeded is still there"

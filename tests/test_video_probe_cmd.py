@@ -159,13 +159,23 @@ def test_the_render_screen_points_at_a_command_that_exists():
     assert "`agsoc video probe " in source
 
 
-def test_preview_no_longer_takes_probe(fake, series):
-    """One door. `preview --probe` and `probe` doing the same thing is two
-    commands to keep identical and two places to look."""
+def test_preview_is_gone_entirely(fake, series):
+    """One door, and now only one. Phase 8 removed the `--probe` FLAG so the
+    cheap operation was not hidden on the expensive one; D-130 removed the
+    command, because it wrote `out/<fmt>-<w>x<h>.mp4` — the file `render`
+    gates — while asking none of the three checks.
+
+    `probe` is what is left of looking, and looking is frames.
+    """
+    from agenticsocial.video import cli as vcli
+
     episode(series)
-    result = run("video", "preview", EP, "--series", "the-brief", "--probe")
-    assert result.exit_code != 0
-    assert "--probe" in result.output or "No such option" in result.output
+    for extra in (["--probe"], []):
+        result = run("video", "preview", EP, "--series", "the-brief", *extra)
+        assert result.exit_code != 0
+    names = {c.name for c in typer.main.get_command(vcli.video_app).commands.values()}
+    assert "preview" not in names
+    assert "probe" in names
 
 
 # --- what a probe costs ----------------------------------------------------------------
